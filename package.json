@@ -1,0 +1,91 @@
+{
+  "name": "amd-agent",
+  "version": "0.1.0",
+  "description": "AMD Agent - a transparent multi-model agent desktop app",
+  "main": "dist/main/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev --outDir dist",
+    "predev": "npm run doctor:electron",
+    "build": "electron-vite build --outDir dist",
+    "preview": "electron-vite preview",
+    "start": "electron .",
+    "prestart": "npm run doctor:electron",
+    "test": "node scripts/run-tests.mjs",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "pack": "npm run prepare:package && electron-builder",
+    "test:coverage": "node scripts/run-tests.mjs --coverage",
+    "postinstall": "node scripts/ensure-electron-binary.mjs",
+    "doctor:electron": "node scripts/ensure-electron-binary.mjs",
+    "prepare:package": "npm run doctor:electron && npm run build && node scripts/release-check.mjs",
+    "pack:dir": "npm run prepare:package && electron-builder --dir",
+    "release:check": "npm run build && node scripts/release-check.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@google/generative-ai": "^0.24.1",
+    "better-sqlite3": "^13.0.3",
+    "lucide-react": "^1.66.0",
+    "openai": "^6.7.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@electron/get": "^2.0.0",
+    "@electron/rebuild": "^3.7.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "@vitest/coverage-v8": "^4.1.12",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "jsdom": "^27.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.6"
+  },
+  "build": {
+    "appId": "com.newai.agent",
+    "productName": "NewAi",
+    "files": [
+      "dist/main/**/*",
+      "dist/preload/**/*",
+      "dist/renderer/**/*",
+      "public/**/*"
+    ],
+    "directories": {
+      "buildResources": "public",
+      "output": "release"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "npmRebuild": false
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "author": "AMD Agent Contributors"
+}

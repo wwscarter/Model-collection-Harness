@@ -1,0 +1,78 @@
+import type { ModelConfig, ModelCapabilityType } from '@core/models/ModelConfig';
+import { modelRegistry } from '@core/models/ModelRegistry';
+import { LocalRoutingModel } from './LocalRoutingModel';
+export interface RoutingRegistry { getEnabledModels(): ModelConfig[]; }
+export interface RoutingPerformance { getRoutingAdjustment(modelId: string, taskType?: string): number; }
+
+export type TaskType = 'code' | 'reasoning' | 'analysis' | 'review' | 'creative' | 'general';
+export type TaskComplexity = 'low' | 'medium' | 'high';
+
+export interface TaskContext {
+  id: string;
+  type: TaskType;
+  description: string;
+  complexity?: TaskComplexity;
+  estimatedTokens?: number;
+  budget?: number;
+}
+
+export interface RoutingDecision {
+  modelId: string;
+  taskType: TaskType;
+  complexity: TaskComplexity;
+  reason: string;
+  confidence: number;
+  alternativeModels: string[];
+  estimatedCost: number;
+  estimatedDuration: number;
+}
+
+const capabilityForTask: Record<TaskType, ModelCapabilityType> = {
+  code: 'code', reasoning: 'reasoning', analysis: 'reasoning', review: 'code', creative: 'creative', general: 'reasoning'
+};
+
+/** Deterministic first-phase router. It prefers capability score, then priority, then cost. */
+export class AgentRouter {
+  constructor(
+    private readonly registry: RoutingRegistry = modelRegistry,
+    private readonly performance?: RoutingPerformance,
+    private readonly localModel: LocalRoutingModel = new LocalRoutingModel(),
+  ) {}
+
+  getLocalModelStatus(): ReturnType<LocalRoutingModel['getStatus']> { return this.localModel.getStatus(); }
+
+  async routeTask(context: TaskContext): Promise<RoutingDecision> {
+    const enabled = this.registry.getEnabledModels();
+    if (!enabled.length) throw new Error('No enabled models are configured');
+    const localClassification = await this.localModel.classify(context);
+    const taskType = context.type === 'general' ? localClassification.taskType : context.type;
+    const complexity = context.complexity ?? localClassification.complexity;
+    const capability = capabilityForTask[taskType] ?? 'reasoning';
+    const ranked = [...enabled].sort((a, b) => {
+      const score = (m: ModelConfig) => m.capabilities.find(c => c.type === capability)?.score ?? 0;
+      const complexityBonus = (m: ModelConfig) => {
+        const base = complexity === 'high'
+          ? score(m) * 0.8 + (m.intelligenceScore ?? score(m)) * 0.2
+          : score(m) * 0.8 + (100 - m.costPer1kTokens.input) * 0.2;
+        return base * (this.performance?.getRoutingAdjustment(m.id, context.type) ?? 1);
+      };
+      return complexityBonus(b) - complexityBonus(a) || a.priority - b.priority || a.costPer1kTokens.input - b.costPer1kTokens.input;
+    });
+    const selected = ranked[0];
+    const estimatedTokens = context.estimatedTokens ?? 2000;
+    const estimatedCost = (estimatedTokens * 0.7 * selected.costPer1kTokens.input + estimatedTokens * 0.3 * selected.costPer1kTokens.output) / 1000;
+    const budgetNote = context.budget !== undefined && estimatedCost > context.budget ? ' Estimated cost exceeds the task budget.' : '';
+    return {
+      modelId: selected.id,
+      taskType,
+      complexity,
+      reason: `Capability match for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`,
+      confidence: Math.min(0.98, 0.62 + (selected.capabilities.find(c => c.type === capability)?.score ?? 0) / 300),
+      alternativeModels: ranked.slice(1, 3).map(model => model.id),
+      estimatedCost,
+      estimatedDuration: Math.max(1000, estimatedTokens * (complexity === 'high' ? 12 : 7))
+    };
+  }
+}
+
+export const agentRouter = new AgentRouter();

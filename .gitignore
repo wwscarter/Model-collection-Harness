@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release/
+out/
+data/*.db
+data/*.db-*
+.env
+.DS_Store
+coverage/
+
+src/renderer/dist/
+
+# Local-only files: dev session log, source backups, local env overrides
+audit.jsonl
+outputs/*.zip
+.env.*
+!.env.example
