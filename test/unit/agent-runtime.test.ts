@@ -9,7 +9,7 @@ import { buildSystemPrompt } from '../../src/core/agent/systemPrompt';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import { SearchProviderRegistry, type SearchProvider } from '../../src/core/tools/search';
 
-type Reply = (body: any) => string[];
+type Reply = (body: any) => string[] | null;
 let server: http.Server;
 let baseUrl = '';
 const requests: any[] = [];
@@ -22,6 +22,18 @@ const toolCall = (name: string, args: object, id = 'call_1'): Reply => () => sse
   { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args).slice(0, 5) } }] } }] },
   { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args).slice(5) } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 40, completion_tokens: 8 } },
 ]);
+const anthropicReply = (tool: boolean): Reply => () => [
+  ['message_start', { type: 'message_start', message: { id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-test', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 40, output_tokens: 0 } } }],
+  ['content_block_start', { type: 'content_block_start', index: 0, content_block: tool ? { type: 'tool_use', id: 'search_1', name: 'web_search', input: {} } : { type: 'text', text: '' } }],
+  ['content_block_delta', { type: 'content_block_delta', index: 0, delta: tool ? { type: 'input_json_delta', partial_json: JSON.stringify({ query: 'release notes' }) } : { type: 'text_delta', text: 'Anthropic done' } }],
+  ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+  ['message_delta', { type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 8 } }],
+  ['message_stop', { type: 'message_stop' }],
+].map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+const googleReply = (tool: boolean): Reply => () => sse([{
+  candidates: [{ content: { role: 'model', parts: tool ? [{ functionCall: { name: 'web_search', args: { query: 'release notes' } } }] : [{ text: 'Google done' }] }, finishReason: 'STOP' }],
+  usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 8 },
+}]).slice(0, -1);
 
 function model(overrides: Partial<ModelConfig> = {}): ModelConfig {
   return {
@@ -42,14 +54,16 @@ beforeAll(async () => {
       requests.push({ url: req.url, headers: req.headers, body: parsed });
       const reply = replies.shift() ?? text('fallback');
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      for (const chunk of reply(parsed)) res.write(chunk);
+      const chunks = reply(parsed);
+      if (chunks === null) return;
+      for (const chunk of chunks) res.write(chunk);
       res.end();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
-afterAll(() => { server.close(); });
+afterAll(() => { server.closeAllConnections(); server.close(); });
 
 function runtime(extra: Partial<ConstructorParameters<typeof AgentRuntime>[0]> = {}) {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-agent-'));
@@ -84,6 +98,7 @@ describe('AgentRuntime (Pi SDK)', () => {
     expect(first.messages[0].content).toContain('2026');
     expect(first.messages.slice(1).map((message: any) => message.role)).toEqual(['user', 'assistant', 'user']);
     expect(first.thinking).toEqual({ type: 'enabled' });
+    expect(first.temperature).toBe(0.6);
 
     const second = requests[1].body.messages;
     const assistant = second.find((message: any) => message.tool_calls);
@@ -91,6 +106,62 @@ describe('AgentRuntime (Pi SDK)', () => {
     expect(assistant.tool_calls[0].function).toEqual({ name: 'web_search', arguments: JSON.stringify({ query: '上海天气' }) });
     const toolMessage = second.find((message: any) => message.role === 'tool');
     expect(toolMessage.content).toContain('Result for 上海天气');
+  });
+
+  it.each(['anthropic', 'google'] as const)('runs a %s tool round and preserves the configured temperature', async (provider) => {
+    requests.length = 0;
+    replies = provider === 'anthropic' ? [anthropicReply(true), anthropicReply(false)] : [googleReply(true), googleReply(false)];
+    const { runtime: agent } = runtime();
+    const events: ToolEvent[] = [];
+    const result = await agent.run({
+      model: model({ provider, modelId: provider === 'anthropic' ? 'claude-test' : 'gemini-test', baseURL: `${baseUrl}/v1`, temperature: 0.25 }),
+      prompt: 'Find the release notes', onToolEvent: (event) => events.push(event),
+    });
+    expect(result.content).toContain(provider === 'anthropic' ? 'Anthropic done' : 'Google done');
+    expect(result.toolCalls).toBe(1);
+    expect(events.map((event) => event.status)).toEqual(['running', 'completed']);
+    expect(requests).toHaveLength(2);
+    if (provider === 'anthropic') {
+      expect(new URL(requests[0].url, baseUrl).pathname).toBe('/v1/messages');
+      expect(requests[0].body.temperature).toBe(0.25);
+      expect(requests[0].body.tools.map((tool: any) => tool.name)).toContain('web_search');
+      expect(requests[1].body.messages.at(-1).content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'search_1' });
+    } else {
+      expect(requests[0].url).toContain('/v1/models/gemini-test:streamGenerateContent');
+      expect(requests[0].body.generationConfig.temperature).toBe(0.25);
+      expect(requests[0].body.tools[0].functionDeclarations.map((tool: any) => tool.name)).toContain('web_search');
+      expect(requests[1].body.contents.at(-1).parts[0]).toHaveProperty('functionResponse');
+    }
+  });
+
+  it('stops repeated tool requests at the configured round limit and streams the reason', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'first' }, 'c1'), toolCall('web_search', { query: 'second' }, 'c2'), text('must not run')];
+    const { runtime: agent } = runtime({ maxToolRounds: 2 });
+    const deltas: string[] = [];
+    const result = await agent.run({ model: model(), prompt: 'Search', onTextDelta: (delta) => deltas.push(delta) });
+    expect(result.stopReason).toBe('tool_limit');
+    expect(result.toolCalls).toBe(2);
+    expect(requests).toHaveLength(2);
+    expect(result.content).toContain('工具调用上限（2 轮）');
+    expect(deltas.join('')).toContain('工具调用上限（2 轮）');
+  });
+
+  it('cancels an active provider request', async () => {
+    requests.length = 0;
+    const controller = new AbortController();
+    replies = [() => { setTimeout(() => controller.abort(), 20); return null; }];
+    const { runtime: agent } = runtime();
+    await expect(agent.run({ model: model(), prompt: 'Wait', signal: controller.signal })).rejects.toThrow('任务已取消');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('ends a provider request when the overall run deadline expires', async () => {
+    requests.length = 0;
+    replies = [() => null];
+    const { runtime: agent } = runtime({ runTimeoutMs: 500 });
+    await expect(agent.run({ model: model(), prompt: 'Wait' })).rejects.toThrow('任务执行超时');
+    expect(requests).toHaveLength(1);
   });
 
   it('sends no tools when tools are disabled', async () => {

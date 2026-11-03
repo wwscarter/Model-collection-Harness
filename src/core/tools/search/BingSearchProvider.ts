@@ -47,17 +47,24 @@ export function parseBingResults(html: string, limit = 10): SearchResult[] {
 export class BingSearchProvider implements SearchProvider {
   readonly id = 'bing';
   readonly label = 'Bing（免 Key）';
-  constructor(private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init), private readonly hosts = ['cn.bing.com', 'www.bing.com']) {}
+  constructor(
+    private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
+    private readonly hosts = ['cn.bing.com', 'www.bing.com'],
+    private readonly timeoutMs = 15_000,
+  ) {}
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const count = Math.min(Math.max(options.count ?? 8, 1), 20);
     let lastError: unknown;
     for (const host of this.hosts) {
+      const timeout = AbortSignal.timeout(this.timeoutMs);
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
       try {
+        signal.throwIfAborted();
         const url = `https://${host}/search?q=${encodeURIComponent(query)}&count=${count}&form=QBLH`;
         const response = await this.fetchImpl(url, {
           headers: { 'user-agent': BROWSER_USER_AGENT, 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8', accept: 'text/html,application/xhtml+xml' },
-          signal: options.signal,
+          signal,
           redirect: 'follow',
         });
         if (!response.ok) throw new Error(`Bing 返回 HTTP ${response.status}`);
@@ -66,7 +73,7 @@ export class BingSearchProvider implements SearchProvider {
         lastError = new Error('Bing 没有返回可解析的结果');
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        lastError = error;
+        lastError = timeout.aborted ? new Error('联网搜索超时，请稍后重试') : error;
       }
     }
     throw lastError instanceof Error ? lastError : new Error('搜索失败');

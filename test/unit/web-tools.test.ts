@@ -34,6 +34,40 @@ describe('Bing search provider', () => {
     expect(results).toHaveLength(1);
   });
 
+  it('times out a stalled host and tries the fallback', async () => {
+    const hosts: string[] = [];
+    const provider = new BingSearchProvider(async (input, init) => {
+      hosts.push(new URL(input).hostname);
+      if (hosts.length > 1) return new Response(bingHtml);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+    }, ['cn.bing.com', 'www.bing.com'], 20);
+    await expect(provider.search('release notes')).resolves.toHaveLength(2);
+    expect(hosts).toEqual(['cn.bing.com', 'www.bing.com']);
+  });
+
+  it('reports a timeout when all search hosts stall', async () => {
+    const provider = new BingSearchProvider(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }), ['cn.bing.com'], 20);
+    await expect(provider.search('release notes')).rejects.toThrow('联网搜索超时');
+  });
+
+  it('cancels a search without trying another host', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const provider = new BingSearchProvider(async (_input, init) => {
+      calls += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        controller.abort();
+      });
+    });
+    await expect(provider.search('release notes', { signal: controller.signal })).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
   it('registry switches the active backend', () => {
     const registry = new SearchProviderRegistry([{ id: 'a', label: 'A', search: async () => [] }, { id: 'b', label: 'B', search: async () => [] }]);
     registry.setActive('b');

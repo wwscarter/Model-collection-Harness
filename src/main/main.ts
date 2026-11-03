@@ -67,6 +67,7 @@ function sanitizeHistory(value: unknown): HistoryTurn[] {
 }
 
 async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; enableTools?: boolean; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
+  if (options.signal?.aborted) throw new Error('任务已取消');
   // Presets without credentials keep the local demo response instead of failing the request.
   if (!model.apiKey && model.provider !== 'custom') {
     const demo = await createProvider(model).invoke(prompt);
@@ -194,98 +195,105 @@ function registerHandlers(): void {
     const contextPrompt = projectContext?.text
       ? `${payload.prompt}\n\nThe following read-only project context is available. Use it as evidence and do not assume files can be modified automatically.\n${projectContext.text}`
       : payload.prompt;
-    // Leave complexity undefined unless the caller explicitly supplied it. The
-    // local classifier then infers low/medium/high from the actual task text.
-    const decision = await router.routeTask({ id: taskId, type: (payload.taskType || 'general') as any, description: contextPrompt, complexity: payload.complexity });
-    mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, ...decision, role: 'routing' });
-    const model = registry.getModel(decision.modelId);
-    if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
-    let executionPrompt = contextPrompt;
-    let planningModelId: string | undefined;
-    // High-complexity tasks can use a second model for planning, then pass the
-    // verified plan to the execution model. Ordinary prompts (including "你好")
-    // remain a single call so they do not incur an unnecessary second request.
-    if (decision.complexity === 'high') {
-      const planningModel = selectPlanningModel(registry.getEnabledModels(), model.id);
-      if (planningModel) {
-        planningModelId = planningModel.id;
-        mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, modelId: planningModel.id, role: 'planning', reason: '为高复杂度任务生成执行计划', confidence: decision.confidence });
-        const planningInvocationId = observability.recordInvocationStart(taskId, planningModel.id);
-        try {
-          const plan = await createProvider(planningModel).invoke(buildPlanningPrompt(contextPrompt), { maxTokens: Math.min(planningModel.maxTokens ?? 1200, 1200), temperature: 0.2 });
-          observability.recordInvocationEnd(planningInvocationId, plan.inputTokens, plan.outputTokens, planningModel.costPer1kTokens, 'success');
-          executionPrompt = buildPlannedTask(contextPrompt, plan.content);
-        } catch (error) {
-          observability.recordInvocationEnd(planningInvocationId, 0, 0, planningModel.costPer1kTokens, 'failure', error instanceof Error ? error.message : String(error));
-          planningModelId = undefined;
-        }
-      }
-    }
-    mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, ...decision, modelId: model.id, role: 'execution', planningModelId });
     const controller = new AbortController();
     runningTasks.get(taskId)?.abort();
     runningTasks.set(taskId, controller);
-    const invocationId = observability.recordInvocationStart(taskId, model.id);
     try {
-      let result: ModelResponse;
-      let agentReports: Array<{ modelName: string; content: string }> = [];
-      let failedAgentCount = 0;
-      const agentMessages = collaboratorModels.map((agentModel, index) => ({
-        id: `${assistantMessageId}-agent-${index + 1}`,
-        modelId: agentModel.id,
-        modelName: agentModel.name,
-        status: 'queued' as 'queued' | 'running' | 'completed' | 'failed',
-        content: '',
-      }));
-      if (collaboratorModels.length) {
-        const agentResults = await runParallelAgents(collaboratorModels, async (agentModel, index) => {
-          const agentId = `${assistantMessageId}-agent-${index + 1}`;
-          const agentInvocationId = observability.recordInvocationStart(taskId, agentModel.id);
-          let agentContent = '';
-          agentMessages[index].status = 'running';
-          mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'running' });
+      // Leave complexity undefined unless the caller explicitly supplied it. The
+      // local classifier then infers low/medium/high from the actual task text.
+      const decision = await router.routeTask({ id: taskId, type: (payload.taskType || 'general') as any, description: contextPrompt, complexity: payload.complexity });
+      if (controller.signal.aborted) throw new Error('任务已取消');
+      mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, ...decision, role: 'routing' });
+      const model = registry.getModel(decision.modelId);
+      if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
+      let executionPrompt = contextPrompt;
+      let planningModelId: string | undefined;
+      // High-complexity tasks can use a second model for planning, then pass the
+      // verified plan to the execution model. Ordinary prompts (including "你好")
+      // remain a single call so they do not incur an unnecessary second request.
+      if (decision.complexity === 'high') {
+        const planningModel = selectPlanningModel(registry.getEnabledModels(), model.id);
+        if (planningModel) {
+          planningModelId = planningModel.id;
+          mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, modelId: planningModel.id, role: 'planning', reason: '为高复杂度任务生成执行计划', confidence: decision.confidence });
+          const planningInvocationId = observability.recordInvocationStart(taskId, planningModel.id);
           try {
-            const agentResult = await invokeStreamed(agentModel, buildParallelAgentPrompt(contextPrompt, index), 1800, (delta) => {
-              agentContent += delta;
-              agentMessages[index].content = agentContent;
-              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
-            }, { enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
-            observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
-            agentMessages[index].status = 'completed';
-            agentMessages[index].content = agentResult.content;
-            mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'completed', content: agentResult.content });
-            return { modelName: agentModel.name, content: agentResult.content };
-          } catch (agentError) {
-            const message = agentError instanceof Error ? agentError.message : String(agentError);
-            observability.recordInvocationEnd(agentInvocationId, estimateTokens(contextPrompt), estimateTokens(agentContent), agentModel.costPer1kTokens, 'failure', message);
-            agentMessages[index].status = 'failed';
-            agentMessages[index].content = agentContent;
-            Object.assign(agentMessages[index], { error: message });
-            mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'failed', content: agentContent, error: message });
-            throw agentError;
+            const planningContext = history.length
+              ? `Conversation so far:\n${history.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n')}\n\nCurrent task:\n${contextPrompt}`
+              : contextPrompt;
+            const plan = await createProvider(planningModel).invoke(buildPlanningPrompt(planningContext), { maxTokens: Math.min(planningModel.maxTokens ?? 1200, 1200), temperature: 0.2, signal: controller.signal });
+            observability.recordInvocationEnd(planningInvocationId, plan.inputTokens, plan.outputTokens, planningModel.costPer1kTokens, 'success');
+            executionPrompt = buildPlannedTask(contextPrompt, plan.content);
+          } catch (error) {
+            observability.recordInvocationEnd(planningInvocationId, 0, 0, planningModel.costPer1kTokens, 'failure', error instanceof Error ? error.message : String(error));
+            if (controller.signal.aborted) throw new Error('任务已取消');
+            planningModelId = undefined;
           }
-        });
-        agentReports = agentResults.flatMap((agentResult) => agentResult.status === 'fulfilled' ? [agentResult.value] : []);
-        failedAgentCount = agentResults.length - agentReports.length;
+        }
       }
-      const finalPrompt = collaboratorModels.length
-        ? buildSynthesisPrompt(executionPrompt, agentReports, failedAgentCount)
-        : executionPrompt;
-      let chunkIndex = 0;
-      result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
-        chunkIndex += 1;
-        mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
-      }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
-      const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
-      if (metrics) {
-        growth.recordFeedback({ modelId: model.id, taskType: payload.taskType || 'general', success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration });
+      mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, ...decision, modelId: model.id, role: 'execution', planningModelId });
+      const invocationId = observability.recordInvocationStart(taskId, model.id);
+      try {
+        let result: ModelResponse;
+        let agentReports: Array<{ modelName: string; content: string }> = [];
+        let failedAgentCount = 0;
+        const agentMessages = collaboratorModels.map((agentModel, index) => ({
+          id: `${assistantMessageId}-agent-${index + 1}`,
+          modelId: agentModel.id,
+          modelName: agentModel.name,
+          status: 'queued' as 'queued' | 'running' | 'completed' | 'failed',
+          content: '',
+        }));
+        if (collaboratorModels.length) {
+          const agentResults = await runParallelAgents(collaboratorModels, async (agentModel, index) => {
+            const agentId = `${assistantMessageId}-agent-${index + 1}`;
+            const agentInvocationId = observability.recordInvocationStart(taskId, agentModel.id);
+            let agentContent = '';
+            agentMessages[index].status = 'running';
+            mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'running' });
+            try {
+              const agentResult = await invokeStreamed(agentModel, buildParallelAgentPrompt(contextPrompt, index), 1800, (delta) => {
+                agentContent += delta;
+                agentMessages[index].content = agentContent;
+                mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
+              }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
+              observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
+              agentMessages[index].status = 'completed';
+              agentMessages[index].content = agentResult.content;
+              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'completed', content: agentResult.content });
+              return { modelName: agentModel.name, content: agentResult.content };
+            } catch (agentError) {
+              const message = agentError instanceof Error ? agentError.message : String(agentError);
+              observability.recordInvocationEnd(agentInvocationId, estimateTokens(contextPrompt), estimateTokens(agentContent), agentModel.costPer1kTokens, 'failure', message);
+              agentMessages[index].status = 'failed';
+              agentMessages[index].content = agentContent;
+              Object.assign(agentMessages[index], { error: message });
+              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'failed', content: agentContent, error: message });
+              throw agentError;
+            }
+          });
+          agentReports = agentResults.flatMap((agentResult) => agentResult.status === 'fulfilled' ? [agentResult.value] : []);
+          failedAgentCount = agentResults.length - agentReports.length;
+        }
+        const finalPrompt = collaboratorModels.length
+          ? buildSynthesisPrompt(executionPrompt, agentReports, failedAgentCount)
+          : executionPrompt;
+        let chunkIndex = 0;
+        result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
+          chunkIndex += 1;
+          mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
+        }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
+        const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
+        if (metrics) {
+          growth.recordFeedback({ modelId: model.id, taskType: payload.taskType || 'general', success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration });
+        }
+        const output = { sessionId, taskId, assistantMessageId, output: result.content, modelUsed: publicModel(model), modelsUsed: [...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), model.id], planningModelId, decision, metrics, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        mainWindow?.webContents.send('session:completed', output);
+        return output;
+      } catch (error) {
+        observability.recordInvocationEnd(invocationId, 0, 0, model.costPer1kTokens, 'failure', error instanceof Error ? error.message : String(error));
+        throw error;
       }
-      const output = { sessionId, taskId, assistantMessageId, output: result.content, modelUsed: publicModel(model), modelsUsed: [...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), model.id], planningModelId, decision, metrics, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
-      mainWindow?.webContents.send('session:completed', output);
-      return output;
-    } catch (error) {
-      observability.recordInvocationEnd(invocationId, 0, 0, model.costPer1kTokens, 'failure', error instanceof Error ? error.message : String(error));
-      throw error;
     } finally {
       if (runningTasks.get(taskId) === controller) runningTasks.delete(taskId);
     }

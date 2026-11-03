@@ -1,6 +1,6 @@
 {
   "name": "amd-agent",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "AMD Agent - a transparent multi-model agent desktop app",
   "main": "dist/main/main.js",
   "type": "module",

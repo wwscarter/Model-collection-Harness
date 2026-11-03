@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowUp, Check, ChevronDown, Folder, GitBranch, Laptop, Plus, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Folder, GitBranch, Laptop, Plus, Square, X } from 'lucide-react';
 import type { ProjectInfo } from '../types';
 
 interface AgentInputBarProps {
@@ -16,11 +16,12 @@ interface AgentInputBarProps {
   onChange: (value: string) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
+  onStop: () => void;
   onOpenContext: () => void;
   onCancelEdit: () => void;
 }
 
-export function AgentInputBar({ project, value, inputRef, hasMessages, busy, running, editing, collaborationControl, collaborationPicker, notice, onChange, onKeyDown, onSend, onOpenContext, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ project, value, inputRef, hasMessages, busy, running, editing, collaborationControl, collaborationPicker, notice, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
   const branch = project?.git?.branch ?? project?.git?.head;
   return <section className="composer" aria-label="任务输入">
     <div className="composer-tabs">
@@ -36,7 +37,7 @@ export function AgentInputBar({ project, value, inputRef, hasMessages, busy, run
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈，让想法继续向前…' : '描述你想完成的任务，newAi 会和你一起实现…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <footer>
         <div className="dock-left"><button className="attach-button" title="添加项目上下文" aria-label="添加项目上下文" onClick={onOpenContext}><Plus size={18} /></button>{collaborationControl}</div>
-        <div className="dock-right"><span className="model-selector model-display" aria-label="模型档位 5.5 高"><span>5.5 高</span><ChevronDown size={13} aria-hidden="true" /></span><button className="send-button" title={running ? '正在执行' : busy ? '另一个会话正在执行' : editing ? '重新生成回复' : '执行任务'} aria-label={running ? '正在执行' : editing ? '重新生成回复' : '执行任务'} disabled={busy || !value.trim()} onClick={onSend}>{running ? <span className="send-spinner" /> : editing ? <Check size={17} /> : <ArrowUp size={17} strokeWidth={2.2} />}</button></div>
+        <div className="dock-right"><span className="model-selector model-display" aria-label="模型档位 5.5 高"><span>5.5 高</span><ChevronDown size={13} aria-hidden="true" /></span><button className="send-button" title={running ? '停止任务' : busy ? '另一个会话正在执行' : editing ? '重新生成回复' : '执行任务'} aria-label={running ? '停止任务' : editing ? '重新生成回复' : '执行任务'} disabled={!running && (busy || !value.trim())} onClick={running ? onStop : onSend}>{running ? <Square size={13} fill="currentColor" /> : editing ? <Check size={17} /> : <ArrowUp size={17} strokeWidth={2.2} />}</button></div>
       </footer>
     </div>
     <div className="composer-hint"><span><kbd>Enter</kbd> 发送 <span className="hint-divider">·</span> <kbd>Shift + Enter</kbd> 换行</span><span>让每一个想法，向前一步</span></div>

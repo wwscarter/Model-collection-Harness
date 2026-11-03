@@ -22,7 +22,16 @@ interface Session extends SessionSummary { prompt: string; userMessage?: string;
 const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], createdAt: new Date() });
 
 export default function App() {
-  const [sessions, setSessions] = useState<Session[]>([starterSession()]);
+  const [sessions, setSessionsState] = useState<Session[]>([starterSession()]);
+  // IPC events can arrive immediately before execute rejects. Keep their latest
+  // state available synchronously so a failed/cancelled turn is saved in full.
+  const sessionsRef = useRef(sessions);
+  const setSessions = (update: React.SetStateAction<Session[]>) => {
+    const next = typeof update === 'function' ? update(sessionsRef.current) : update;
+    sessionsRef.current = next;
+    setSessionsState(next);
+  };
+  const cancelRequestedRef = useRef(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
@@ -256,6 +265,7 @@ export default function App() {
     const collaboratorModels = models.filter((model) => selectedAgentModelIds.includes(model.id) && model.enabled);
     const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined, collaboratorModels.map(({ id, name }) => ({ id, name })));
     const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, rating: undefined, updatedAt: new Date() };
+    cancelRequestedRef.current = false;
     runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
     setLiveElapsedMs(0);
     promptBeforeEditingRef.current = '';
@@ -266,6 +276,7 @@ export default function App() {
     try {
       if (!window.amd) throw new Error('主进程尚未连接，请在 Electron 中运行应用。');
       await window.amd.sessions.save(submittedSession);
+      if (cancelRequestedRef.current) throw new Error('任务已取消');
       // 流式执行，不等待完全完成 - 由事件监听器处理结果
       const result = await window.amd.sessions.execute({
         sessionId: currentSession.id,
@@ -292,10 +303,26 @@ export default function App() {
       await window.amd.sessions.save(completedSession);
     } catch (cause) {
       setSessionError({ sessionId: currentSession.id, message: errorMessage(cause) });
-      setSessions((existing) => existing.map((session) => session.id === currentSession.id ? { ...session, messages: settleAssistantTools(session.messages, `${messageId}-assistant`) } : session));
+      const latestSession = sessionsRef.current.find((session) => session.id === currentSession.id);
+      if (latestSession) {
+        const settledMessages = settleAssistantTools(latestSession.messages, `${messageId}-assistant`).map((message) => message.id !== `${messageId}-assistant` || !message.agents ? message : {
+          ...message,
+          agents: message.agents.map((agent) => agent.status === 'queued' || agent.status === 'running' ? { ...agent, status: 'failed' as const, error: errorMessage(cause) } : agent),
+        });
+        const failedSession: Session = { ...latestSession, messages: settledMessages, updatedAt: new Date() };
+        setSessions((existing) => existing.map((session) => session.id === currentSession.id ? failedSession : session));
+        try { await window.amd?.sessions.save(failedSession); }
+        catch (saveError) { setSessionError({ sessionId: currentSession.id, message: `${errorMessage(cause)}（会话保存失败：${errorMessage(saveError)}）` }); }
+      }
     } finally {
       setRunningSessionId(null);
     }
+  };
+  const cancelRun = async () => {
+    if (!runningSessionId) return;
+    cancelRequestedRef.current = true;
+    try { await window.amd?.sessions.cancel(runningSessionId); }
+    catch (cause) { setSessionError({ sessionId: runningSessionId, message: errorMessage(cause) }); }
   };
   const rateCurrent = async (rating: number) => {
     if (!currentSession?.modelUsed || !window.amd) return;
@@ -370,7 +397,7 @@ export default function App() {
       {currentSession && <AgentInputBar
         project={currentProject} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
-        onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()}
+        onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}
         notice={collaborationNotice}
         collaborationControl={<button className={`collaboration-toggle ${selectedAgentModelIds.length ? 'active' : ''}`} aria-label="选择协作模型" aria-expanded={collaborationOpen} aria-controls="collaboration-models" onClick={() => { setCollaborationOpen((open) => !open); setCollaborationNotice(null); }}><UsersRound size={14} /><span>{selectedAgentModelIds.length ? `协作 · ${selectedAgentModelIds.length}` : '协作'}</span><ChevronDown className={collaborationOpen ? 'open' : ''} size={12} /></button>}

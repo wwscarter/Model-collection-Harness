@@ -13,6 +13,7 @@ export interface PiModelMapping {
   modelId: string;
   apiKey: string;
   thinkingLevel: PiThinkingLevel;
+  temperature?: number;
   provider: {
     name: string;
     baseUrl: string;
@@ -25,7 +26,6 @@ export interface PiModelMapping {
       cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
       contextWindow: number;
       maxTokens: number;
-      samplingParams?: Record<string, unknown>;
       compat?: Record<string, unknown>;
     }>;
   };
@@ -93,6 +93,8 @@ export function toPiModel(model: ModelConfig): PiModelMapping {
     apiKey: model.apiKey || PLACEHOLDER_API_KEY,
     // Only DeepSeek exposes newAi's thinking switch; other providers keep their default reasoning.
     thinkingLevel: deepseek && model.enableThinking !== false ? 'high' : 'off',
+    // Use Pi's common request option; model.samplingParams is OpenAI-only.
+    temperature: model.temperature,
     provider: {
       name: model.name,
       baseUrl: normalizeBaseUrl(model.provider, model.baseURL),
@@ -106,7 +108,6 @@ export function toPiModel(model: ModelConfig): PiModelMapping {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow,
         maxTokens,
-        ...(api === 'openai-completions' && model.temperature !== undefined ? { samplingParams: { temperature: model.temperature } } : {}),
         ...(compat ? { compat } : {}),
       }],
     },

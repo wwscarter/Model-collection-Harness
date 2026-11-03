@@ -72,6 +72,10 @@ export interface AgentRuntimeOptions {
   enableMcp?: boolean;
   /** Load agentDir/extensions/* code. Off by default: extensions run with full app permissions. */
   enableFileExtensions?: boolean;
+  /** Maximum duration of a run, including model requests and tools. Default five minutes. */
+  runTimeoutMs?: number;
+  /** Maximum consecutive turns that execute tools. Default eight. */
+  maxToolRounds?: number;
   /** Test seam. */
   now?: () => Date;
 }
@@ -86,6 +90,8 @@ export interface ResourceSummary {
 
 const MAX_HISTORY_TURNS = 20;
 const MAX_HISTORY_CHARS = 60_000;
+const RUN_TIMEOUT_MS = 5 * 60_000;
+const MAX_TOOL_ROUNDS = 8;
 
 /** Keep the newest turns that fit the budget; always start the window on a user turn. */
 export function trimHistory(history: ChatTurn[] = [], maxTurns = MAX_HISTORY_TURNS, maxChars = MAX_HISTORY_CHARS): ChatTurn[] {
@@ -241,6 +247,19 @@ export class AgentRuntime {
 
   /** Run one user turn, streaming text and tool events. Resolves with the final assistant text. */
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const timeout = AbortSignal.timeout(this.options.runTimeoutMs ?? RUN_TIMEOUT_MS);
+    const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+    try {
+      signal.throwIfAborted();
+      return await this.runSession({ ...request, signal });
+    } catch (error) {
+      if (request.signal?.aborted) throw new Error('任务已取消');
+      if (timeout.aborted) throw new Error('任务执行超时，请缩小任务范围后重试');
+      throw error;
+    }
+  }
+
+  private async runSession(request: AgentRunRequest): Promise<AgentRunResult> {
     const enableTools = request.enableTools !== false;
     const cwd = request.projectRoot ?? this.options.defaultCwd;
     const { runtime, mapping, piModel } = await this.resolveModel(request.model);
@@ -262,12 +281,31 @@ export class AgentRuntime {
       settingsManager,
       resourceLoader,
     });
+    const stream = session.agent.streamFunction;
+    session.agent.streamFunction = (requestModel, context, options) => stream(requestModel, context, {
+      ...options,
+      ...(mapping.temperature !== undefined ? { temperature: mapping.temperature } : {}),
+      timeoutMs: Math.min(options?.timeoutMs ?? RUN_TIMEOUT_MS, this.options.runTimeoutMs ?? RUN_TIMEOUT_MS),
+    });
     return this.drive(session, request);
   }
 
   private async drive(session: AgentSession, request: AgentRunRequest): Promise<AgentRunResult> {
     let content = '';
     let toolCalls = 0;
+    let toolRounds = 0;
+    let toolLimitReached = false;
+    const maxToolRounds = Math.max(1, this.options.maxToolRounds ?? MAX_TOOL_ROUNDS);
+    const finishTurn = session.agent.finishTurn;
+    // Pi's finishTurn hook stops before another provider request while retaining tool results.
+    session.agent.finishTurn = async (turn, signal) => {
+      const decision = await finishTurn?.(turn, signal);
+      if (turn.toolResults.length && ++toolRounds >= maxToolRounds) {
+        toolLimitReached = true;
+        return { action: 'end' };
+      }
+      return decision || undefined;
+    };
     const onAbort = () => { void session.abort(); };
     request.signal?.addEventListener('abort', onAbort, { once: true });
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
@@ -294,12 +332,17 @@ export class AgentRuntime {
       if (last?.stopReason === 'error') throw new Error(last.errorMessage || '模型调用失败');
       if (last?.stopReason === 'aborted' || request.signal?.aborted) throw new Error('任务已取消');
       const finalText = session.getLastAssistantText() ?? '';
+      if (toolLimitReached) {
+        const notice = `${content.trim() || finalText.trim() ? '\n\n' : ''}已达到本轮工具调用上限（${maxToolRounds} 轮），任务已停止。请缩小范围后继续。`;
+        content = (content.trim() ? content : finalText) + notice;
+        request.onTextDelta?.(notice);
+      }
       return {
         content: content.trim() ? content : finalText,
         inputTokens: stats.tokens.input,
         outputTokens: stats.tokens.output,
         toolCalls,
-        stopReason: last?.stopReason ?? 'stop',
+        stopReason: toolLimitReached ? 'tool_limit' : last?.stopReason ?? 'stop',
       };
     } finally {
       request.signal?.removeEventListener('abort', onAbort);
