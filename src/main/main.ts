@@ -21,6 +21,7 @@ import { GrowthEngine, type RoutingFeedback } from '@core/growth/GrowthEngine';
 import { TtyManager } from '@core/tty/TtyManager';
 import { ProjectManager } from '@core/project/ProjectManager';
 import { CommandExecutor, type CommandExecutionRequest } from '@core/tty/CommandExecutor';
+import { AgentRuntime, type ToolEvent } from '@core/agent/AgentRuntime';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -35,32 +36,49 @@ let growth: GrowthEngine;
 let tty: TtyManager;
 let projects: ProjectManager;
 let commandExecutor: CommandExecutor;
+let agentRuntime: AgentRuntime;
 const ttyUnsubscribers = new Map<string, () => void>();
 const commandUnsubscribers = new Map<string, () => void>();
+/** One controller per running task so the renderer can cancel it. */
+const runningTasks = new Map<string, AbortController>();
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
 
-async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, stream = true): Promise<ModelResponse> {
-  const provider = createProvider(model);
-  const config = { maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens) };
-  if (!stream || !provider.invokeStream) return provider.invoke(prompt, config).then((result) => { onDelta(result.content); return result; });
+const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls']);
 
-  let content = '';
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
-  try {
-    for await (const chunk of provider.invokeStream(prompt, config)) {
-      inputTokens = chunk.inputTokens ?? inputTokens;
-      outputTokens = chunk.outputTokens ?? outputTokens;
-      if (chunk.delta) { content += chunk.delta; onDelta(chunk.delta); }
-    }
-  } catch (error) {
-    if (content) throw error;
-    const fallback = await provider.invoke(prompt, config);
-    onDelta(fallback.content);
-    return fallback;
+/** Built-in tools are read-only; anything else (MCP, plugins) needs the user's consent per call. */
+async function approveToolCall({ toolName, input }: { toolName: string; input: Record<string, unknown> }): Promise<string | undefined> {
+  if (SAFE_TOOLS.has(toolName)) return undefined;
+  const preview = JSON.stringify(input, null, 2).slice(0, 800);
+  const options = { type: 'question' as const, buttons: ['拒绝', '允许本次调用'], defaultId: 0, cancelId: 0, title: '工具调用确认', message: `模型请求调用工具「${toolName}」`, detail: preview, noLink: true };
+  const { response } = mainWindow ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+  return response === 1 ? undefined : '用户拒绝了这次工具调用';
+}
+
+type HistoryTurn = { role: 'user' | 'assistant'; content: string };
+
+function sanitizeHistory(value: unknown): HistoryTurn[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-40).flatMap((turn): HistoryTurn[] => {
+    const candidate = turn as Partial<HistoryTurn> | null;
+    if (!candidate || (candidate.role !== 'user' && candidate.role !== 'assistant') || typeof candidate.content !== 'string') return [];
+    return [{ role: candidate.role, content: candidate.content.slice(0, 40_000) }];
+  });
+}
+
+async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; enableTools?: boolean; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
+  // Presets without credentials keep the local demo response instead of failing the request.
+  if (!model.apiKey && model.provider !== 'custom') {
+    const demo = await createProvider(model).invoke(prompt);
+    onDelta(demo.content);
+    return demo;
   }
-  return { content, inputTokens: inputTokens ?? estimateTokens(prompt), outputTokens: outputTokens ?? estimateTokens(content), modelId: model.id };
+  const result = await agentRuntime.run({
+    model, prompt, history: options.history, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
+    enableTools: options.enableTools !== false,
+    projectRoot: projects.getRoot(), signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
+  });
+  return { content: result.content, inputTokens: result.inputTokens || estimateTokens(prompt), outputTokens: result.outputTokens || estimateTokens(result.content), modelId: model.id };
 }
 
 function publicModel(model: ModelConfig) {
@@ -150,10 +168,21 @@ function registerHandlers(): void {
     return { ...await testModelConnection({ id, provider: model.provider }, registry), model: publicModel(model) };
   });
   ipcMain.handle('routing:status', () => router.getLocalModelStatus());
-  ipcMain.handle('session:execute', async (_event, payload: { sessionId?: string; taskId?: string; assistantMessageId?: string; prompt: string; taskType?: string; complexity?: 'low' | 'medium' | 'high'; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number }) => {
+  ipcMain.handle('session:execute', async (_event, payload: { sessionId?: string; taskId?: string; assistantMessageId?: string; prompt: string; taskType?: string; complexity?: 'low' | 'medium' | 'high'; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: unknown; enableTools?: boolean }) => {
     const taskId = payload.taskId || randomUUID();
     const sessionId = payload.sessionId || taskId;
     const assistantMessageId = payload.assistantMessageId || `${taskId}-assistant`;
+    const history = sanitizeHistory(payload.history);
+    const enableTools = payload.enableTools !== false;
+    const toolCalls: ToolEvent[] = [];
+    const emitToolEvent = (agentId: string | undefined, event: ToolEvent) => {
+      if (!agentId) {
+        const index = toolCalls.findIndex((call) => call.toolCallId === event.toolCallId);
+        const merged = index >= 0 ? { ...toolCalls[index], ...event, args: event.args ?? toolCalls[index].args } : event;
+        if (index >= 0) toolCalls[index] = merged; else toolCalls.push(merged);
+      }
+      mainWindow?.webContents.send('session:tool-call', { sessionId, taskId, assistantMessageId, agentId, ...event, details: undefined });
+    };
     const collaboratorIds = [...new Set(payload.collaboratorModelIds ?? [])];
     if (collaboratorIds.length === 1 || collaboratorIds.length > 4) throw new Error('并行子智能体需要选择 2–4 个不同的模型。');
     const collaboratorModels = collaboratorIds.map((id) => {
@@ -193,6 +222,9 @@ function registerHandlers(): void {
       }
     }
     mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, ...decision, modelId: model.id, role: 'execution', planningModelId });
+    const controller = new AbortController();
+    runningTasks.get(taskId)?.abort();
+    runningTasks.set(taskId, controller);
     const invocationId = observability.recordInvocationStart(taskId, model.id);
     try {
       let result: ModelResponse;
@@ -217,7 +249,7 @@ function registerHandlers(): void {
               agentContent += delta;
               agentMessages[index].content = agentContent;
               mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
-            }, payload.stream !== false);
+            }, { enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
             observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
             agentMessages[index].status = 'completed';
             agentMessages[index].content = agentResult.content;
@@ -243,18 +275,32 @@ function registerHandlers(): void {
       result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
         chunkIndex += 1;
         mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
-      }, payload.stream !== false);
+      }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
       const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
       if (metrics) {
         growth.recordFeedback({ modelId: model.id, taskType: payload.taskType || 'general', success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration });
       }
-      const output = { sessionId, taskId, assistantMessageId, output: result.content, modelUsed: publicModel(model), modelsUsed: [...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), model.id], planningModelId, decision, metrics, agentReports, agentMessages, project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+      const output = { sessionId, taskId, assistantMessageId, output: result.content, modelUsed: publicModel(model), modelsUsed: [...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), model.id], planningModelId, decision, metrics, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
       mainWindow?.webContents.send('session:completed', output);
       return output;
     } catch (error) {
       observability.recordInvocationEnd(invocationId, 0, 0, model.costPer1kTokens, 'failure', error instanceof Error ? error.message : String(error));
       throw error;
+    } finally {
+      if (runningTasks.get(taskId) === controller) runningTasks.delete(taskId);
     }
+  });
+  ipcMain.handle('session:cancel', (_event, taskId: unknown) => {
+    if (typeof taskId !== 'string') return { success: false };
+    runningTasks.get(taskId)?.abort();
+    return { success: runningTasks.has(taskId) };
+  });
+  ipcMain.handle('agent:describe', () => agentRuntime.describe());
+  ipcMain.handle('agent:search-providers', () => agentRuntime.search.list());
+  ipcMain.handle('agent:set-search-provider', (_event, id: unknown) => {
+    if (typeof id !== 'string') throw new Error('无效的搜索后端');
+    agentRuntime.search.setActive(id);
+    return agentRuntime.search.list();
   });
   ipcMain.handle('metrics:task', (_event, taskId: string) => observability.getTaskMetrics(taskId));
   ipcMain.handle('metrics:recent', (_event, limit?: number) => observability.getRecent(limit));
@@ -369,6 +415,8 @@ async function bootstrap(): Promise<void> {
   tty = new TtyManager({ defaultCwd: app.getPath('documents') });
   projects = new ProjectManager();
   commandExecutor = new CommandExecutor();
+  // Pi resources (skills/, extensions/, mcp.json) live in newAi's own data folder, never ~/.pi.
+  agentRuntime = new AgentRuntime({ agentDir: path.join(app.getPath('userData'), 'agent'), defaultCwd: app.getPath('documents'), toolGate: approveToolCall, enableMcp: true });
   observability = new ObservabilityEngine(path.join(app.getPath('userData'), 'metrics.db'));
   auditLog = new AuditLog(path.join(app.getPath('userData'), 'audit.jsonl'));
   registerHandlers();
@@ -378,4 +426,4 @@ async function bootstrap(): Promise<void> {
 
 bootstrap().catch(error => { console.error('AMD Agent failed to start', error); app.quit(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => { tty?.dispose(); commandExecutor?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); });
+app.on('before-quit', () => { for (const controller of runningTasks.values()) controller.abort(); tty?.dispose(); commandExecutor?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); });

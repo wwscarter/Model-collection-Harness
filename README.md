@@ -16,7 +16,10 @@ AMD Agent 是一个以 Electron、React 和 TypeScript 实现的多模型智能�
 - 监测面板：任务数、成本、成功率、延迟、模型分布、成本趋势和 Markdown 报告。
 - 自成长引擎：按任务类型记录模型成功率、成本、延迟、审计质量和用户评分，并动态调整路由权重。
 - 本地终端会话：支持创建、输入、输出监听、调整尺寸和关闭；优先使用 node-pty，缺失时降级到子进程管道。
-- 流式模型输出：OpenAI、Anthropic、Google 和演示模型支持 SSE/分块响应；网络流失败时自动回退到普通请求。
+- 智能体内核：任务执行通过 [Pi SDK](https://pi.dev/)（`@earendil-works/pi-coding-agent`）完成工具调用循环、流式输出和多轮上下文。模型与密钥仍由 newAi 加密保存，每轮在内存中新建 Pi 会话，不读写 `~/.pi`。
+- 内置工具：`web_search`（可插拔搜索后端，默认 Bing，免 Key）、`web_fetch`（只允许公网 http/https，逐跳校验重定向，拒绝内网地址）、`read` / `ls`（只读，限定在当前项目，拒绝 `.env`、私钥等凭据文件）。回答上方会显示工具调用卡片，并随会话保存。
+- 扩展点：skills 放在 `<userData>/agent/skills/`；`<userData>/agent/mcp.json` 存在时加载 MCP 服务器。内置工具之外的工具每次调用都需要用户确认。项目内的 `AGENTS.md` 和 `.pi/` 不会被加载。
+- 流式模型输出：执行模型由 Pi 流式返回；规划模型仍走原有适配层，网络流失败时回退到普通请求。
 - 项目上下文：从只读选定工作区生成文件树和限额文本上下文，跳过二进制、凭据文件、依赖目录和 `.gitignore` 命中路径。
 - 安全命令执行：必须选择项目并明确批准命令，执行范围固定在项目根目录，具备超时、取消、环境过滤和输出上限。
 
@@ -82,6 +85,8 @@ npm run release:check
 - `src/core/routing`：本地轻量分类器和启发式路由；没有 GGUF 或本地推理运行时时自动使用确定性 fallback。
 - `src/core/project`：项目目录扫描、忽略规则、文本提取和上下文预算。
 - `src/core/providers`：统一模型调用适配层。
+- `src/core/agent`：Pi SDK 接入（模型映射、系统提示词、`AgentRuntime`）。
+- `src/core/tools`：内置工具与可插拔搜索后端（`search/`）。
 - `src/core/observability`：调用、Token、成本和延迟指标。
 - `src/core/audit`：独立模型审计、本地静态 fallback 和只追加哈希链日志。
 - `src/core/growth`：性能档案与滑动平均反馈学习。

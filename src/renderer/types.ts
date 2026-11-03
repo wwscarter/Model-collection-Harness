@@ -89,6 +89,15 @@ export interface ProjectRecord {
   createdAt: string | Date;
 }
 
+/** What the agent runtime can use: skills, tools and search backends. */
+export interface AgentResourceSummary {
+  agentDir: string;
+  skills: Array<{ name: string; description: string; path: string }>;
+  tools: string[];
+  searchProviders: Array<{ id: string; label: string; active: boolean }>;
+  diagnostics: string[];
+}
+
 export interface AmdApi {
   routingStatus: () => Promise<{ backend: 'heuristic' | 'local-model'; modelPath?: string; available: boolean }>;
   project: {
@@ -138,9 +147,15 @@ export interface AmdApi {
     get: (id: string) => Promise<Record<string, unknown> | undefined>;
     save: (session: unknown) => Promise<Record<string, unknown>>;
     delete: (id: string) => Promise<{ success: boolean }>;
-    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number }) => Promise<ExecutionResult>;
+    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string }>; enableTools?: boolean }) => Promise<ExecutionResult>;
+    cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
-  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:completed' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
+  agent: {
+    describe: () => Promise<AgentResourceSummary>;
+    searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;
+    setSearchProvider: (id: string) => Promise<Array<{ id: string; label: string; active: boolean }>>;
+  };
+  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
 }
 
 declare global {

@@ -178,6 +178,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .agent-report .output-content { font-size: 13px; line-height: 20px; }
 .agent-placeholder { margin: 0; color: var(--text-muted); font-size: 12px; }
 .agent-error { margin-top: 4px; color: #B91C1C; font-size: 11px; overflow-wrap: anywhere; }
+.tool-calls { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.tool-call { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); font-size: 12px; }
+.tool-call svg { flex: none; color: var(--accent-strong); }
+.tool-call strong { flex: none; color: var(--text); font-weight: 600; }
+.tool-call-label { min-width: 0; flex: 1; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.tool-call .agent-status { flex: none; margin-left: auto; }
+.tool-call.failed svg { color: var(--red); }
 .no-session { display: grid; min-height: 100%; place-content: center; justify-items: center; gap: 12px; color: var(--text-secondary); font-size: 14px; }
 /* Composer */
 .composer { position: relative; width: min(860px, calc(100% - 48px)); justify-self: center; padding: 6px 0 22px; }

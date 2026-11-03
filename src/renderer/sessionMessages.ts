@@ -5,6 +5,26 @@ export interface ChatMessage {
   modelUsed?: string;
   planningModelId?: string;
   agents?: ChatAgentMessage[];
+  tools?: ChatToolCall[];
+}
+
+/** A tool call the model made while answering (web search, page fetch, file read). */
+export interface ChatToolCall {
+  id: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'failed';
+  label?: string;
+  summary?: string;
+  durationMs?: number;
+}
+
+export interface ToolCallUpdate {
+  toolCallId: string;
+  toolName: string;
+  status: ChatToolCall['status'];
+  args?: unknown;
+  summary?: string;
+  durationMs?: number;
 }
 
 export interface ChatAgentMessage {
@@ -37,6 +57,7 @@ export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
         ...(Array.isArray(message.agents) ? { agents: restoreAgents(message.agents) } : {}),
+        ...(Array.isArray(message.tools) ? { tools: restoreTools(message.tools) } : {}),
       }];
     });
     if (messages.length) return messages;
@@ -142,5 +163,62 @@ function restoreAgents(values: unknown[]): ChatAgentMessage[] {
     if (typeof agent.id !== 'string' || typeof agent.modelId !== 'string' || typeof agent.modelName !== 'string' || typeof agent.content !== 'string') return [];
     if (agent.status !== 'queued' && agent.status !== 'running' && agent.status !== 'completed' && agent.status !== 'failed') return [];
     return [{ id: agent.id, modelId: agent.modelId, modelName: agent.modelName, status: agent.status, content: agent.content, ...(typeof agent.error === 'string' ? { error: agent.error } : {}) }];
+  });
+}
+
+const TOOL_LABEL_KEYS = ['query', 'url', 'path'];
+
+/** One-line description of what a tool call was asked to do, e.g. the search query or URL. */
+export function describeToolArgs(args: unknown): string | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const record = args as Record<string, unknown>;
+  for (const key of TOOL_LABEL_KEYS) if (typeof record[key] === 'string' && record[key]) return (record[key] as string).slice(0, 300);
+  return undefined;
+}
+
+/** Insert or update a tool call on the assistant message, keeping the order calls started in. */
+export function upsertAssistantTool(messages: ChatMessage[], messageId: string, update: ToolCallUpdate): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id !== messageId || message.role !== 'assistant') return message;
+    const tools = message.tools ?? [];
+    const existing = tools.find((tool) => tool.id === update.toolCallId);
+    const label = describeToolArgs(update.args) ?? existing?.label;
+    const next: ChatToolCall = {
+      id: update.toolCallId,
+      toolName: update.toolName,
+      status: update.status,
+      ...(label ? { label } : {}),
+      ...(update.summary ?? existing?.summary ? { summary: update.summary ?? existing?.summary } : {}),
+      ...(update.durationMs ?? existing?.durationMs) !== undefined ? { durationMs: update.durationMs ?? existing?.durationMs } : {},
+    };
+    return { ...message, tools: existing ? tools.map((tool) => tool.id === update.toolCallId ? next : tool) : [...tools, next] };
+  });
+}
+
+/** Tool calls still marked running when a turn ends (error or cancel) are shown as failed. */
+export function settleAssistantTools(messages: ChatMessage[], messageId: string): ChatMessage[] {
+  return messages.map((message) => message.id !== messageId || !message.tools?.some((tool) => tool.status === 'running') ? message : {
+    ...message,
+    tools: message.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'failed' as const } : tool),
+  });
+}
+
+/** Completed user/assistant turns sent to the model as conversation history. */
+export function historyForModel(messages: ChatMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return messages.filter((message) => message.content.trim()).map((message) => ({ role: message.role, content: message.content }));
+}
+
+function restoreTools(values: unknown[]): ChatToolCall[] {
+  return values.flatMap((value): ChatToolCall[] => {
+    if (!value || typeof value !== 'object') return [];
+    const tool = value as Partial<ChatToolCall>;
+    if (typeof tool.id !== 'string' || typeof tool.toolName !== 'string') return [];
+    if (tool.status !== 'running' && tool.status !== 'completed' && tool.status !== 'failed') return [];
+    return [{
+      id: tool.id, toolName: tool.toolName, status: tool.status === 'running' ? 'failed' : tool.status,
+      ...(typeof tool.label === 'string' ? { label: tool.label } : {}),
+      ...(typeof tool.summary === 'string' ? { summary: tool.summary } : {}),
+      ...(typeof tool.durationMs === 'number' ? { durationMs: tool.durationMs } : {}),
+    }];
   });
 }

@@ -9,8 +9,9 @@ import { NewProjectDialog } from './components/NewProjectDialog';
 import { AgentInputBar } from './components/AgentInputBar';
 import { WorkbenchWelcome } from './components/WorkbenchWelcome';
 import { OutputView } from './components/OutputView';
+import { ToolCallList } from './components/ToolCallList';
 import { ModelConfig, ProjectInfo, ProjectRecord, SessionMetrics } from './types';
-import { appendAssistantChunk, ChatAgentMessage, ChatMessage, preparePendingTurn, restoreMessages, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent } from './sessionMessages';
+import { appendAssistantChunk, ChatAgentMessage, ChatMessage, historyForModel, preparePendingTurn, restoreMessages, settleAssistantTools, ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from './sessionMessages';
 import { ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
@@ -165,6 +166,15 @@ export default function App() {
         }),
       } : session));
     });
+    const unsubscribeTool = window.amd?.on('session:tool-call', (payload) => {
+      const event = payload as Partial<ToolCallUpdate> & { sessionId?: string; assistantMessageId?: string; agentId?: string };
+      // Sub-agent tool calls are folded into their own report; only the main answer shows cards.
+      if (!event.sessionId || !event.assistantMessageId || event.agentId || !event.toolCallId || !event.toolName || !event.status) return;
+      setSessions((existing) => existing.map((session) => session.id === event.sessionId ? {
+        ...session,
+        messages: upsertAssistantTool(session.messages, event.assistantMessageId!, event as ToolCallUpdate),
+      } : session));
+    });
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
       const event = payload as { sessionId?: string; taskId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
       const id = event.sessionId || event.taskId;
@@ -177,7 +187,7 @@ export default function App() {
         output: event.output ?? '', modelUsed, routeConfidence: metrics?.routeConfidence, metrics,
       } : session));
     });
-    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribe?.(); };
+    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribe?.(); };
   }, []);
 
   const refreshProjects = async () => {
@@ -265,6 +275,8 @@ export default function App() {
         taskType: 'general',
         stream: true,
         collaboratorModelIds: collaboratorModels.map((model) => model.id),
+        // Earlier turns of this conversation (the pending user/assistant pair is the last two).
+        history: historyForModel(messages.slice(0, -2)),
       });
       const raw = result as any;
       const modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed : raw.modelUsed?.id || raw.modelUsed?.name;
@@ -274,11 +286,13 @@ export default function App() {
       for (const agent of (raw.agentMessages || []) as ChatAgentMessage[]) {
         completedMessages = updateAssistantAgent(completedMessages, `${messageId}-assistant`, { agentId: agent.id, status: agent.status, content: agent.content, error: agent.error });
       }
+      for (const call of (raw.toolCalls || []) as ToolCallUpdate[]) completedMessages = upsertAssistantTool(completedMessages, `${messageId}-assistant`, call);
       const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: metrics?.routeConfidence, metrics, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
       await window.amd.sessions.save(completedSession);
     } catch (cause) {
       setSessionError({ sessionId: currentSession.id, message: errorMessage(cause) });
+      setSessions((existing) => existing.map((session) => session.id === currentSession.id ? { ...session, messages: settleAssistantTools(session.messages, `${messageId}-assistant`) } : session));
     } finally {
       setRunningSessionId(null);
     }
@@ -344,6 +358,7 @@ export default function App() {
                   <span className="assistant-title"><i className={live ? 'live-dot pulse' : 'live-dot'} /><strong>{modelLabel(message.modelUsed) ?? (live ? '正在选择执行模型' : 'newAi')}</strong>{message.planningModelId && <small className="planning-attribution">规划：{modelLabel(message.planningModelId)}</small>}</span>
                   {live ? <span className="streaming-badge mono">Streaming</span> : message.content && <button className="message-icon-button" title="复制回复" aria-label="复制回复" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button>}
                 </header>
+                {!!message.tools?.length && <ToolCallList tools={message.tools} />}
                 <OutputView content={message.content} loading={live && Boolean(message.content)} emptyState={false} />
                 {!!message.agents?.length && <section className="agent-board" aria-label="并行子智能体报告"><div className="agent-board-heading"><UsersRound size={15} /><strong>子智能体报告</strong><span>{message.agents.filter((agent) => agent.status === 'completed').length}/{message.agents.length} 完成</span></div>{message.agents.map((agent) => <div className="agent-report" key={agent.id}><header><strong>{agent.modelName}</strong><span className={`agent-status ${agent.status}`}>{({ queued: '等待中', running: '分析中', completed: '已完成', failed: '失败' })[agent.status]}</span></header>{agent.content ? <OutputView content={agent.content} loading={agent.status === 'running'} emptyState={false} /> : agent.status === 'running' ? <p className="agent-placeholder">正在独立分析…</p> : null}{agent.error && <div className="agent-error">{agent.error}</div>}</div>)}</section>}
                 {error && index === currentSession.messages.length - 1 && <div className="error-banner">{error}</div>}

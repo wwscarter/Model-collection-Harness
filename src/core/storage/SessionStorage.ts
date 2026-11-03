@@ -26,6 +26,16 @@ export interface SessionAgentRecord {
   error?: string;
 }
 
+/** A tool call shown on an assistant message (web search, page fetch, file read). */
+export interface SessionToolRecord {
+  id: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'failed';
+  label?: string;
+  summary?: string;
+  durationMs?: number;
+}
+
 export interface SessionMessageRecord {
   id: string;
   role: 'user' | 'assistant';
@@ -33,6 +43,7 @@ export interface SessionMessageRecord {
   modelUsed?: string;
   planningModelId?: string;
   agents?: SessionAgentRecord[];
+  tools?: SessionToolRecord[];
 }
 
 interface SessionRow { id: string; title: string; prompt: string; user_message: string | null; output: string; messages: string | null; model_used: string | null; metrics: string | null; audit_result: string | null; rating: number | null; created_at: string; updated_at: string; }
@@ -79,6 +90,7 @@ export class SessionStorage {
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
         ...(Array.isArray(message.agents) ? { agents: this.normalizeAgents(message.agents) } : {}),
+        ...(Array.isArray(message.tools) ? { tools: this.normalizeTools(message.tools) } : {}),
       }];
     });
     return messages.length ? messages : undefined;
@@ -97,6 +109,23 @@ export class SessionStorage {
         status: agent.status,
         content: agent.content,
         ...(typeof agent.error === 'string' ? { error: agent.error } : {}),
+      }];
+    });
+  }
+
+  private normalizeTools(value: unknown[]): SessionToolRecord[] {
+    return value.slice(0, 50).flatMap((value): SessionToolRecord[] => {
+      if (!value || typeof value !== 'object') return [];
+      const tool = value as Partial<SessionToolRecord>;
+      if (typeof tool.id !== 'string' || typeof tool.toolName !== 'string') return [];
+      if (tool.status !== 'running' && tool.status !== 'completed' && tool.status !== 'failed') return [];
+      return [{
+        id: tool.id,
+        toolName: tool.toolName,
+        status: tool.status,
+        ...(typeof tool.label === 'string' ? { label: tool.label.slice(0, 300) } : {}),
+        ...(typeof tool.summary === 'string' ? { summary: tool.summary.slice(0, 500) } : {}),
+        ...(typeof tool.durationMs === 'number' && Number.isFinite(tool.durationMs) ? { durationMs: tool.durationMs } : {}),
       }];
     });
   }

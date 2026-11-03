@@ -29,7 +29,7 @@ export function buildPlannedTask(task: string, plan: string): string {
 
 export function buildParallelAgentPrompt(task: string, index: number): string {
   const perspective = agentPerspectives[index % agentPerspectives.length];
-  return `You are an independent analysis subagent. Focus on: ${perspective}. Do not claim to use tools or modify files. Give a concise, concrete analysis that directly addresses the user's task.\n\nUser task:\n${task}`;
+  return `You are an independent analysis subagent. Focus on: ${perspective}. Use the available tools (such as web search) when the task needs current or external information; never claim to have used a tool you did not call, and do not modify files. Give a concise, concrete analysis that directly addresses the user's task.\n\nUser task:\n${task}`;
 }
 
 export function buildSynthesisPrompt(task: string, reports: Array<{ modelName: string; content: string }>, failedCount = 0): string {

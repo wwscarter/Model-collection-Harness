@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:completed', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'tty:data', 'execution:data']);
 
 const amdApi = {
   listModels: () => ipcRenderer.invoke('model:list'),
@@ -57,6 +57,12 @@ const amdApi = {
     save: (session: unknown) => ipcRenderer.invoke('session:save', session),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     execute: (input: unknown) => ipcRenderer.invoke('session:execute', input),
+    cancel: (taskId: string) => ipcRenderer.invoke('session:cancel', taskId),
+  },
+  agent: {
+    describe: () => ipcRenderer.invoke('agent:describe'),
+    searchProviders: () => ipcRenderer.invoke('agent:search-providers'),
+    setSearchProvider: (id: string) => ipcRenderer.invoke('agent:set-search-provider', id),
   },
   on: (channel: string, listener: (payload: unknown) => void) => {
     if (!allowedChannels.has(channel)) return () => undefined;
