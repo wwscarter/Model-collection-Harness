@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, FileCode, Folder, FolderPlus, GitBranch, LockKeyhole, Plus, RefreshCw, X } from 'lucide-react';
+import { Check, FileCode, Folder, FolderPlus, GitBranch, ShieldCheck, Plus, RefreshCw, X } from 'lucide-react';
 import type { ProjectInfo } from '../types';
 import { errorMessage } from '../format';
 
@@ -44,7 +44,7 @@ export function NewProjectDialog({ onClose, onCreated }: NewProjectDialogProps) 
     <section className="modal-window new-project-window" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
       <header className="dialog-header">
         <span className="dialog-icon"><FolderPlus size={18} /></span>
-        <div><h2 id="new-project-title">新建项目</h2><p>绑定本地文件夹，任务可以读取其中的文本文件作为只读上下文</p></div>
+        <div><h2 id="new-project-title">新建项目</h2><p>绑定本地文件夹，任务可以读取文件，并在确认后修改文件、执行命令</p></div>
         <button className="icon-button" title="关闭" aria-label="关闭" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="dialog-body">
@@ -61,7 +61,7 @@ export function NewProjectDialog({ onClose, onCreated }: NewProjectDialogProps) 
         {picked && <div className="detection-card">
           <div className="detection-row">
             {picked.git?.branch || picked.git?.detached ? <><span className="branch-chip"><GitBranch size={11} />{picked.git.branch ?? picked.git.head}</span><span>已关联 Git 仓库</span></> : <span className="muted-text">未检测到 Git 仓库</span>}
-            <span className="detection-right"><LockKeyhole size={12} />只读访问</span>
+            <span className="detection-right"><ShieldCheck size={12} />修改与执行需确认</span>
           </div>
           <div className="detection-row divided">
             <span className="detection-left"><FileCode size={13} />{picked.languages.length ? <>检测到 <strong>{picked.languages.join(' / ')}</strong> 项目</> : '未识别到常见项目清单文件'}</span>

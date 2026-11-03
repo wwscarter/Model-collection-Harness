@@ -8,6 +8,8 @@ import { normalizeBaseUrl, toPiModel } from '../../src/core/agent/modelMapping';
 import { buildSystemPrompt } from '../../src/core/agent/systemPrompt';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import { SearchProviderRegistry, type SearchProvider } from '../../src/core/tools/search';
+import { createProjectCommandTools } from '../../src/core/tools/projectCommandTools';
+import { ProjectProcessManager, type ProjectProcessSnapshot } from '../../src/core/tty/ProjectProcessManager';
 
 type Reply = (body: any) => string[] | null;
 let server: http.Server;
@@ -44,6 +46,7 @@ function model(overrides: Partial<ModelConfig> = {}): ModelConfig {
 }
 
 const fakeSearch: SearchProvider = { id: 'fake', label: 'Fake', search: async (query) => [{ title: `Result for ${query}`, url: 'https://example.com/a', snippet: '晴，20°C' }] };
+const quote = (value: string) => process.platform === 'win32' ? `"${value.replaceAll('"', '""')}"` : String.fromCharCode(39) + value.replaceAll(String.fromCharCode(39), String.fromCharCode(39, 34, 39, 34, 39)) + String.fromCharCode(39);
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -181,6 +184,114 @@ describe('AgentRuntime (Pi SDK)', () => {
     await agent.run({ model: model(), prompt: '读一下', onToolEvent: (event) => events.push(event) });
     expect(events.at(-1)).toMatchObject({ toolName: 'web_fetch', status: 'failed' });
     expect(requests[1].body.messages.find((message: any) => message.role === 'tool').content).toContain('用户拒绝了网页读取');
+  });
+
+  it('creates and edits a webpage, serves it after the run, then manages the process in the next turn', async () => {
+    requests.length = 0;
+    const manager = new ProjectProcessManager();
+    const { runtime: agent, cwd, agentDir } = runtime({
+      extraTools: ({ projectRoot }) => projectRoot ? createProjectCommandTools(projectRoot, manager) : [],
+    });
+    const events: ToolEvent[] = [];
+    const page = '<!doctype html>\n<title>NewAi</title>\n<h1>First draft</h1>\n';
+    fs.writeFileSync(path.join(cwd, 'server.cjs'), `
+      const http = require('node:http');
+      const fs = require('node:fs');
+      const server = http.createServer((_request, response) => {
+        response.setHeader('content-type', 'text/html; charset=utf-8');
+        response.end(fs.readFileSync('index.html'));
+      });
+      server.listen(0, '127.0.0.1', () => console.log('READY http://127.0.0.1:' + server.address().port + '/'));
+    `);
+    replies = [
+      toolCall('write', { path: 'index.html', content: page }, 'create-page'),
+      toolCall('edit', { path: 'index.html', edits: [{ oldText: '<h1>First draft</h1>', newText: '<h1>欢迎访问 NewAi</h1>' }] }, 'update-page'),
+      toolCall('run_command', { command: `${quote(process.execPath)} ${quote('server.cjs')}`, background: true, timeoutMs: 500 }, 'start-page'),
+      text('网页已创建并启动。'),
+    ];
+    try {
+      const created = await agent.run({ model: model(), prompt: '创建并启动网页', projectRoot: cwd, onToolEvent: (event) => events.push(event) });
+      expect(created.content).toContain('网页已创建并启动');
+      expect(created.toolCalls).toBe(3);
+      expect(events.filter((event) => event.status !== 'running').map((event) => [event.toolName, event.status])).toEqual([['write', 'completed'], ['edit', 'completed'], ['run_command', 'completed']]);
+      expect(requests[0].body.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(['write', 'edit', 'run_command', 'process_status', 'stop_process']));
+      const started = events.find((event) => event.toolName === 'run_command' && event.status === 'completed')?.details as ProjectProcessSnapshot;
+      expect(started).toMatchObject({ running: true, status: 'running', background: true, cwd: fs.realpathSync(cwd) });
+      expect(started.urls).toHaveLength(1);
+      const response = await fetch(started.urls[0]);
+      expect(response.ok).toBe(true);
+      expect(await response.text()).toBe(page.replace('<h1>First draft</h1>', '<h1>欢迎访问 NewAi</h1>'));
+      expect(manager.status(started.processId, cwd).running).toBe(true);
+
+      requests.length = 0;
+      events.length = 0;
+      replies = [
+        toolCall('process_status', { processId: started.processId }, 'check-page'),
+        toolCall('stop_process', { processId: started.processId }, 'stop-page'),
+        text('网页服务已停止。'),
+      ];
+      const stopped = await agent.run({
+        model: model(), prompt: '检查运行状态并停止网页服务', projectRoot: cwd,
+        history: [{ role: 'user', content: '创建并启动网页' }, { role: 'assistant', content: created.content }],
+        onToolEvent: (event) => events.push(event),
+      });
+      expect(stopped.toolCalls).toBe(2);
+      expect(stopped.content).toContain('网页服务已停止');
+      expect(events.find((event) => event.toolName === 'process_status' && event.status === 'completed')?.details).toMatchObject({ processId: started.processId, running: true, output: expect.stringContaining('READY') });
+      expect(events.find((event) => event.toolName === 'stop_process' && event.status === 'completed')?.details).toMatchObject({ processId: started.processId, status: 'stopped', running: false });
+      expect(requests[1].body.messages.find((message: any) => message.role === 'tool').content).toContain('状态：运行中');
+      expect(requests[2].body.messages.filter((message: any) => message.role === 'tool').at(-1).content).toContain('状态：已停止');
+      await expect(fetch(started.urls[0])).rejects.toThrow();
+    } finally {
+      await Promise.allSettled(manager.list().filter((process) => process.running).map((process) => manager.stop(process.processId)));
+      manager.dispose();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it('offers only read tools when the caller requests read project access', async () => {
+    requests.length = 0;
+    replies = [text('项目只读检查完成')];
+    const manager = new ProjectProcessManager();
+    const { runtime: agent, cwd, agentDir } = runtime({
+      extraTools: ({ projectRoot }) => projectRoot ? createProjectCommandTools(projectRoot, manager) : [],
+    });
+    try {
+      await agent.run({ model: model(), prompt: '读取项目', projectRoot: cwd, projectAccess: 'read' });
+      const names = requests[0].body.tools.map((tool: any) => tool.function.name);
+      expect(names).toEqual(expect.arrayContaining(['read', 'ls']));
+      for (const name of ['write', 'edit', 'run_command', 'stop_process']) expect(names).not.toContain(name);
+      expect(requests[0].body.messages[0].content).toContain('本轮项目文件工具只有读取能力');
+    } finally {
+      manager.dispose();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a declined write approval to the model without creating the file', async () => {
+    requests.length = 0;
+    replies = [toolCall('write', { path: 'index.html', content: '<h1>NewAi</h1>' }, 'declined-write'), text('用户未批准保存网页。')];
+    const approvals: Array<{ toolName: string; projectRoot?: string }> = [];
+    const { runtime: agent, cwd, agentDir } = runtime({
+      toolGate: (call) => {
+        approvals.push(call);
+        return call.toolName === 'write' ? '用户拒绝本次文件写入' : undefined;
+      },
+    });
+    const events: ToolEvent[] = [];
+    try {
+      const result = await agent.run({ model: model(), prompt: '保存网页', projectRoot: cwd, onToolEvent: (event) => events.push(event) });
+      expect(result.content).toContain('用户未批准保存网页');
+      expect(approvals).toEqual([expect.objectContaining({ toolName: 'write', projectRoot: cwd })]);
+      expect(events.at(-1)).toMatchObject({ toolName: 'write', status: 'failed', summary: expect.stringContaining('用户拒绝本次文件写入') });
+      expect(requests[1].body.messages.find((message: any) => message.role === 'tool').content).toContain('用户拒绝本次文件写入');
+      expect(fs.existsSync(path.join(cwd, 'index.html'))).toBe(false);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it('confines read to the project and refuses secrets', async () => {

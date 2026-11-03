@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.2 — 2026-11-03
+
+- Added project `write` / `edit` tools and managed `run_command` / `process_status` / `stop_process` tools. The execution model can create a page, start a persistent local server and verify it with an HTTP request.
+- Mutations and commands use native per-call confirmation. Requests keep their selected project across model stages, while analysis subagents retain read-only tools.
+- Updated project access labels, refreshed the file tree after changes, and removed instructions claiming that project files cannot be modified. The system prompt now directs the model to perform requested actions and to describe only available capabilities.
+- Background processes survive completed agent turns, expose bounded logs and are cleaned up when stopped or when the application exits. macOS command lookup includes common Homebrew locations.
+
 ## 0.0.1 — 2026-11-03
 
 - First stable release tag; aligned the desktop package version with `0.0.1`.

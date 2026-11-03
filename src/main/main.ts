@@ -21,6 +21,8 @@ import { GrowthEngine, type RoutingFeedback } from '@core/growth/GrowthEngine';
 import { TtyManager } from '@core/tty/TtyManager';
 import { ProjectManager } from '@core/project/ProjectManager';
 import { CommandExecutor, type CommandExecutionRequest } from '@core/tty/CommandExecutor';
+import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
+import { createProjectCommandTools } from '@core/tools/projectCommandTools';
 import { AgentRuntime, type ToolEvent } from '@core/agent/AgentRuntime';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +38,7 @@ let growth: GrowthEngine;
 let tty: TtyManager;
 let projects: ProjectManager;
 let commandExecutor: CommandExecutor;
+let projectProcesses: ProjectProcessManager;
 let agentRuntime: AgentRuntime;
 const ttyUnsubscribers = new Map<string, () => void>();
 const commandUnsubscribers = new Map<string, () => void>();
@@ -44,13 +47,15 @@ const runningTasks = new Map<string, AbortController>();
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
 
-const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls']);
+const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'process_status']);
 
-/** Built-in tools are read-only; anything else (MCP, plugins) needs the user's consent per call. */
-async function approveToolCall({ toolName, input }: { toolName: string; input: Record<string, unknown> }): Promise<string | undefined> {
+/** Read operations run directly. Mutations and commands use the existing per-call confirmation. */
+async function approveToolCall({ toolName, input, projectRoot }: { toolName: string; input: Record<string, unknown>; projectRoot?: string }): Promise<string | undefined> {
   if (SAFE_TOOLS.has(toolName)) return undefined;
-  const preview = JSON.stringify(input, null, 2).slice(0, 800);
-  const options = { type: 'question' as const, buttons: ['拒绝', '允许本次调用'], defaultId: 0, cancelId: 0, title: '工具调用确认', message: `模型请求调用工具「${toolName}」`, detail: preview, noLink: true };
+  const labels: Record<string, string> = { write: '写入项目文件', edit: '编辑项目文件', run_command: input.background ? '启动后台服务' : '执行项目命令', stop_process: '停止后台服务' };
+  const preview = toolName === 'run_command' ? String(input.command ?? '') : JSON.stringify(input, null, 2).slice(0, 1600);
+  const detail = `${projectRoot ? `项目目录：${displayPath(projectRoot)}\n\n` : ''}${preview}${toolName === 'run_command' ? '\n\n命令以当前系统用户权限运行。' : ''}`;
+  const options = { type: 'question' as const, buttons: ['拒绝', '允许本次调用'], defaultId: 0, cancelId: 0, title: '工具调用确认', message: `模型请求${labels[toolName] ?? `调用工具「${toolName}」`}`, detail, noLink: true };
   const { response } = mainWindow ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
   return response === 1 ? undefined : '用户拒绝了这次工具调用';
 }
@@ -66,7 +71,7 @@ function sanitizeHistory(value: unknown): HistoryTurn[] {
   });
 }
 
-async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; enableTools?: boolean; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
+async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; enableTools?: boolean; projectRoot?: string; projectAccess?: 'read' | 'write'; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
   if (options.signal?.aborted) throw new Error('任务已取消');
   // Presets without credentials keep the local demo response instead of failing the request.
   if (!model.apiKey && model.provider !== 'custom') {
@@ -77,7 +82,7 @@ async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: num
   const result = await agentRuntime.run({
     model, prompt, history: options.history, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
-    projectRoot: projects.getRoot(), signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
+    projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
   });
   return { content: result.content, inputTokens: result.inputTokens || estimateTokens(prompt), outputTokens: result.outputTokens || estimateTokens(result.content), modelId: model.id };
 }
@@ -191,9 +196,10 @@ function registerHandlers(): void {
       if (!candidate || !candidate.enabled) throw new Error('子智能体只能使用已启用的模型，请检查模型配置。');
       return candidate;
     });
+    const projectRoot = projects.getRoot();
     const projectContext = payload.includeProjectContext === false ? undefined : projects.getContext(payload.contextPaths, payload.contextMaxTokens);
     const contextPrompt = projectContext?.text
-      ? `${payload.prompt}\n\nThe following read-only project context is available. Use it as evidence and do not assume files can be modified automatically.\n${projectContext.text}`
+      ? `${payload.prompt}\n\nThe following project snapshot is available as context. Use read/ls for current file contents and the available project tools to carry out the task.\n${projectContext.text}`
       : payload.prompt;
     const controller = new AbortController();
     runningTasks.get(taskId)?.abort();
@@ -256,7 +262,7 @@ function registerHandlers(): void {
                 agentContent += delta;
                 agentMessages[index].content = agentContent;
                 mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
-              }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
+              }, { history, enableTools, projectRoot, projectAccess: 'read', signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
               observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
               agentMessages[index].status = 'completed';
               agentMessages[index].content = agentResult.content;
@@ -282,7 +288,7 @@ function registerHandlers(): void {
         result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
           chunkIndex += 1;
           mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
-        }, { history, enableTools, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
+        }, { history, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
         const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
         if (metrics) {
           growth.recordFeedback({ modelId: model.id, taskType: payload.taskType || 'general', success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration });
@@ -423,8 +429,13 @@ async function bootstrap(): Promise<void> {
   tty = new TtyManager({ defaultCwd: app.getPath('documents') });
   projects = new ProjectManager();
   commandExecutor = new CommandExecutor();
+  projectProcesses = new ProjectProcessManager();
   // Pi resources (skills/, extensions/, mcp.json) live in newAi's own data folder, never ~/.pi.
-  agentRuntime = new AgentRuntime({ agentDir: path.join(app.getPath('userData'), 'agent'), defaultCwd: app.getPath('documents'), toolGate: approveToolCall, enableMcp: true });
+  agentRuntime = new AgentRuntime({
+    agentDir: path.join(app.getPath('userData'), 'agent'), defaultCwd: app.getPath('documents'),
+    toolGate: approveToolCall, enableMcp: true,
+    extraTools: ({ projectRoot }) => projectRoot ? createProjectCommandTools(projectRoot, projectProcesses) : [],
+  });
   observability = new ObservabilityEngine(path.join(app.getPath('userData'), 'metrics.db'));
   auditLog = new AuditLog(path.join(app.getPath('userData'), 'audit.jsonl'));
   registerHandlers();
@@ -434,4 +445,4 @@ async function bootstrap(): Promise<void> {
 
 bootstrap().catch(error => { console.error('AMD Agent failed to start', error); app.quit(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => { for (const controller of runningTasks.values()) controller.abort(); tty?.dispose(); commandExecutor?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); });
+app.on('before-quit', () => { for (const controller of runningTasks.values()) controller.abort(); tty?.dispose(); commandExecutor?.dispose(); projectProcesses?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); });

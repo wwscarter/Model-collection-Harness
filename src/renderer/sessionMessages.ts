@@ -166,7 +166,7 @@ function restoreAgents(values: unknown[]): ChatAgentMessage[] {
   });
 }
 
-const TOOL_LABEL_KEYS = ['query', 'url', 'path'];
+const TOOL_LABEL_KEYS = ['query', 'url', 'path', 'command', 'processId'];
 
 /** One-line description of what a tool call was asked to do, e.g. the search query or URL. */
 export function describeToolArgs(args: unknown): string | undefined {

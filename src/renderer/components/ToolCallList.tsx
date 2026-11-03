@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, FolderTree, Globe, Search, Wrench } from 'lucide-react';
+import { FilePenLine, FilePlus, FileText, FolderTree, Globe, Search, SquareTerminal, Wrench } from 'lucide-react';
 import type { ChatToolCall } from '../sessionMessages';
 
 const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
@@ -7,6 +7,11 @@ const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
   web_fetch: { label: '读取网页', icon: Globe },
   read: { label: '读取文件', icon: FileText },
   ls: { label: '列出目录', icon: FolderTree },
+  write: { label: '写入文件', icon: FilePlus },
+  edit: { label: '编辑文件', icon: FilePenLine },
+  run_command: { label: '执行命令', icon: SquareTerminal },
+  process_status: { label: '检查服务', icon: SquareTerminal },
+  stop_process: { label: '停止服务', icon: SquareTerminal },
 };
 
 const STATUS_LABEL: Record<ChatToolCall['status'], string> = { running: '进行中', completed: '完成', failed: '失败' };

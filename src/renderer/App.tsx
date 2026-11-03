@@ -177,6 +177,7 @@ export default function App() {
     });
     const unsubscribeTool = window.amd?.on('session:tool-call', (payload) => {
       const event = payload as Partial<ToolCallUpdate> & { sessionId?: string; assistantMessageId?: string; agentId?: string };
+      if (event.status === 'completed' && ['write', 'edit', 'run_command'].includes(event.toolName ?? '')) setProjectReloadKey((key) => key + 1);
       // Sub-agent tool calls are folded into their own report; only the main answer shows cards.
       if (!event.sessionId || !event.assistantMessageId || event.agentId || !event.toolCallId || !event.toolName || !event.status) return;
       setSessions((existing) => existing.map((session) => session.id === event.sessionId ? {

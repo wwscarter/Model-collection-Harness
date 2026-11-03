@@ -38,6 +38,8 @@ export interface AgentRunRequest {
   prompt: string;
   history?: ChatTurn[];
   projectRoot?: string;
+  /** Analysis subagents can inspect a project without modifying it or running commands. */
+  projectAccess?: 'read' | 'write';
   /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */
   enableTools?: boolean;
   maxTokens?: number;
@@ -55,7 +57,7 @@ export interface AgentRunResult {
 }
 
 /** Decide whether a tool call may run. Returning a string blocks it with that reason. */
-export type ToolGate = (call: { toolName: string; input: Record<string, unknown> }) => Promise<string | undefined> | string | undefined;
+export type ToolGate = (call: { toolName: string; input: Record<string, unknown>; projectRoot?: string }) => Promise<string | undefined> | string | undefined;
 
 export interface AgentRuntimeOptions {
   /** Directory owned by newAi for Pi resources: skills/, extensions/, mcp.json. Never ~/.pi. */
@@ -64,7 +66,7 @@ export interface AgentRuntimeOptions {
   defaultCwd: string;
   search?: SearchProviderRegistry;
   /** Extra tools contributed by plugins. */
-  extraTools?: () => ToolDefinition[];
+  extraTools?: (context: { cwd: string; projectRoot?: string }) => ToolDefinition[];
   /** Extra Pi extensions (inline factories). */
   extensions?: InlineExtension[];
   toolGate?: ToolGate;
@@ -171,7 +173,7 @@ export class AgentRuntime {
     } as never);
   }
 
-  private extensionFactories(): InlineExtension[] {
+  private extensionFactories(projectRoot?: string): InlineExtension[] {
     const gate = this.options.toolGate;
     const factories: InlineExtension[] = [];
     if (gate) {
@@ -180,7 +182,7 @@ export class AgentRuntime {
         hidden: true,
         factory: (pi) => {
           pi.on('tool_call', async (event) => {
-            const reason = await gate({ toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown> });
+            const reason = await gate({ toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown>, projectRoot });
             return reason ? { block: true, reason } : undefined;
           });
         },
@@ -198,7 +200,7 @@ export class AgentRuntime {
     return [...factories, ...(this.options.extensions ?? [])];
   }
 
-  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string) {
+  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string, projectRoot?: string) {
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: this.options.agentDir,
@@ -210,7 +212,7 @@ export class AgentRuntime {
       noThemes: true,
       noExtensions: !this.options.enableFileExtensions,
       disabledBuiltinExtensions: ['llama.cpp'],
-      extensionFactories: this.extensionFactories(),
+      extensionFactories: this.extensionFactories(projectRoot),
       skillsOverride: (base) => ({
         skills: base.skills.filter((skill) => skill.filePath.startsWith(this.options.agentDir)),
         diagnostics: base.diagnostics,
@@ -220,14 +222,15 @@ export class AgentRuntime {
     return loader;
   }
 
-  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean): ToolDefinition[] {
+  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean, projectAccess: 'read' | 'write' = 'write'): ToolDefinition[] {
     if (!enableTools) return [];
-    return [
+    const tools = [
       createWebSearchTool(this.search) as unknown as ToolDefinition,
       createWebFetchTool() as unknown as ToolDefinition,
       ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir] }),
-      ...(this.options.extraTools?.() ?? []),
+      ...(this.options.extraTools?.({ cwd, projectRoot }) ?? []),
     ];
+    return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls'].includes(tool.name)) : tools;
   }
 
   private seedSession(cwd: string, history: ChatTurn[], piModel: { api: string; provider: string; id: string }): SessionManager {
@@ -265,9 +268,9 @@ export class AgentRuntime {
     const { runtime, mapping, piModel } = await this.resolveModel(request.model);
     const history = trimHistory(request.history);
     const settingsManager = this.settings();
-    const toolDefinitions = this.tools(cwd, request.projectRoot, enableTools);
+    const toolDefinitions = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
     const systemPrompt = buildSystemPrompt({ now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot });
-    const resourceLoader = await this.resourceLoader(cwd, settingsManager, systemPrompt);
+    const resourceLoader = await this.resourceLoader(cwd, settingsManager, systemPrompt, request.projectRoot);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
     const { session } = await createAgentSession({
       cwd,
