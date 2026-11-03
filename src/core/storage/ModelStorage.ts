@@ -6,6 +6,8 @@ import { ModelConfig, cloneModelConfig } from "../models/ModelConfig";
 
 export interface ModelStore {
   saveModel(config: ModelConfig): void;
+  /** Persist related updates together, e.g. clearing and selecting a primary route. */
+  saveModels?(configs: ModelConfig[]): void;
   loadModel(id: string): ModelConfig | undefined;
   getAllModels(): ModelConfig[];
   deleteModel(id: string): void;
@@ -17,6 +19,11 @@ interface ModelRow {
   provider: ModelConfig["provider"];
   name: string;
   model_id: string;
+  provider_category: ModelConfig["providerCategory"] | null;
+  available_models: string;
+  temperature: number;
+  enable_thinking: number;
+  is_primary: number;
   base_url: string | null;
   context_window: number;
   intelligence_score: number;
@@ -57,6 +64,11 @@ export class ModelStorage implements ModelStore {
         provider TEXT NOT NULL,
         name TEXT NOT NULL,
         model_id TEXT NOT NULL,
+        provider_category TEXT,
+        available_models TEXT NOT NULL DEFAULT '[]',
+        temperature REAL NOT NULL DEFAULT 0.6,
+        enable_thinking INTEGER NOT NULL DEFAULT 1,
+        is_primary INTEGER NOT NULL DEFAULT 0,
         base_url TEXT,
         context_window INTEGER NOT NULL DEFAULT 4096,
         intelligence_score INTEGER NOT NULL DEFAULT 70,
@@ -80,6 +92,17 @@ export class ModelStorage implements ModelStore {
       CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider);
       CREATE INDEX IF NOT EXISTS idx_models_priority ON models(priority);
     `);
+    const columns = new Set((this.db.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>).map((column) => column.name));
+    for (const [name, definition] of [
+      ["provider_category", "TEXT"],
+      ["available_models", "TEXT NOT NULL DEFAULT '[]'"],
+      ["temperature", "REAL NOT NULL DEFAULT 0.6"],
+      ["enable_thinking", "INTEGER NOT NULL DEFAULT 1"],
+      ["is_primary", "INTEGER NOT NULL DEFAULT 0"],
+    ]) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE models ADD COLUMN ${name} ${definition}`);
+    }
+    if (!columns.has("available_models")) this.db.exec("UPDATE models SET available_models = json_array(model_id)");
     // Databases created by the original scaffold lacked rate_limit; migrate them in place.
     try {
       this.db.exec(
@@ -131,14 +154,19 @@ export class ModelStorage implements ModelStore {
       this.db
         .prepare(`
           INSERT INTO models (
-            id, provider, name, model_id, base_url, context_window, intelligence_score, capabilities, cost_per_1k_tokens,
+            id, provider, name, model_id, provider_category, available_models, temperature, enable_thinking, is_primary, base_url, context_window, intelligence_score, capabilities, cost_per_1k_tokens,
             max_tokens, rate_limit, enabled, priority, created_at, updated_at
-          ) VALUES (@id, @provider, @name, @model_id, @base_url, @context_window, @intelligence_score, @capabilities, @cost_per_1k_tokens,
+          ) VALUES (@id, @provider, @name, @model_id, @provider_category, @available_models, @temperature, @enable_thinking, @is_primary, @base_url, @context_window, @intelligence_score, @capabilities, @cost_per_1k_tokens,
             @max_tokens, @rate_limit, @enabled, @priority, @created_at, @updated_at)
           ON CONFLICT(id) DO UPDATE SET
             provider = excluded.provider,
             name = excluded.name,
             model_id = excluded.model_id,
+            provider_category = excluded.provider_category,
+            available_models = excluded.available_models,
+            temperature = excluded.temperature,
+            enable_thinking = excluded.enable_thinking,
+            is_primary = excluded.is_primary,
             base_url = excluded.base_url,
             context_window = excluded.context_window,
             intelligence_score = excluded.intelligence_score,
@@ -156,6 +184,11 @@ export class ModelStorage implements ModelStore {
           provider: model.provider,
           name: model.name,
           model_id: model.modelId,
+          provider_category: model.providerCategory ?? (model.provider === "custom" ? "compatible_gateway" : "official"),
+          available_models: JSON.stringify(model.availableModels ?? [model.modelId]),
+          temperature: model.temperature ?? 0.6,
+          enable_thinking: model.enableThinking === false ? 0 : 1,
+          is_primary: model.isPrimary ? 1 : 0,
           base_url: model.baseURL ?? null,
           context_window: model.contextWindow ?? model.maxTokens,
           intelligence_score: model.intelligenceScore ?? model.capabilities.find((capability) => capability.type === "reasoning")?.score ?? 70,
@@ -190,6 +223,14 @@ export class ModelStorage implements ModelStore {
     save(cloneModelConfig(config));
   }
 
+  saveModels(configs: ModelConfig[]): void {
+    // Nested better-sqlite3 transactions use savepoints; an error rolls back the
+    // whole batch, including credential encryption and previous primary flags.
+    this.db.transaction(() => {
+      for (const config of configs) this.saveModel(config);
+    })();
+  }
+
   loadModel(id: string): ModelConfig | undefined {
     const row = this.db.prepare("SELECT * FROM models WHERE id = ?").get(id) as ModelRow | undefined;
     if (!row) return undefined;
@@ -202,6 +243,11 @@ export class ModelStorage implements ModelStore {
       provider: row.provider,
       name: row.name,
       modelId: row.model_id,
+      providerCategory: row.provider_category ?? (row.provider === "custom" ? "compatible_gateway" : "official"),
+      availableModels: JSON.parse(row.available_models || "[]"),
+      temperature: row.temperature,
+      enableThinking: row.enable_thinking === 1,
+      isPrimary: row.is_primary === 1,
       baseURL: row.base_url ?? credentials?.base_url ?? undefined,
       contextWindow: row.context_window || row.max_tokens,
       intelligenceScore: row.intelligence_score,

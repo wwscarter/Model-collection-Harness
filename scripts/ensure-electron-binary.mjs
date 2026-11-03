@@ -24,6 +24,32 @@ const executable = path.join(distRoot, platformPath);
 const pathFile = path.join(electronRoot, 'path.txt');
 const versionFile = path.join(distRoot, 'version');
 
+// node-pty's prebuilt spawn-helper can arrive without executable permission.
+// Repair it before development and packaging so posix_spawnp can launch a PTY.
+if (process.platform !== 'win32') {
+  let ptyRoot;
+  try { ptyRoot = path.dirname(require.resolve('node-pty/package.json')); }
+  catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
+  if (ptyRoot) {
+    const prebuilds = path.join(ptyRoot, 'prebuilds');
+    const directories = ['build/Release', 'build/Debug'];
+    if (fs.existsSync(prebuilds)) {
+      for (const entry of fs.readdirSync(prebuilds, { withFileTypes: true })) {
+        if (entry.isDirectory()) directories.push(path.join('prebuilds', entry.name));
+      }
+    }
+    for (const directory of directories) {
+      const helper = path.join(ptyRoot, directory, 'spawn-helper');
+      if (!fs.existsSync(helper)) continue;
+      const stat = fs.statSync(helper);
+      if (stat.isFile() && (stat.mode & 0o111) !== 0o111) {
+        fs.chmodSync(helper, (stat.mode & 0o777) | 0o111);
+        console.log(`[pty] restored executable permission: ${helper}`);
+      }
+    }
+  }
+}
+
 function installed() {
   const installedVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim().replace(/^v/, '') : '';
   return installedVersion === electronPackage.version

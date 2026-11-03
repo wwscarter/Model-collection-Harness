@@ -13,6 +13,7 @@ import { ModelRegistry } from '@core/models/ModelRegistry';
 import type { ModelConfig, ModelConfigInput } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
 import { createProvider, type ModelResponse } from '@core/providers/ModelProvider';
+import { fetchModelIdentifiers, testModelConnection, type ModelConnectionInput } from '@core/providers/ModelConnection';
 import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel } from '@core/routing/ModelCollaboration';
 import { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
 import { AuditLog } from '@core/audit/AuditLog';
@@ -140,16 +141,13 @@ function registerHandlers(): void {
     return publicModel(updated);
   });
   ipcMain.handle('model:delete', (_event, id: string) => ({ success: registry.deleteModel(id) }));
+  ipcMain.handle('model:set-primary', (_event, id: string) => registry.setPrimaryModel(id).map(publicModel));
+  ipcMain.handle('model:fetch-models', (_event, input: ModelConnectionInput) => fetchModelIdentifiers(input, registry));
+  ipcMain.handle('model:test-draft', (_event, input: ModelConnectionInput) => testModelConnection(input, registry));
   ipcMain.handle('model:test-connection', async (_event, id: string) => {
     const model = registry.getModel(id);
     if (!model) throw new Error(`Model not found: ${id}`);
-    const started = Date.now();
-    try {
-      const response = await createProvider(model).invoke('Reply with the single word: connected', { maxTokens: 10, temperature: 0 });
-      return { success: true, latency: Date.now() - started, response: response.content, model: publicModel(model) };
-    } catch (error) {
-      return { success: false, latency: Date.now() - started, error: error instanceof Error ? error.message : String(error), model: publicModel(model) };
-    }
+    return { ...await testModelConnection({ id, provider: model.provider }, registry), model: publicModel(model) };
   });
   ipcMain.handle('routing:status', () => router.getLocalModelStatus());
   ipcMain.handle('session:execute', async (_event, payload: { sessionId?: string; taskId?: string; assistantMessageId?: string; prompt: string; taskType?: string; complexity?: 'low' | 'medium' | 'high'; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number }) => {

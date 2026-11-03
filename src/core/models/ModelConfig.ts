@@ -1,5 +1,6 @@
 /** Providers currently supported by the built-in adapters. */
 export type ModelProvider = "openai" | "anthropic" | "google" | "deepseek" | "custom";
+export type ProviderCategory = "official" | "compatible_gateway" | "custom_proxy" | "local_ollama";
 
 /** Task capabilities used by the router when choosing a model. */
 export type ModelCapabilityType =
@@ -35,6 +36,13 @@ export interface ModelConfig {
   apiKey: string;
   baseURL?: string;
   modelId: string;
+  providerCategory?: ProviderCategory;
+  availableModels?: string[];
+  temperature?: number;
+  /** Only the DeepSeek adapter sends this preference to supporting endpoints. */
+  enableThinking?: boolean;
+  /** An explicit route preference; disabled primary models are ignored. */
+  isPrimary?: boolean;
   /** Maximum input context accepted by the model, in tokens. */
   contextWindow?: number;
   /** Overall intelligence estimate used for model comparison, from 0 to 100. */
@@ -116,6 +124,7 @@ export const PRESET_MODELS: ReadonlyArray<
 export function cloneModelConfig(config: ModelConfig): ModelConfig {
   return {
     ...config,
+    availableModels: config.availableModels ? [...config.availableModels] : undefined,
     costPer1kTokens: { ...config.costPer1kTokens },
     capabilities: config.capabilities.map((capability) => ({ ...capability })),
     rateLimit: { ...config.rateLimit },
@@ -128,6 +137,20 @@ export function validateModelConfig(config: ModelConfig): void {
   if (!config.id.trim()) throw new Error("Model id is required");
   if (!config.name.trim()) throw new Error("Model name is required");
   if (!config.modelId.trim()) throw new Error("Provider model id is required");
+  if (config.providerCategory !== undefined && !["official", "compatible_gateway", "custom_proxy", "local_ollama"].includes(config.providerCategory)) {
+    throw new Error("Unknown provider category");
+  }
+  if (config.temperature !== undefined && (!Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 1.5)) {
+    throw new Error("temperature must be between 0 and 1.5");
+  }
+  if (config.provider === "anthropic" && config.temperature !== undefined && config.temperature > 1) {
+    throw new Error("Anthropic temperature must be between 0 and 1");
+  }
+  if (config.availableModels !== undefined && (!Array.isArray(config.availableModels) || config.availableModels.some((model) => typeof model !== "string" || !model.trim()))) {
+    throw new Error("availableModels must contain non-empty model identifiers");
+  }
+  if (config.enableThinking !== undefined && typeof config.enableThinking !== "boolean") throw new Error("enableThinking must be a boolean");
+  if (config.isPrimary !== undefined && typeof config.isPrimary !== "boolean") throw new Error("isPrimary must be a boolean");
   if (!Number.isFinite(config.contextWindow ?? config.maxTokens) || (config.contextWindow ?? config.maxTokens) <= 0) {
     throw new Error("contextWindow must be a positive number");
   }

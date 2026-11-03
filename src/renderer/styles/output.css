@@ -1,0 +1,46 @@
+.output-content.rich-output { color: #334155; font-size: 13px; line-height: 1.85; }
+.response-prose { display: grid; gap: 12px; }
+.response-prose + .highlighted-code, .highlighted-code + .response-prose { margin-top: 16px; }
+.response-paragraph { overflow-wrap: anywhere; }
+.response-paragraph h3 { margin: 10px 0 5px; color: #1e293b; font-size: 14px; font-weight: 650; line-height: 1.65; }
+.response-paragraph h3:first-child { margin-top: 0; }
+.response-prose strong { color: #1e293b; font-weight: 600; }
+.response-prose code { padding: 2px 5px; border: 1px solid #e5eaf0; border-radius: 4px; color: #047857; background: #f4f7f9; font: .88em/1.6 var(--code-font); }
+.response-prose ul, .response-prose ol { display: grid; gap: 4px; margin: 0; padding-left: 22px; }
+.response-prose li::marker { color: #10b981; }
+.rich-output .highlighted-code { margin: 16px 0; border: 1px solid #e2e8f0; border-radius: 10px; background: #fbfcfe; box-shadow: 0 1px 2px rgb(15 23 42 / 2%); }
+.highlighted-code:first-child { margin-top: 0; }
+.highlighted-code:last-child { margin-bottom: 0; }
+.highlighted-code .code-block-header { min-height: 39px; padding: 7px 12px; background: #f3f6fa; }
+.code-heading, .code-header-actions { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.code-heading > strong { color: #475569; font: 600 11px/1.4 var(--code-font); }
+.code-file-icon { display: flex; align-items: center; color: #059669; }
+.code-line-count { padding-left: 8px; border-left: 1px solid #dbe3ec; color: #94a3b8; font: 10px/1.4 var(--code-font); white-space: nowrap; }
+.code-stream-label { display: inline-flex; align-items: center; gap: 5px; color: #059669; font-size: 10px; white-space: nowrap; }
+.code-stream-label .live-dot { width: 4px; height: 4px; flex-basis: 4px; }
+.highlighted-code .code-block-header button { min-height: 23px; padding: 2px 5px; color: #64748b; font-size: 10px; }
+.highlighted-code .code-block-header button:hover { color: #047857; background: #e7f6f0; }
+.code-viewport { max-height: 420px; overflow: auto; border-radius: 0 0 10px 10px; background: #fbfcfe; outline-offset: -2px; }
+.code-layout { display: grid; width: max-content; min-width: 100%; grid-template-columns: 42px minmax(0, 1fr); align-items: start; }
+.code-line-numbers { position: sticky; z-index: 1; left: 0; display: flex; flex-direction: column; align-items: flex-end; padding: 14px 11px 14px 0; border-right: 1px solid #edf0f5; color: #a1adbe; background: #f5f7fb; font: 11px/22px var(--code-font); user-select: none; }
+.rich-output .highlighted-code pre { min-height: 50px; overflow: visible; padding: 14px 16px; color: #334155; background: #fbfcfe; font: 12px/22px var(--code-font); tab-size: 2; white-space: pre; }
+.highlighted-code pre code { display: block; padding: 0; border: 0; color: inherit; background: none; font: inherit; white-space: inherit; }
+.highlighted-code .token.comment, .highlighted-code .token.prolog, .highlighted-code .token.doctype { color: #94a3b8; font-style: italic; }
+.highlighted-code .token.punctuation { color: #64748b; }
+.highlighted-code .token.keyword, .highlighted-code .token.atrule, .highlighted-code .token.tag { color: #8b5cc3; }
+.highlighted-code .token.string, .highlighted-code .token.attr-value, .highlighted-code .token.selector { color: #059669; }
+.highlighted-code .token.function, .highlighted-code .token.class-name { color: #2563b9; }
+.highlighted-code .token.boolean, .highlighted-code .token.number, .highlighted-code .token.constant, .highlighted-code .token.symbol { color: #c27832; }
+.highlighted-code .token.property, .highlighted-code .token.attr-name, .highlighted-code .token.parameter { color: #3c7397; }
+.highlighted-code .token.operator, .highlighted-code .token.entity, .highlighted-code .token.url { color: #b05d81; }
+.highlighted-code .token.inserted { color: #047857; background: #ecfdf5; }
+.highlighted-code .token.deleted { color: #be4250; background: #fff1f2; }
+.highlighted-code .token.important, .highlighted-code .token.bold { font-weight: 700; }
+.highlighted-code .token.italic { font-style: italic; }
+@media (max-width: 760px) {
+  .code-line-count, .code-stream-label { display: none; }
+  .highlighted-code .code-block-header { padding-right: 8px; padding-left: 10px; }
+  .code-layout { grid-template-columns: 34px minmax(0, 1fr); }
+  .code-line-numbers { padding-right: 8px; }
+  .highlighted-code pre { padding-right: 12px; padding-left: 12px; }
+}

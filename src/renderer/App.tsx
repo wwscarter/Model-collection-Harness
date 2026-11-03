@@ -6,38 +6,19 @@ import { Dashboard } from './components/Dashboard';
 import { TerminalPanel } from './components/TerminalPanel';
 import { ProjectPanel } from './components/ProjectPanel';
 import { NewProjectDialog } from './components/NewProjectDialog';
+import { AgentInputBar } from './components/AgentInputBar';
+import { WorkbenchWelcome } from './components/WorkbenchWelcome';
+import { OutputView } from './components/OutputView';
 import { ModelConfig, ProjectInfo, ProjectRecord, SessionMetrics } from './types';
 import { appendAssistantChunk, ChatAgentMessage, ChatMessage, preparePendingTurn, restoreMessages, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent } from './sessionMessages';
-import { ArrowUp, Check, ChevronDown, Copy, FileCode, Folder, GitBranch, Monitor, PanelLeft, PanelRight, Pencil, Plus, Sparkles, TriangleAlert, UsersRound, X } from 'lucide-react';
+import { ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
+import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
 
 interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; routeConfidence?: number; metrics?: SessionMetrics; rating?: number; updatedAt?: Date; }
 
 const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], createdAt: new Date() });
-
-function CodeBlock({ language, code }: { language: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => { void navigator.clipboard?.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); };
-  return <div className="code-block"><div className="code-block-header"><span><FileCode size={13} /><span className="mono">{language || 'text'}</span></span><button onClick={copy} title="复制代码">{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? '已复制' : '复制代码'}</button></div><pre><code>{code}</code></pre></div>;
-}
-
-function OutputView({ content, loading, emptyState }: { content: string; loading: boolean; emptyState: boolean }) {
-  if (loading && !content) return <div className="output-pending"><i className="live-dot pulse" />正在规划并执行任务…</div>;
-  if (!content && !emptyState) return null;
-  if (!content) return <div className="output-empty"><strong>输出会显示在这里</strong><span>描述你的任务，newAi 会自动选择模型并执行。</span></div>;
-  const parts = content.split(/```([\w-]*)\n?([\s\S]*?)```/g);
-  const nodes: React.ReactNode[] = [];
-  for (let index = 0; index < parts.length; index += 3) {
-    // Code blocks have their own margins; drop the blank lines that surround the fences.
-    let text = parts[index];
-    if (index > 0) text = text.replace(/^\n+/, '');
-    if (parts[index + 2] !== undefined) text = text.replace(/\n+$/, '');
-    if (text) nodes.push(<div key={`text-${index}`} className="markdown-text">{text.split('\n').map((line, lineIndex) => <React.Fragment key={lineIndex}>{line.startsWith('#') ? <strong>{line.replace(/^#+\s*/, '')}</strong> : line}{lineIndex < text.split('\n').length - 1 && <br />}</React.Fragment>)}</div>);
-    if (parts[index + 2] !== undefined) nodes.push(<CodeBlock key={`code-${index}`} language={parts[index + 1]} code={parts[index + 2]} />);
-  }
-  return <div className="output-content">{nodes}{loading && <span className="streaming-cursor" aria-label="正在生成">▍</span>}</div>;
-}
 
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([starterSession()]);
@@ -52,8 +33,8 @@ export default function App() {
   const [currentProject, setCurrentProject] = useState<ProjectInfo>();
   const [projectError, setProjectError] = useState<string | null>(null);
   const [projectReloadKey, setProjectReloadKey] = useState(0);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 760);
+  const [projectDrawerOpen, setProjectDrawerOpen] = useState(() => window.innerWidth >= 1180);
   const [isMacOS] = useState(() => navigator.userAgent.toLowerCase().includes('mac'));
   const [sessionError, setSessionError] = useState<{ sessionId: string; message: string } | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -64,6 +45,8 @@ export default function App() {
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const promptBeforeEditingRef = useRef('');
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const runTimingRef = useRef<SessionRunTiming | null>(null);
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0);
   const currentSession = sessions.find((session) => session.id === currentSessionId) || null;
   const currentModel = currentSession?.modelUsed ? models.find((model) => model.id === currentSession.modelUsed || model.name === currentSession.modelUsed) : undefined;
   // Only one task runs at a time; track which session owns it so other sessions don't show its spinner or error.
@@ -74,6 +57,36 @@ export default function App() {
   const latestAssistant = currentSession?.messages.slice().reverse().find((message) => message.role === 'assistant');
   const bannerModels = [modelLabel(latestAssistant?.planningModelId), modelLabel(latestAssistant?.modelUsed ?? currentSession?.modelUsed)].filter(Boolean).join(' + ') || '自动路由';
   const branchLabel = currentProject?.git?.branch ?? currentProject?.git?.head;
+  const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean): SessionMetrics | undefined => {
+    const timing = runTimingRef.current;
+    return completeSessionMetrics(metrics, timing?.sessionId === sessionId ? timing : undefined, confidence, hasOutput, performance.now());
+  };
+
+  useEffect(() => {
+    if (!runningSessionId) return;
+    const updateElapsed = () => {
+      const timing = runTimingRef.current;
+      if (timing?.sessionId === runningSessionId) setLiveElapsedMs(performance.now() - timing.startedAt);
+    };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [runningSessionId]);
+
+  useEffect(() => {
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setCollaborationOpen(false);
+      if (window.innerWidth < 1180) setProjectDrawerOpen(false);
+      if (window.innerWidth < 760) setSidebarOpen(false);
+    };
+    const closePicker = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest('.collaboration-picker, .collaboration-toggle')) setCollaborationOpen(false);
+    };
+    window.addEventListener('keydown', dismiss);
+    document.addEventListener('pointerdown', closePicker);
+    return () => { window.removeEventListener('keydown', dismiss); document.removeEventListener('pointerdown', closePicker); };
+  }, []);
 
   useEffect(() => {
     const content = workspaceContentRef.current;
@@ -96,11 +109,13 @@ export default function App() {
       }
     };
     loadModels();
+    if (!window.amd) setCurrentSessionId(sessions[0]?.id || null);
 
     void window.amd?.sessions.list().then((records) => {
       const restored = records.map((record) => ({
         id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record),
         modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, metrics: record.metrics as SessionMetrics | undefined,
+        routeConfidence: restoreRouteConfidence(record),
         rating: typeof record.rating === 'number' ? record.rating : undefined,
         createdAt: new Date(String(record.createdAt)), updatedAt: new Date(String(record.updatedAt || record.createdAt)),
       }));
@@ -111,6 +126,10 @@ export default function App() {
       const event = payload as { sessionId?: string; taskId?: string; delta?: string };
       const id = event.sessionId || event.taskId;
       if (!id || !event.delta) return;
+      const timing = runTimingRef.current;
+      // The full output may beat queued stream events over IPC; do not append it twice.
+      if (timing?.sessionId === id && timing.completedAt !== undefined) return;
+      if (timing?.sessionId === id && timing.ttftMs === undefined) timing.ttftMs = performance.now() - timing.startedAt;
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         const messages = appendAssistantChunk(session.messages, event.delta!);
@@ -121,6 +140,8 @@ export default function App() {
       const event = payload as { sessionId?: string; taskId?: string; modelId?: string; role?: 'routing' | 'planning' | 'execution'; planningModelId?: string; confidence?: number };
       const id = event.sessionId || event.taskId;
       if (!id || !event.modelId) return;
+      const timing = runTimingRef.current;
+      if (timing?.sessionId === id && event.confidence !== undefined) timing.routeConfidence = event.confidence;
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         if (event.role === 'routing') return { ...session, routeConfidence: event.confidence };
@@ -149,12 +170,11 @@ export default function App() {
       const id = event.sessionId || event.taskId;
       if (!id) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
-      const rawMetrics = event.metrics as SessionMetrics & { totalCost?: number; latency?: number } | undefined;
-      const metrics = rawMetrics && rawMetrics.totalCost !== undefined ? { inputTokens: rawMetrics.inputTokens, outputTokens: rawMetrics.outputTokens, latencyMs: rawMetrics.latency, cost: rawMetrics.totalCost } : event.metrics;
+      const metrics = withRunTiming(event.metrics, id, event.decision?.confidence, Boolean(event.output));
       setSessions((existing) => existing.map((session) => session.id === id ? {
         ...session,
         messages: updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId),
-        output: event.output ?? '', modelUsed, routeConfidence: event.decision?.confidence, metrics,
+        output: event.output ?? '', modelUsed, routeConfidence: metrics?.routeConfidence, metrics,
       } : session));
     });
     return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribe?.(); };
@@ -225,7 +245,9 @@ export default function App() {
     const messageId = crypto.randomUUID();
     const collaboratorModels = models.filter((model) => selectedAgentModelIds.includes(model.id) && model.enabled);
     const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined, collaboratorModels.map(({ id, name }) => ({ id, name })));
-    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, updatedAt: new Date() };
+    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, rating: undefined, updatedAt: new Date() };
+    runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
+    setLiveElapsedMs(0);
     promptBeforeEditingRef.current = '';
     setEditingMessageId(null);
     setSessionError(null);
@@ -246,19 +268,13 @@ export default function App() {
       });
       const raw = result as any;
       const modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed : raw.modelUsed?.id || raw.modelUsed?.name;
-      const rawMetrics = raw.metrics as SessionMetrics & { totalCost?: number; latency?: number } | undefined;
-      const metrics = rawMetrics && rawMetrics.totalCost !== undefined ? {
-        inputTokens: rawMetrics.inputTokens,
-        outputTokens: rawMetrics.outputTokens,
-        latencyMs: rawMetrics.latency,
-        cost: rawMetrics.totalCost
-      } : raw.metrics;
       const output = String(raw.output || '');
+      const metrics = withRunTiming(raw.metrics, currentSession.id, raw.decision?.confidence, Boolean(output));
       let completedMessages = updateLatestAssistantContent(messages, output, modelUsed, raw.planningModelId);
       for (const agent of (raw.agentMessages || []) as ChatAgentMessage[]) {
         completedMessages = updateAssistantAgent(completedMessages, `${messageId}-assistant`, { agentId: agent.id, status: agent.status, content: agent.content, error: agent.error });
       }
-      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: raw.decision?.confidence, metrics, updatedAt: new Date() };
+      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: metrics?.routeConfidence, metrics, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
       await window.amd.sessions.save(completedSession);
     } catch (cause) {
@@ -301,6 +317,7 @@ export default function App() {
 
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen ? 'drawer-open' : ''} ${isMacOS ? 'mac-shell' : ''}`}>
     <Sidebar sessions={sessions} currentSessionId={currentSessionId} runningSessionId={runningSessionId} projects={projectList} activeProjectId={currentProject?.id} projectError={projectError} isMacOS={isMacOS} searchInputRef={searchInputRef} onNewSession={newSession} onSelectSession={selectSession} onDeleteSession={deleteSession} onSettings={() => setShowSettings(true)} onMonitoring={() => setShowDashboard(true)} onTerminal={() => setShowTerminal(true)} onNewProject={() => setShowNewProject(true)} onOpenProject={(id) => void openProject(id)} onRemoveProject={(id) => void removeProject(id)} />
+    {sidebarOpen && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
     <main className="workspace">
       <header className="workspace-header">
         <div className="workspace-title"><div className="eyebrow">Agent Workspace</div><h1><span className="title-text">{currentSession?.title || '开始一个新任务'}</span>{currentProject && <span className="header-pill" title={currentProject.root}><i className="live-dot pulse" />{currentProject.name}{branchLabel ? ` · ${branchLabel} 分支` : ''} · 工作区就绪</span>}</h1></div>
@@ -311,12 +328,12 @@ export default function App() {
           <button className="icon-button" title={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-label={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-pressed={projectDrawerOpen} onClick={() => setProjectDrawerOpen((open) => !open)}><PanelRight size={16} /></button>
         </div>
       </header>
-      <div ref={workspaceContentRef} className="workspace-content">
+      <div ref={workspaceContentRef} className={`workspace-content ${currentSession && !currentSession.messages.length ? 'empty-workspace' : ''}`}>
         {currentSession ? <section className="chat-thread" aria-label="会话消息">
-          <div className="session-banner">
+          {!!currentSession.messages.length && <div className="session-banner">
             <div className="banner-left"><span className="brand-tile"><Sparkles size={15} /></span><strong>newAi</strong><span className="model-chip mono" title="最近一次回复使用的模型">{bannerModels}</span></div>
-            <span className="status-pill"><i className="live-dot pulse" />{currentProject ? `已关联项目上下文 · ${currentProject.name}` : '自动路由就绪'}</span>
-          </div>
+            <span className="status-pill"><i className={isCurrentRunning ? 'live-dot pulse' : 'live-dot'} />{currentProject ? '项目上下文已关联' : '自动路由就绪'}</span>
+          </div>}
           {currentSession.messages.length ? currentSession.messages.map((message, index) => {
             const live = isCurrentRunning && index === currentSession.messages.length - 1;
             if (message.role === 'user') return <div key={message.id} className="user-message-row"><div className="user-message-bubble"><div className="user-message-text">{message.content}</div><div className="user-message-footer"><button className="message-icon-button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button><button className="message-icon-button" title="编辑消息" aria-label="编辑消息" disabled={isLoading} onClick={() => startMessageEdit(message)}><Pencil size={14} strokeWidth={1.8} /></button></div></div></div>;
@@ -332,32 +349,24 @@ export default function App() {
                 {error && index === currentSession.messages.length - 1 && <div className="error-banner">{error}</div>}
               </article>
             </div>;
-          }) : <div className="empty-thread"><OutputView content="" loading={false} emptyState /></div>}
+          }) : <WorkbenchWelcome onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => setShowNewProject(true)} />}
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
-      {currentSession && <section className="composer" aria-label="任务输入">
-        <div className="composer-tabs">
-          <button className={`composer-tab ${currentProject ? 'accent' : ''}`} title={currentProject ? currentProject.root : '绑定本地项目'} onClick={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)}><Folder size={15} /><span>{currentProject?.name ?? '未绑定项目'}</span></button>
-          <span className="composer-tab static" title="任务在本机执行"><Monitor size={15} /><span>本地</span></span>
-          {branchLabel && <span className="composer-tab static" title="当前 Git 分支"><GitBranch size={15} /><span>{branchLabel}</span></span>}
-        </div>
-        <div className="prompt-card">
-          {editingMessageId && <div className="prompt-editing-bar"><span>正在编辑消息 · 重新发送将替换此轮及之后内容</span><button className="message-icon-button" title="取消编辑" aria-label="取消编辑" onClick={cancelMessageEdit}><X size={16} strokeWidth={1.8} /></button></div>}
-          <div className="collaboration-toolbar"><button className={`collaboration-toggle ${selectedAgentModelIds.length ? 'active' : ''}`} aria-expanded={collaborationOpen} onClick={() => { setCollaborationOpen((open) => !open); setCollaborationNotice(null); }}><UsersRound size={15} /><span>{selectedAgentModelIds.length ? `子智能体 · ${selectedAgentModelIds.length}` : '添加子智能体'}</span><ChevronDown className={collaborationOpen ? 'open' : ''} size={14} /></button><button className="example-task-button" onClick={fillCollaborationExample}>填入协作测试任务</button></div>
-          {collaborationNotice && <div className="collaboration-notice">{collaborationNotice}</div>}
-          {collaborationOpen && <div className="collaboration-picker"><div className="collaboration-picker-heading"><strong>并行分析模型</strong><span>选择 2–4 款已启用模型</span></div>{models.filter((model) => model.enabled).map((model) => <label key={model.id} className="collaboration-option"><input type="checkbox" checked={selectedAgentModelIds.includes(model.id)} disabled={!selectedAgentModelIds.includes(model.id) && selectedAgentModelIds.length >= 4} onChange={(event) => { setCollaborationNotice(null); setSelectedAgentModelIds((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id)); }} /><span>{model.name}</span><small>{model.provider}</small></label>)}{models.every((model) => !model.enabled) && <div className="collaboration-empty">没有已启用模型</div>}{selectedAgentModelIds.length === 1 && <div className="collaboration-notice">再选择一款模型以启用并行分析。</div>}</div>}
-          <textarea ref={promptInputRef} value={currentSession.prompt} onChange={(event) => updateCurrent({ prompt: event.target.value })} onKeyDown={handleKeyDown} placeholder={currentSession.messages.length ? '输入追加指令或反馈，按 Enter 发送，Shift + Enter 换行…' : '描述你想要完成的任务，按 Enter 发送，Shift + Enter 换行…'} aria-label={editingMessageId ? '编辑消息' : '描述任务'} />
-          <footer>
-            <div className="dock-left"><button className="attach-button" title="打开项目文件" aria-label="打开项目文件" onClick={() => setProjectDrawerOpen(true)}><Plus size={18} /></button><span className="access-badge" title="终端与命令执行可以访问本机文件"><TriangleAlert size={12} />完全访问</span></div>
-            <div className="dock-right"><button className="model-selector" title="管理已配置模型" onClick={() => setShowSettings(true)}><span>{currentModel?.name || '自动路由'}</span><ChevronDown size={14} /></button><button className="send-button" title={isCurrentRunning ? '正在执行' : isLoading ? '另一个会话正在执行' : editingMessageId ? '重新生成回复' : '执行任务'} aria-label={isCurrentRunning ? '正在执行' : editingMessageId ? '重新生成回复' : '执行任务'} disabled={isLoading || !currentSession.prompt.trim()} onClick={() => void execute()}>{isCurrentRunning ? <span className="send-spinner" /> : editingMessageId ? <Check size={17} strokeWidth={2.2} /> : <ArrowUp size={17} strokeWidth={2.4} />}</button></div>
-          </footer>
-        </div>
-      </section>}
+      {currentSession && <AgentInputBar
+        project={currentProject} value={currentSession.prompt} inputRef={promptInputRef}
+        hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
+        onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()}
+        onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}
+        notice={collaborationNotice}
+        collaborationControl={<button className={`collaboration-toggle ${selectedAgentModelIds.length ? 'active' : ''}`} aria-label="选择协作模型" aria-expanded={collaborationOpen} aria-controls="collaboration-models" onClick={() => { setCollaborationOpen((open) => !open); setCollaborationNotice(null); }}><UsersRound size={14} /><span>{selectedAgentModelIds.length ? `协作 · ${selectedAgentModelIds.length}` : '协作'}</span><ChevronDown className={collaborationOpen ? 'open' : ''} size={12} /></button>}
+        collaborationPicker={collaborationOpen && <div className="collaboration-picker" id="collaboration-models" role="group" aria-label="并行分析模型"><div className="collaboration-picker-heading"><strong>并行分析模型</strong><span>选择 2–4 款模型</span></div>{models.filter((model) => model.enabled).map((model) => <label key={model.id} className="collaboration-option"><input type="checkbox" checked={selectedAgentModelIds.includes(model.id)} disabled={!selectedAgentModelIds.includes(model.id) && selectedAgentModelIds.length >= 4} onChange={(event) => { setCollaborationNotice(null); setSelectedAgentModelIds((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id)); }} /><span>{model.name}</span><small>{model.provider}</small></label>)}{models.every((model) => !model.enabled) && <div className="collaboration-empty">在模型设置中启用模型，即可开始协作。</div>}{selectedAgentModelIds.length === 1 && <div className="collaboration-notice">再选择一款模型以启用并行分析。</div>}<div className="collaboration-picker-actions"><button onClick={() => { setCollaborationOpen(false); setShowSettings(true); }}>管理模型</button><button onClick={fillCollaborationExample}>填入协作示例</button></div></div>}
+      />}
     </main>
+    {projectDrawerOpen && <button className="panel-backdrop inspector-backdrop" aria-label="关闭项目面板" onClick={() => setProjectDrawerOpen(false)} />}
     {projectDrawerOpen && <aside className="right-drawer" aria-label="项目与运行信息">
       <div className="drawer-header"><div><div className="eyebrow">Project Workspace</div><h2>项目文件</h2></div><button className="icon-button" title="关闭右侧面板" aria-label="关闭右侧面板" onClick={() => setProjectDrawerOpen(false)}><X size={16} /></button></div>
       <div className="drawer-scroll"><ProjectPanel project={currentProject} reloadKey={projectReloadKey} onChangeDirectory={() => setShowNewProject(true)} onClear={() => void clearProject()} /></div>
-      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? undefined : currentSession?.metrics} running={isCurrentRunning} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
+      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
     {showDashboard && <Dashboard onClose={() => setShowDashboard(false)} />}

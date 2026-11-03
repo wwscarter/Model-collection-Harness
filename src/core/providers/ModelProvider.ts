@@ -10,9 +10,15 @@ const jsonHeaders = { 'content-type': 'application/json' };
 class OpenAIProvider implements ModelProvider {
   readonly modelId: string;
   constructor(private readonly model: ModelConfig) { this.modelId = model.id; }
+  private thinkingParameters() {
+    // The DeepSeek thinking switch is not part of the generic compatible protocol.
+    return this.model.provider === 'deepseek' && this.model.enableThinking !== undefined
+      ? { thinking: { type: this.model.enableThinking ? 'enabled' : 'disabled' } }
+      : {};
+  }
   async invoke(prompt: string, config: InvokeConfig = {}): Promise<ModelResponse> {
     const headers = { ...jsonHeaders, ...(this.model.apiKey ? { authorization: `Bearer ${this.model.apiKey}` } : {}) };
-    const response = await fetch(resolveOpenAIEndpoint(this.model.baseURL), { method: 'POST', headers, body: JSON.stringify({ model: this.model.modelId, messages: [{ role: 'user', content: prompt }], temperature: config.temperature ?? 0.7, max_tokens: config.maxTokens ?? 2000 }), signal: config.signal });
+    const response = await fetch(resolveOpenAIEndpoint(this.model.baseURL ?? (this.model.provider === 'deepseek' ? 'https://api.deepseek.com/v1' : undefined)), { method: 'POST', headers, body: JSON.stringify({ model: this.model.modelId, messages: [{ role: 'user', content: prompt }], temperature: config.temperature ?? this.model.temperature ?? 0.7, max_tokens: config.maxTokens ?? 2000, ...this.thinkingParameters() }), signal: config.signal });
     if (!response.ok) throw new Error(`OpenAI request failed (${response.status})`);
     const data = await response.json() as any;
     const content = data.choices?.[0]?.message?.content ?? '';
@@ -20,7 +26,7 @@ class OpenAIProvider implements ModelProvider {
   }
   async *invokeStream(prompt: string, config: InvokeConfig = {}): AsyncIterable<ModelStreamChunk> {
     const headers = { ...jsonHeaders, ...(this.model.apiKey ? { authorization: `Bearer ${this.model.apiKey}` } : {}) };
-    const response = await fetch(resolveOpenAIEndpoint(this.model.baseURL), { method: 'POST', headers, body: JSON.stringify({ model: this.model.modelId, messages: [{ role: 'user', content: prompt }], temperature: config.temperature ?? 0.7, max_tokens: config.maxTokens ?? 2000, stream: true, stream_options: { include_usage: true } }), signal: config.signal });
+    const response = await fetch(resolveOpenAIEndpoint(this.model.baseURL ?? (this.model.provider === 'deepseek' ? 'https://api.deepseek.com/v1' : undefined)), { method: 'POST', headers, body: JSON.stringify({ model: this.model.modelId, messages: [{ role: 'user', content: prompt }], temperature: config.temperature ?? this.model.temperature ?? 0.7, max_tokens: config.maxTokens ?? 2000, stream: true, stream_options: { include_usage: true }, ...this.thinkingParameters() }), signal: config.signal });
     if (!response.ok) throw new Error(`OpenAI request failed (${response.status})`);
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
@@ -41,14 +47,14 @@ class AnthropicProvider implements ModelProvider {
   readonly modelId: string;
   constructor(private readonly model: ModelConfig) { this.modelId = model.id; }
   async invoke(prompt: string, config: InvokeConfig = {}): Promise<ModelResponse> {
-    const response = await fetch(this.model.baseURL ?? 'https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...jsonHeaders, 'x-api-key': this.model.apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: this.model.modelId, max_tokens: config.maxTokens ?? 2000, temperature: config.temperature ?? 0.7, messages: [{ role: 'user', content: prompt }] }), signal: config.signal });
+    const response = await fetch(resolveAnthropicEndpoint(this.model.baseURL), { method: 'POST', headers: { ...jsonHeaders, 'x-api-key': this.model.apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: this.model.modelId, max_tokens: config.maxTokens ?? 2000, temperature: config.temperature ?? this.model.temperature ?? 0.7, messages: [{ role: 'user', content: prompt }] }), signal: config.signal });
     if (!response.ok) throw new Error(`Anthropic request failed (${response.status})`);
     const data = await response.json() as any;
     const content = data.content?.map((part: any) => part.text ?? '').join('') ?? '';
     return { content, inputTokens: data.usage?.input_tokens ?? estimateTokens(prompt), outputTokens: data.usage?.output_tokens ?? estimateTokens(content), modelId: this.model.id };
   }
   async *invokeStream(prompt: string, config: InvokeConfig = {}): AsyncIterable<ModelStreamChunk> {
-    const response = await fetch(this.model.baseURL ?? 'https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...jsonHeaders, 'x-api-key': this.model.apiKey, 'anthropic-version': '2023-06-01', accept: 'text/event-stream' }, body: JSON.stringify({ model: this.model.modelId, max_tokens: config.maxTokens ?? 2000, temperature: config.temperature ?? 0.7, messages: [{ role: 'user', content: prompt }], stream: true }), signal: config.signal });
+    const response = await fetch(resolveAnthropicEndpoint(this.model.baseURL), { method: 'POST', headers: { ...jsonHeaders, 'x-api-key': this.model.apiKey, 'anthropic-version': '2023-06-01', accept: 'text/event-stream' }, body: JSON.stringify({ model: this.model.modelId, max_tokens: config.maxTokens ?? 2000, temperature: config.temperature ?? this.model.temperature ?? 0.7, messages: [{ role: 'user', content: prompt }], stream: true }), signal: config.signal });
     if (!response.ok) throw new Error(`Anthropic request failed (${response.status})`);
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
@@ -70,17 +76,16 @@ class GoogleProvider implements ModelProvider {
   readonly modelId: string;
   constructor(private readonly model: ModelConfig) { this.modelId = model.id; }
   async invoke(prompt: string, config: InvokeConfig = {}): Promise<ModelResponse> {
-    const base = this.model.baseURL ?? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model.modelId)}:generateContent`;
-    const response = await fetch(`${base}?key=${encodeURIComponent(this.model.apiKey)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: config.temperature ?? 0.7, maxOutputTokens: config.maxTokens ?? 2000 } }), signal: config.signal });
+    const endpoint = resolveGoogleEndpoint(this.model.baseURL, this.model.modelId, this.model.apiKey);
+    const response = await fetch(endpoint, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: config.temperature ?? this.model.temperature ?? 0.7, maxOutputTokens: config.maxTokens ?? 2000 } }), signal: config.signal });
     if (!response.ok) throw new Error(`Google request failed (${response.status})`);
     const data = await response.json() as any;
     const content = data.candidates?.[0]?.content?.parts?.map((part: any) => part.text ?? '').join('') ?? '';
     return { content, inputTokens: data.usageMetadata?.promptTokenCount ?? estimateTokens(prompt), outputTokens: data.usageMetadata?.candidatesTokenCount ?? estimateTokens(content), modelId: this.model.id };
   }
   async *invokeStream(prompt: string, config: InvokeConfig = {}): AsyncIterable<ModelStreamChunk> {
-    const configured = this.model.baseURL ?? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model.modelId)}:streamGenerateContent`;
-    const base = configured.includes(':generateContent') && !configured.includes(':streamGenerateContent') ? configured.replace(':generateContent', ':streamGenerateContent') : configured;
-    const response = await fetch(`${base}?alt=sse&key=${encodeURIComponent(this.model.apiKey)}`, { method: 'POST', headers: { ...jsonHeaders, accept: 'text/event-stream' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: config.temperature ?? 0.7, maxOutputTokens: config.maxTokens ?? 2000 } }), signal: config.signal });
+    const endpoint = resolveGoogleEndpoint(this.model.baseURL, this.model.modelId, this.model.apiKey, true);
+    const response = await fetch(endpoint, { method: 'POST', headers: { ...jsonHeaders, accept: 'text/event-stream' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: config.temperature ?? this.model.temperature ?? 0.7, maxOutputTokens: config.maxTokens ?? 2000 } }), signal: config.signal });
     if (!response.ok) throw new Error(`Google request failed (${response.status})`);
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
@@ -129,6 +134,23 @@ export function resolveOpenAIEndpoint(baseURL?: string): string {
     if (queryIndex >= 0) return `${raw.slice(0, queryIndex)}/chat/completions${raw.slice(queryIndex)}`;
     return `${raw}/chat/completions`;
   }
+}
+
+export function resolveAnthropicEndpoint(baseURL?: string): string {
+  const url = new URL(baseURL?.trim() || 'https://api.anthropic.com/v1');
+  const pathname = url.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith('/messages')) url.pathname = `${pathname}/messages`;
+  return url.toString();
+}
+
+export function resolveGoogleEndpoint(baseURL: string | undefined, modelId: string, apiKey: string, stream = false): string {
+  const url = new URL(baseURL?.trim() || 'https://generativelanguage.googleapis.com/v1beta');
+  const pathname = url.pathname.replace(/\/+$/, '');
+  const modelPath = pathname.includes('/models/') ? pathname.slice(0, pathname.indexOf('/models/')) : pathname.endsWith('/models') ? pathname.slice(0, -7) : pathname;
+  url.pathname = `${modelPath}/models/${encodeURIComponent(modelId.replace(/^models\//, ''))}:${stream ? 'streamGenerateContent' : 'generateContent'}`;
+  url.searchParams.set('key', apiKey);
+  if (stream) url.searchParams.set('alt', 'sse'); else url.searchParams.delete('alt');
+  return url.toString();
 }
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }

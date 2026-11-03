@@ -57,7 +57,7 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
               return <div key={project.id} className={`project-item ${active ? 'active' : ''}`}>
                 <button className="item-main" title={project.root} aria-current={active ? 'true' : undefined} onClick={() => onOpenProject(project.id)}>
                   <span className="project-icon"><Folder size={12} /></span>
-                  <span className="item-copy"><span className="item-title">{project.name}{active && <i className="live-dot" aria-label="当前项目" />}</span><span className="item-meta mono">{project.displayRoot}</span></span>
+                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={project.name}>{project.name}</span>{active && <i className="live-dot" aria-label="当前项目" />}</span><span className="item-meta mono">{project.displayRoot}</span></span>
                 </button>
                 <button className="item-remove" title="从列表移除（不会删除文件）" aria-label={`从列表移除 ${project.name}`} onClick={() => onRemoveProject(project.id)}><X size={13} /></button>
               </div>;
@@ -75,7 +75,7 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
               return <div key={session.id} className={`session-item ${active ? 'active' : ''}`}>
                 <button className="item-main" aria-current={active ? 'true' : undefined} onClick={() => onSelectSession(session.id)}>
                   <span className={`session-ring ${active || running ? 'on' : ''}`} />
-                  <span className="item-copy"><span className="item-title">{session.title || '未命名会话'}</span><span className="item-meta mono">{relativeTime(session.updatedAt ?? session.createdAt)}</span></span>
+                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={session.title || '未命名会话'}>{session.title || '未命名会话'}</span></span><span className="item-meta mono">{relativeTime(session.updatedAt ?? session.createdAt)}</span></span>
                   {running && <span className="status-chip">进行中</span>}
                 </button>
                 <button className="item-remove" title="删除会话" aria-label="删除会话" onClick={() => onDeleteSession(session.id)}><X size={13} /></button>

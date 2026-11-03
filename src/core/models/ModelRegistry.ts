@@ -50,6 +50,11 @@ function toConfig(input: ModelConfigInput): ModelConfig {
     apiKey: raw.apiKey || "",
     baseURL: raw.baseURL,
     modelId: raw.modelId,
+    providerCategory: raw.providerCategory ?? (raw.provider === "custom" ? "compatible_gateway" : "official"),
+    availableModels: raw.availableModels ?? [raw.modelId],
+    temperature: raw.temperature ?? 0.6,
+    enableThinking: raw.enableThinking ?? true,
+    isPrimary: raw.isPrimary ?? false,
     contextWindow: raw.contextWindow ?? raw.maxTokens ?? 4096,
     intelligenceScore:
       raw.intelligenceScore ?? raw.capabilities?.find((capability) => capability.type === "reasoning")?.score ?? 70,
@@ -114,8 +119,7 @@ export class ModelRegistry {
 
   registerModel(input: ModelConfig | ModelConfigInput, options: { persist?: boolean } = {}): ModelConfig {
     const config = toConfig(input as ModelConfigInput);
-    this.models.set(config.id, cloneModelConfig(config));
-    if (options.persist ?? this.persist) this.storage?.saveModel(config);
+    this.commitModel(config, options.persist ?? this.persist);
     return cloneModelConfig(config);
   }
 
@@ -142,15 +146,33 @@ export class ModelRegistry {
       createdAt: existing.createdAt,
       updatedAt: new Date(),
     });
-    this.models.set(id, cloneModelConfig(updated));
-    if (this.persist) this.storage?.saveModel(updated);
+    this.commitModel(updated, this.persist);
     return cloneModelConfig(updated);
   }
 
+  private commitModel(config: ModelConfig, persist: boolean): void {
+    const changed: ModelConfig[] = config.isPrimary
+      ? [...this.models.values()].filter((model) => model.id !== config.id && model.isPrimary).map((model) => ({ ...model, isPrimary: false, updatedAt: new Date() }))
+      : [];
+    changed.push(config);
+    // The registry must remain unchanged when persistence rejects a mutation.
+    if (persist && this.storage) {
+      if (this.storage.saveModels) this.storage.saveModels(changed.map(cloneModelConfig));
+      else for (const model of changed) this.storage.saveModel(cloneModelConfig(model));
+    }
+    for (const model of changed) this.models.set(model.id, cloneModelConfig(model));
+  }
+
+  setPrimaryModel(id: string): ModelConfig[] {
+    if (!this.models.has(id)) throw new Error(`Model not found: ${id}`);
+    this.updateModel(id, { isPrimary: true, enabled: true });
+    return this.getAllModels();
+  }
+
   deleteModel(id: string): boolean {
-    const deleted = this.models.delete(id);
-    if (deleted && this.persist) this.storage?.deleteModel(id);
-    return deleted;
+    if (!this.models.has(id)) return false;
+    if (this.persist) this.storage?.deleteModel(id);
+    return this.models.delete(id);
   }
 
   async getModelForCapability(capability: ModelCapabilityType): Promise<ModelConfig | undefined> {

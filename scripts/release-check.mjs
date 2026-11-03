@@ -51,3 +51,52 @@ if (nativeSmoke.error || nativeSmoke.status !== 0) {
 }
 
 console.log(`[release] verified ${required.length} build artifacts and better-sqlite3 query under ${nativeSmoke.stdout.trim()}`);
+
+let ptyEntry;
+try { ptyEntry = require.resolve('node-pty'); }
+catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }
+if (ptyEntry) {
+  // Loading node-pty alone does not exercise its separately spawned helper.
+  // Use Electron and a real short-lived shell to catch helper/packaging failures.
+  const ptySmokeScript = `
+    const pty = require(${JSON.stringify(ptyEntry)});
+    const windows = process.platform === 'win32';
+    const terminal = pty.spawn(windows ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh',
+      windows ? ['/d', '/q', '/c', 'echo NEWAI_PTY_READY'] : ['-c', 'printf NEWAI_PTY_READY'],
+      { name: 'xterm-256color', cols: 80, rows: 24, cwd: ${JSON.stringify(root)}, env: process.env });
+    let output = '';
+    const timeout = setTimeout(() => {
+      terminal.kill();
+      console.error('PTY shell timed out');
+      process.exitCode = 1;
+    }, 5_000);
+    terminal.onData((data) => { output += data; });
+    terminal.onExit(({ exitCode }) => {
+      clearTimeout(timeout);
+      if (exitCode !== 0 || !output.includes('NEWAI_PTY_READY')) {
+        console.error('PTY shell failed to return its expected output (exit ' + exitCode + ')');
+        process.exitCode = 1;
+      } else {
+        console.log('node-pty shell started and returned output');
+      }
+    });
+  `;
+  const ptySmoke = spawnSync(executable, ['-e', ptySmokeScript], {
+    cwd: root,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    encoding: 'utf8',
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (ptySmoke.error || ptySmoke.status !== 0) {
+    console.error('[release] node-pty could not start a terminal; run npm run doctor:electron to restore helper permissions before packaging');
+    if (ptySmoke.error) console.error(`[release] PTY verification failed: ${ptySmoke.error.message}`);
+    if (ptySmoke.signal) console.error(`[release] PTY verification was terminated by ${ptySmoke.signal}`);
+    if (ptySmoke.stdout?.trim()) console.error(ptySmoke.stdout.trim());
+    if (ptySmoke.stderr?.trim()) console.error(ptySmoke.stderr.trim());
+    process.exit(1);
+  }
+  console.log(`[release] verified ${ptySmoke.stdout.trim()} under Electron ${electronPackage.version}`);
+} else {
+  console.log('[release] optional node-pty is absent; terminals will use the pipe adapter');
+}

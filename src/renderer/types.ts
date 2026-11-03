@@ -6,6 +6,11 @@ export interface ModelConfig {
   provider: string;
   baseURL?: string;
   modelId: string;
+  providerCategory?: 'official' | 'compatible_gateway' | 'custom_proxy' | 'local_ollama';
+  availableModels?: string[];
+  temperature?: number;
+  enableThinking?: boolean;
+  isPrimary?: boolean;
   contextWindow?: number;
   intelligenceScore?: number;
   apiKey?: string;
@@ -24,6 +29,8 @@ export interface SessionMetrics {
   inputTokens?: number;
   outputTokens?: number;
   latencyMs?: number;
+  ttftMs?: number;
+  routeConfidence?: number;
   cost?: number;
 }
 
@@ -122,6 +129,9 @@ export interface AmdApi {
     register: (config: Omit<ModelConfig, 'id'>) => Promise<{ success: boolean; model: ModelConfig }>;
     update: (id: string, updates: Partial<ModelConfig>) => Promise<{ success: boolean; model: ModelConfig }>;
     delete: (id: string) => Promise<{ success: boolean }>;
+    setPrimary: (id: string) => Promise<ModelConfig[]>;
+    fetchModels: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string }) => Promise<{ models: string[] }>;
+    testConnection: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string; modelId: string; temperature?: number; enableThinking?: boolean; contextWindow?: number }) => Promise<{ success: boolean; latency?: number; error?: string; demo?: boolean }>;
   };
   sessions: {
     list: () => Promise<Array<Record<string, unknown>>>;

@@ -47,6 +47,9 @@ const amdApi = {
     register: (config: unknown) => ipcRenderer.invoke('model:register', config),
     update: (id: string, updates: unknown) => ipcRenderer.invoke('model:update', id, updates),
     delete: (id: string) => ipcRenderer.invoke('model:delete', id),
+    setPrimary: (id: string) => ipcRenderer.invoke('model:set-primary', id),
+    fetchModels: (input: unknown) => ipcRenderer.invoke('model:fetch-models', input),
+    testConnection: (input: unknown) => ipcRenderer.invoke('model:test-draft', input),
   },
   sessions: {
     list: () => ipcRenderer.invoke('session:list'),

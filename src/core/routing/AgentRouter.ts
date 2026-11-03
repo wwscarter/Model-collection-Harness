@@ -31,7 +31,7 @@ const capabilityForTask: Record<TaskType, ModelCapabilityType> = {
   code: 'code', reasoning: 'reasoning', analysis: 'reasoning', review: 'code', creative: 'creative', general: 'reasoning'
 };
 
-/** Deterministic first-phase router. It prefers capability score, then priority, then cost. */
+/** Honor an explicit primary model; otherwise prefer capability, priority, and cost. */
 export class AgentRouter {
   constructor(
     private readonly registry: RoutingRegistry = modelRegistry,
@@ -42,13 +42,15 @@ export class AgentRouter {
   getLocalModelStatus(): ReturnType<LocalRoutingModel['getStatus']> { return this.localModel.getStatus(); }
 
   async routeTask(context: TaskContext): Promise<RoutingDecision> {
-    const enabled = this.registry.getEnabledModels();
+    const enabled = this.registry.getEnabledModels().filter((model) => model.enabled);
     if (!enabled.length) throw new Error('No enabled models are configured');
     const localClassification = await this.localModel.classify(context);
     const taskType = context.type === 'general' ? localClassification.taskType : context.type;
     const complexity = context.complexity ?? localClassification.complexity;
     const capability = capabilityForTask[taskType] ?? 'reasoning';
     const ranked = [...enabled].sort((a, b) => {
+      const primaryPreference = Number(Boolean(b.isPrimary)) - Number(Boolean(a.isPrimary));
+      if (primaryPreference) return primaryPreference;
       const score = (m: ModelConfig) => m.capabilities.find(c => c.type === capability)?.score ?? 0;
       const complexityBonus = (m: ModelConfig) => {
         const base = complexity === 'high'
@@ -66,7 +68,9 @@ export class AgentRouter {
       modelId: selected.id,
       taskType,
       complexity,
-      reason: `Capability match for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`,
+      reason: selected.isPrimary
+        ? `Explicit primary model for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`
+        : `Capability match for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`,
       confidence: Math.min(0.98, 0.62 + (selected.capabilities.find(c => c.type === capability)?.score ?? 0) / 300),
       alternativeModels: ranked.slice(1, 3).map(model => model.id),
       estimatedCost,

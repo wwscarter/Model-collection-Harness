@@ -1,7 +1,18 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+
+@source "../";
+
 /* newAi workbench. Tokens follow DESIGN_SYSTEM.md: emerald primary, slate neutrals, 1px hairline borders. */
 :root {
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   color: #0F172A; background: #F8FAFC; font-synthesis: none; -webkit-font-smoothing: antialiased;
   --canvas: #F8FAFC; --surface: #FFFFFF; --sidebar: #FBFCFD; --surface-low: #F1F5F9; --surface-soft: #F8FAFC; --hover: #F1F5F9; --selected: #E2E8F0;
   --line: #E2E8F0; --line-weak: #F1F5F9; --text: #0F172A; --text-secondary: #475569; --text-muted: #64748B; --text-faint: #94A3B8;
@@ -11,7 +22,7 @@
   --shadow-float: 0 10px 30px -4px rgba(15, 23, 42, .07), 0 4px 12px -2px rgba(15, 23, 42, .04);
   --shadow-modal: 0 24px 60px -12px rgba(15, 23, 42, .28);
   --focus-ring: 0 0 0 3px rgba(16, 185, 129, .22);
-  --code-font: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  --code-font: "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace;
 }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 720px; min-height: 100%; margin: 0; }
