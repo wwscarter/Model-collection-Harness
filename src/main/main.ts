@@ -408,6 +408,8 @@ function registerHandlers(): void {
   });
   handle('memory:remove', (_event, id: unknown) => typeof id === 'string' ? { success: memoryStore.remove(id) } : { success: false });
   handle('memory:approve', (_event, id: unknown) => typeof id === 'string' ? { success: memoryStore.approve(id) } : { success: false });
+  handle('memory:approve-many', (_event, ids: unknown) => ({ count: Array.isArray(ids) ? memoryStore.approveMany(ids) : 0 }));
+  handle('memory:remove-many', (_event, ids: unknown) => ({ count: Array.isArray(ids) ? memoryStore.removeMany(ids) : 0 }));
   handle('memory:export', () => memoryStore.exportAll());
   handle('memory:clear', () => ({ removed: memoryStore.clear() }));
   handle('memory:settings', () => ({ autoExtract: memoryStore.getAutoExtract() }));

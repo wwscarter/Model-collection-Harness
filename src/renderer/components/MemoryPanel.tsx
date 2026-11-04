@@ -13,6 +13,7 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
   const [scope, setScope] = useState<MemoryScope>('global');
   const [tags, setTags] = useState('');
   const [autoExtract, setAutoExtract] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +21,7 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
     try {
       const list = await window.amd?.memory?.list();
       setRecords(list ?? []);
+      setSelectedIds((current) => current.filter((id) => (list ?? []).some((record) => record.id === id)));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }, []);
   useEffect(() => {
@@ -39,12 +41,26 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
     finally { setBusy(false); }
   };
   const approve = async (id: string) => {
-    try { await window.amd?.memory?.approve(id); await load(); }
+    try { await window.amd?.memory?.approve(id); setSelectedIds((current) => current.filter((item) => item !== id)); await load(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  const toggleSelect = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const pendingIds = records.filter((record) => record.status === 'pending').map((record) => record.id);
+  const allPendingSelected = pendingIds.length > 0 && pendingIds.every((id) => selectedIds.includes(id));
+  const selectAllPending = () => setSelectedIds(allPendingSelected ? [] : [...new Set([...selectedIds, ...pendingIds])]);
+  const approveSelected = async () => {
+    if (!selectedIds.length) return;
+    try { await window.amd?.memory?.approveMany(selectedIds); setSelectedIds([]); await load(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  const removeSelected = async () => {
+    if (!selectedIds.length || !window.confirm(`删除选中的 ${selectedIds.length} 条记忆？`)) return;
+    try { await window.amd?.memory?.removeMany(selectedIds); setSelectedIds([]); await load(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const remove = async (id: string) => {
     if (!window.confirm('删除这条长期记忆？')) return;
-    try { await window.amd?.memory?.remove(id); setRecords((current) => current.filter((record) => record.id !== id)); }
+    try { await window.amd?.memory?.remove(id); setSelectedIds((current) => current.filter((item) => item !== id)); setRecords((current) => current.filter((record) => record.id !== id)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const exportAll = async () => {
@@ -67,7 +83,7 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
   };
   const clearAll = async () => {
     if (!records.length || !window.confirm('清空全部长期记忆？此操作不可撤销。')) return;
-    try { await window.amd?.memory?.clear(); setRecords([]); }
+    try { await window.amd?.memory?.clear(); setRecords([]); setSelectedIds([]); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
@@ -82,11 +98,12 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
         <button className="button primary" disabled={busy || !content.trim()} onClick={() => void add()}><Plus size={14} />保存记忆</button>
       </div>
     </div>
-    <label className="memory-auto"><input type="checkbox" checked={autoExtract} onChange={() => void toggleAutoExtract()} /><span><strong>完成后自动提取记忆</strong><small>默认关闭。开启后会额外调用一个低成本模型，从完成的对话中提取最多 3 条长期记忆。</small></span></label>
+    <label className="memory-auto"><input type="checkbox" checked={autoExtract} onChange={() => void toggleAutoExtract()} /><span><strong>完成后自动提取记忆</strong><small>默认关闭。开启后会额外调用一个低成本模型，从完成的对话中提取最多 3 条长期记忆；提取结果会先进入待审核。</small></span></label>
+    <div className="memory-batch"><label><input type="checkbox" checked={allPendingSelected} disabled={!pendingIds.length} onChange={selectAllPending} />全选待审核（{pendingIds.length}）</label><span>已选 {selectedIds.length}</span><button disabled={!selectedIds.length} onClick={() => void approveSelected()}>通过选中</button><button disabled={!selectedIds.length} onClick={() => void removeSelected()}>删除选中</button></div>
     {error && <div className="memory-error" role="alert">{error}</div>}
     <div className="memory-list">
       {records.length ? records.map((record) => <article key={record.id} className="memory-item">
-        <div className="memory-item-head"><span className={`memory-scope ${record.scope}`}>{record.scope === 'project' ? '项目' : record.scope === 'session' ? '会话' : '全局'}</span><span className="memory-kind">{kindLabels[record.kind] ?? record.kind}</span>{record.status === 'pending' && <span className="memory-pending">待审核</span>}<span className="memory-date">{new Date(record.updatedAt).toLocaleDateString('zh-CN')}</span>{record.status === 'pending' && <button className="message-icon-button" aria-label="通过记忆" title="通过审核" onClick={() => void approve(record.id)}><Check size={13} /></button>}<button className="message-icon-button" aria-label="删除记忆" title="删除记忆" onClick={() => void remove(record.id)}><Trash2 size={13} /></button></div>
+        <div className="memory-item-head"><input type="checkbox" checked={selectedIds.includes(record.id)} onChange={() => toggleSelect(record.id)} aria-label="选择记忆" /><span className={`memory-scope ${record.scope}`}>{record.scope === 'project' ? '项目' : record.scope === 'session' ? '会话' : '全局'}</span><span className="memory-kind">{kindLabels[record.kind] ?? record.kind}</span>{record.status === 'pending' && <span className="memory-pending">待审核</span>}<span className="memory-date">{new Date(record.updatedAt).toLocaleDateString('zh-CN')}</span>{record.status === 'pending' && <button className="message-icon-button" aria-label="通过记忆" title="通过审核" onClick={() => void approve(record.id)}><Check size={13} /></button>}<button className="message-icon-button" aria-label="删除记忆" title="删除记忆" onClick={() => void remove(record.id)}><Trash2 size={13} /></button></div>
         <p>{record.content}</p>
         {!!record.tags.length && <div className="memory-tags">{record.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       </article>) : <div className="memory-empty"><BrainCircuit size={22} /><strong>还没有长期记忆</strong><span>在上面写一条，或让智能体在对话中调用 remember 工具。</span></div>}

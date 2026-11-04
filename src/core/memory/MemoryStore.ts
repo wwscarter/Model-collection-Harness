@@ -187,7 +187,16 @@ export class MemoryStore {
   }
 
   approve(id: string): boolean {
-    return this.db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(new Date().toISOString(), id).changes > 0;
+    return this.approveMany([id]) > 0;
+  }
+
+  approveMany(ids: string[]): number {
+    const values = [...new Set(ids.filter((id): id is string => typeof id === 'string' && Boolean(id)))].slice(0, 200);
+    if (!values.length) return 0;
+    const placeholders = values.map(() => '?').join(',');
+    return this.db.transaction(() => this.db.prepare(
+      `UPDATE memories SET status = 'active', updated_at = ? WHERE id IN (${placeholders})`,
+    ).run(new Date().toISOString(), ...values).changes)();
   }
 
   exportAll(): MemoryRecord[] { return this.list({ limit: 2_000, status: 'all' }); }
@@ -197,7 +206,14 @@ export class MemoryStore {
   }
 
   remove(id: string): boolean {
-    return this.db.prepare('DELETE FROM memories WHERE id = ?').run(id).changes > 0;
+    return this.removeMany([id]) > 0;
+  }
+
+  removeMany(ids: string[]): number {
+    const values = [...new Set(ids.filter((id): id is string => typeof id === 'string' && Boolean(id)))].slice(0, 200);
+    if (!values.length) return 0;
+    const placeholders = values.map(() => '?').join(',');
+    return this.db.transaction(() => this.db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...values).changes)();
   }
 
   touch(ids: string[]): void {

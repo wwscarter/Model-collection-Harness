@@ -75,6 +75,12 @@ describe('long-term memory', () => {
     expect(retrieveMemories(store, { query: 'pnpm', sessionId: 's' }).records).toHaveLength(0);
     expect(store.approve(pending.id)).toBe(true);
     expect(store.list()).toHaveLength(1);
+    const a = store.add({ content: '批量 A', status: 'pending' });
+    const b = store.add({ content: '批量 B', status: 'pending' });
+    expect(store.approveMany([a.id, b.id])).toBe(2);
+    expect(store.list()).toHaveLength(3);
+    expect(store.removeMany([a.id, b.id])).toBe(2);
+    expect(store.list()).toHaveLength(1);
     store.close();
   });
 

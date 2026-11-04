@@ -205,6 +205,8 @@ export interface AmdApi {
     add: (input: { content: string; kind?: MemoryKind; scope?: MemoryScope; tags?: string[] }) => Promise<MemoryRecord>;
     remove: (id: string) => Promise<{ success: boolean }>;
     approve: (id: string) => Promise<{ success: boolean }>;
+    approveMany: (ids: string[]) => Promise<{ count: number }>;
+    removeMany: (ids: string[]) => Promise<{ count: number }>;
     exportAll: () => Promise<MemoryRecord[]>;
     clear: () => Promise<{ removed: number }>;
     settings: () => Promise<{ autoExtract: boolean }>;
