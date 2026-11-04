@@ -14,15 +14,20 @@ AMD Agent 是一个以 Electron、React 和 TypeScript 实现的多模型智能�
 - 启发式路由：按任务类型、复杂度、能力评分、优先级和成本选择启用模型；高复杂度任务会将综合智能度纳入评分。
 - 含代码的模型回答会执行确定性的静态代码审计，结果写入 `audit.jsonl` 哈希链和 `metrics.db`，监测面板显示“代码审计通过率”；纯文本回答不审计，也不增加额外模型调用或延迟。
 - 高复杂度任务支持双模型协作：先由单独的推理模型生成计划，再由任务类型和能力评分选出的执行模型完成任务；低/中复杂度任务只调用一个执行模型。
+- 调用链轨迹：每个用户 turn 有独立 `runId`，记录路由、上下文压缩、记忆检索、规划、模型尝试、工具、合成、审计和验证的父子 span；右侧“运行详情”实时展开时间线，支持 JSON 导出；启动时自动清理 30 天/1,000 条之外的 trace。
+- 上下文压缩与长期记忆：按模型上下文预算装配历史，旧轮次生成增量摘要（可回退到确定性摘要），工具结果以 digest 进入后续上下文；长期记忆支持全局/项目范围、FTS5 检索、`remember`/`recall`/`forget` 工具、记忆面板、JSON 导出/清空，以及默认关闭的自动提取开关。自动提取的记忆进入待审核队列，可按条或批量通过/删除。
+- 工具调用策略：每轮工具调用次数、总输出字符、单工具超时和结果截断；只读工具支持 TTL 缓存；新增 `process_list` 找回后台进程。
+- 路由规则与配额：支持 `<userData>/routing-rules.json` 规则、右上角逐字段规则表单（任务类型/复杂度/关键词/主模型/策略/协作/fallback，可切回 JSON）、历史归档/恢复、模型 RPM/每日 Token 配额、凭据/上下文窗口过滤、`parallel` 自动协作、`escalate` 升级策略，以及执行阶段的 fallback 链。
+- 独立验证：高复杂度代码任务默认使用第二个模型审计；发现 high/critical 问题时由执行模型修订一次，再记录静态审计结果。
 - 模型设置、连接测试、输出复制和 Markdown 导出。
-- 监测面板：任务数、成本、成功率、延迟、模型分布、成本趋势和 Markdown 报告。
+- 监测面板：运行轮次、成本、成功率、延迟、模型分布、成本趋势和 Markdown 报告。
 - 自成长引擎：按实际路由出的任务类型记录成功与失败、成本、延迟、审计质量和用户评分，并动态调整路由权重。
 - 本地终端会话：支持创建、输入、输出监听、调整尺寸和关闭；优先使用 node-pty，缺失时降级到子进程管道。
 - 智能体内核：任务执行通过 [Pi SDK](https://pi.dev/)（`@earendil-works/pi-coding-agent`）完成工具调用循环、流式输出和多轮上下文。模型与密钥仍由 newAi 加密保存，每轮在内存中新建 Pi 会话，不读写 `~/.pi`。
-- 内置工具：`web_search`（可插拔搜索后端，默认 Bing，免 Key）、`web_fetch`（公开网页）、`read` / `ls`（读取项目），以及选定项目后可用的 `write` / `edit`（创建与修改文件）、`run_command` / `process_status` / `stop_process`（执行命令、启动/查询/停止后台服务）。回答上方显示工具调用卡片并随会话保存，写入后自动刷新项目文件列表。
+- 内置工具：`web_search`（可插拔搜索后端，默认 Bing，免 Key）、`web_fetch`（公开网页）、`read` / `ls`（读取项目），以及选定项目后可用的 `write` / `edit`（创建与修改文件）、`run_command` / `process_status` / `process_list` / `stop_process`（执行命令、启动/查询/列出/停止后台服务）；长期记忆工具 `remember` / `recall` / `forget`。回答上方显示工具调用卡片并随会话保存，写入后自动刷新项目文件列表。
 - 创建网页时，模型可以直接写入代码、启动服务、验证 HTTP 返回并报告访问地址。写入、编辑、执行命令及停止服务会展示确认框；命令的最终授权由主进程弹出原生确认框完成，渲染进程无法自行声明已批准。允许后由应用执行，无需手工复制代码或命令。命令以当前系统用户权限运行，以选定项目作为工作目录；工作目录限制不构成操作系统沙箱。
 - 后台服务在单轮回复完成后继续运行，可在后续对话中要求查询或停止；退出应用会清理它启动的进程。普通命令支持取消、超时和有限日志。并行分析子模型保留只读工具，最终执行模型负责修改及执行。
-- 执行期间可点击输入框右下角的停止按钮；取消或连接失败时保留已生成的回复及工具状态。每次智能体执行默认最多五分钟、八轮工具调用，搜索每个后端主机最多等待十五秒。Bing 页面解析可能受网络或页面变化影响，失败会作为工具结果反馈给模型。
+- 执行期间可点击输入框右下角的停止按钮；取消或连接失败时保留已生成的回复及工具状态。每次智能体执行默认最多五分钟、八轮工具调用、20 次工具调用和 80k 字符模型可见工具输出；搜索每个后端主机最多等待十五秒。Bing 页面解析可能受网络或页面变化影响，失败会作为工具结果反馈给模型。
 - 扩展点：skills 放在 `<userData>/agent/skills/`；`<userData>/agent/mcp.json` 存在时加载 MCP 服务器。内置读取工具和进程状态查询可直接调用，其他工具每次调用需要用户确认。项目内的 `AGENTS.md` 和 `.pi/` 不会被加载。
 - 流式模型输出：执行模型由 Pi 流式返回；规划模型仍走原有适配层，网络流失败时回退到普通请求。
 - 项目上下文：从只读选定工作区生成文件树和限额文本上下文，默认发送但可在输入框显式关闭；统一跳过二进制、`.env*`、`.npmrc`、`.netrc`、`credentials`、`.aws/`、`.git/` 等凭据与版本库元数据，并用 `<project_context untrusted="true">` 标注为不可信数据。
@@ -35,6 +40,36 @@ AMD Agent 是一个以 Electron、React 和 TypeScript 实现的多模型智能�
 设置弹窗支持端点搜索、模型卡片与下拉选择、采样温度和 32k / 64k / 128k 上下文预设。温度范围为 0–1.5，Anthropic 为 0–1；DeepSeek 深度思考模式会发送 thinking 参数，开启时服务端忽略温度。高级配置保留自定义上下文长度、最大输出 Token、综合智能度、代码/推理/创意/视觉/长上下文能力评分、输入和输出价格、路由优先级及请求限额。API Key 使用 AES-256-GCM 加密后保存；自定义服务按 OpenAI-compatible Chat Completions 协议发送请求。
 
 “连通测试”和“获取模型”使用当前表单中的地址、模型与新密钥；留空的密钥只在 scheme+host+port 未变化时复用已加密保存的凭据，修改端点域名后必须重新输入 Key。没有密钥的内置模型不会被标记为远程连接成功，也不会进入路由。点击“设为主力路由”并保存后，任务执行优先使用该模型；再次点击主力按钮并保存可恢复自动路由。主力选择与端点参数一起事务保存，失败时保留旧配置。取消或按 Esc 关闭会丢弃未保存的修改。
+
+### 调用链、记忆与路由规则
+
+- 调用链保存在 `metrics.db` 的 `runs`/`spans` 表；会话只保存最近一次 `runId`，重新打开会话会按该 ID 读取时间线。
+- 上下文摘要保存在 `sessions.db` 的 summary 列；长期记忆保存在 `<userData>/memory.db`。记忆是用户数据，可从右上角“长期记忆”面板查看和删除；不会保存疑似 API Key/私钥的内容。
+- 路由规则文件为 `<userData>/routing-rules.json`，示例：
+
+```json
+{
+  "version": 1,
+  "defaults": { "strategy": "single" },
+  "rules": [
+    {
+      "id": "code-high",
+      "enabled": true,
+      "priority": 10,
+      "when": { "taskTypes": ["code"], "complexity": ["high"] },
+      "then": {
+        "primaryModelId": "deepseek-chat",
+        "strategy": "plan+verify",
+        "fallbackModelIds": ["backup-model"]
+      }
+    }
+  ]
+}
+```
+
+规则只从已启用、有可用凭据、未超配额且满足上下文窗口的模型中选择；高复杂度代码在无规则时也默认进入 `plan+verify`。`parallel` 规则未指定协作者时会自动选择 2 个低成本可用模型；`escalate` 规则在验证发现问题时优先用 fallback 链中的更强模型修订。每次 run 的成本上限暂为 $0.25、时长上限 10 分钟，超出会中止并保留已有输出。
+
+长期记忆的自动提取默认关闭，开启后会额外调用一个低成本模型；提取内容仍会经过密钥过滤，可在记忆面板中逐条删除或整体清空。
 
 ## 开发
 
@@ -76,8 +111,12 @@ npm run pack:dir
 npm run lint
 npm test
 npm run test:coverage
+npm run build
+npm run smoke:renderer
 npm run release:check
 ```
+
+`smoke:renderer` 以隐藏窗口加载构建产物，验证 sandbox preload、CSP、window.amd/trace/memory 与根节点渲染；没有图形环境时需要 Xvfb 或本地桌面会话。
 
 CI 见 `.github/workflows/ci.yml`：Node 22/24 上执行 `lint`、带阈值的全项目覆盖率测试和构建。覆盖率从 `src/**` 全量统计，不再只统计被测试加载过的模块。
 
@@ -91,6 +130,9 @@ CI 见 `.github/workflows/ci.yml`：Node 22/24 上执行 `lint`、带阈值的�
 - `src/core/storage`：SQLite 模型持久化和凭据加密。
 - `src/core/routing`：本地轻量分类器和启发式路由；没有 GGUF 或本地推理运行时时自动使用确定性 fallback。
 - `src/core/project`：项目目录扫描、忽略规则、文本提取和上下文预算。
+- `src/core/context`：上下文装配、token 预算、确定性摘要和 LLM checkpoint。
+- `src/core/memory`：长期记忆 SQLite 存储与检索。
+- `src/core/trace`：run/span 调用链类型与记录器。
 - `src/core/providers`：统一模型调用适配层。
 - `src/core/agent`：Pi SDK 接入（模型映射、系统提示词、`AgentRuntime`）。
 - `src/core/tools`：内置工具与可插拔搜索后端（`search/`）。

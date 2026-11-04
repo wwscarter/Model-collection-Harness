@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:trace', 'tty:data', 'execution:data']);
 
 const amdApi = {
   listModels: () => ipcRenderer.invoke('model:list'),
@@ -14,6 +14,31 @@ const amdApi = {
   getRecentInvocations: (limit?: number) => ipcRenderer.invoke('metrics:recent', limit),
   getDashboard: (options?: unknown) => ipcRenderer.invoke('metrics:dashboard', options),
   getReportMarkdown: (options?: unknown) => ipcRenderer.invoke('metrics:report', options),
+  trace: {
+    get: (runId: string) => ipcRenderer.invoke('trace:get', runId),
+    recent: (sessionId: string, limit?: number) => ipcRenderer.invoke('trace:recent', sessionId, limit),
+    settings: () => ipcRenderer.invoke('trace:settings:get'),
+    setSettings: (options: { maxAgeDays?: number; maxRuns?: number }) => ipcRenderer.invoke('trace:settings:set', options),
+    clear: () => ipcRenderer.invoke('trace:clear'),
+  },
+  routingRules: {
+    get: () => ipcRenderer.invoke('routing:rules:get'),
+    set: (text: string) => ipcRenderer.invoke('routing:rules:set', text),
+    history: () => ipcRenderer.invoke('routing:rules:history'),
+    restore: (name: string) => ipcRenderer.invoke('routing:rules:restore', name),
+  },
+  memory: {
+    list: (options?: { scope?: 'global' | 'project' | 'session' }) => ipcRenderer.invoke('memory:list', options),
+    add: (input: unknown) => ipcRenderer.invoke('memory:add', input),
+    remove: (id: string) => ipcRenderer.invoke('memory:remove', id),
+    approve: (id: string) => ipcRenderer.invoke('memory:approve', id),
+    approveMany: (ids: string[]) => ipcRenderer.invoke('memory:approve-many', ids),
+    removeMany: (ids: string[]) => ipcRenderer.invoke('memory:remove-many', ids),
+    exportAll: () => ipcRenderer.invoke('memory:export'),
+    clear: () => ipcRenderer.invoke('memory:clear'),
+    settings: () => ipcRenderer.invoke('memory:settings'),
+    setAutoExtract: (enabled: boolean) => ipcRenderer.invoke('memory:set-auto-extract', enabled),
+  },
   verifyAuditLog: () => ipcRenderer.invoke('audit:verify'),
   project: {
     current: () => ipcRenderer.invoke('project:current'),

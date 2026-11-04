@@ -19,6 +19,13 @@ export function selectPlanningModel(models: ModelConfig[], executionModelId: str
     })[0];
 }
 
+export function selectUtilityModel(models: ModelConfig[], executionModelId?: string): ModelConfig | undefined {
+  const usable = models.filter((model) => model.enabled && hasUsableCredentials(model));
+  const cost = (model: ModelConfig) => model.costPer1kTokens.input + model.costPer1kTokens.output;
+  const sorted = [...usable].sort((a, b) => cost(a) - cost(b) || (b.contextWindow ?? 0) - (a.contextWindow ?? 0) || a.priority - b.priority);
+  return sorted.find((model) => model.id !== executionModelId) ?? sorted[0];
+}
+
 export function buildPlanningPrompt(task: string): string {
   return `Create a concise execution plan for the user's task. Focus on steps, constraints, and important edge cases. Do not produce the final answer or review another model's output.\n\nUser task:\n${task}`;
 }

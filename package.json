@@ -20,7 +20,8 @@
     "doctor:electron": "node scripts/ensure-electron-binary.mjs",
     "prepare:package": "npm run doctor:electron && npm run build && node scripts/release-check.mjs",
     "pack:dir": "npm run prepare:package && electron-builder --dir",
-    "release:check": "npm run build && node scripts/release-check.mjs"
+    "release:check": "npm run build && node scripts/release-check.mjs",
+    "smoke:renderer": "node scripts/smoke-renderer.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

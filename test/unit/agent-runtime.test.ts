@@ -250,6 +250,22 @@ describe('AgentRuntime (Pi SDK)', () => {
     }
   }, 10_000);
 
+  it('injects a hidden summary before recent history', async () => {
+    requests.length = 0;
+    replies = [text('ok')];
+    const { runtime: agent } = runtime();
+    await agent.run({
+      model: model(), prompt: 'continue',
+      summary: 'Earlier: the user chose pnpm and started the dev server.',
+      history: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi' }],
+    });
+    const messages = requests[0].body.messages;
+    const textOf = (content: any): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map((part: any) => part?.text ?? '').join('') : '';
+    const summary = messages.find((message: any) => textOf(message.content).includes('Earlier: the user chose pnpm'));
+    expect(summary).toBeTruthy();
+    expect(messages.map((message: any) => message.role)).toEqual(expect.arrayContaining(['user', 'assistant']));
+  });
+
   it('offers only read tools when the caller requests read project access', async () => {
     requests.length = 0;
     replies = [text('项目只读检查完成')];

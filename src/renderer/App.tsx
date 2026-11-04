@@ -3,6 +3,8 @@ import { Sidebar, SessionSummary } from './components/Sidebar';
 import { DetailsPanel } from './components/DetailsPanel';
 import { Settings } from './pages/Settings';
 import { Dashboard } from './components/Dashboard';
+import { MemoryPanel } from './components/MemoryPanel';
+import { RoutingPanel } from './components/RoutingPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { ProjectPanel } from './components/ProjectPanel';
 import { NewProjectDialog } from './components/NewProjectDialog';
@@ -10,14 +12,14 @@ import { AgentInputBar } from './components/AgentInputBar';
 import { WorkbenchWelcome } from './components/WorkbenchWelcome';
 import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
-import { ModelConfig, ProjectInfo, ProjectRecord, SessionMetrics } from './types';
+import { ModelConfig, ProjectInfo, ProjectRecord, RunTrace, SessionMetrics } from './types';
 import { appendAssistantChunk, ChatAgentMessage, ChatMessage, historyForModel, preparePendingTurn, restoreMessages, settleAssistantTools, ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from './sessionMessages';
-import { ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
+import { BrainCircuit, ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, Waypoints, X } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
 import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
 
-interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; updatedAt?: Date; }
+interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; runId?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; updatedAt?: Date; }
 
 const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], createdAt: new Date() });
 
@@ -37,6 +39,8 @@ export default function App() {
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
+  const [showRouting, setShowRouting] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
@@ -46,6 +50,9 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 760);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(() => window.innerWidth >= 1180);
   const [isMacOS] = useState(() => navigator.userAgent.toLowerCase().includes('mac'));
+  const [trace, setTrace] = useState<RunTrace>();
+  const [liveTrace, setLiveTrace] = useState<RunTrace>();
+  const currentRunIdRef = useRef<string | undefined>(undefined);
   const [sessionError, setSessionError] = useState<{ sessionId: string; message: string } | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [selectedAgentModelIds, setSelectedAgentModelIds] = useState<string[]>([]);
@@ -72,6 +79,16 @@ export default function App() {
     const timing = runTimingRef.current;
     return completeSessionMetrics(metrics, timing?.sessionId === sessionId ? timing : undefined, confidence, hasOutput, performance.now());
   };
+
+  useEffect(() => {
+    const runId = currentSession?.runId;
+    if (!runId) { setTrace(undefined); return; }
+    let active = true;
+    void window.amd?.trace?.get(runId)
+      .then((value) => { if (active) setTrace(value as RunTrace | undefined); })
+      .catch(() => { if (active) setTrace(undefined); });
+    return () => { active = false; };
+  }, [currentSession?.runId]);
 
   useEffect(() => {
     if (!runningSessionId) return;
@@ -111,6 +128,7 @@ export default function App() {
   useEffect(() => {
     setEditingMessageId(null);
     promptBeforeEditingRef.current = '';
+    setLiveTrace(undefined);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -129,7 +147,7 @@ export default function App() {
     void window.amd?.sessions.list().then((records) => {
       const restored = records.map((record) => ({
         id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record),
-        modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, metrics: record.metrics as SessionMetrics | undefined,
+        modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, runId: record.runId ? String(record.runId) : undefined, metrics: record.metrics as SessionMetrics | undefined,
         audit: record.auditResult as Session['audit'], auditResult: record.auditResult as Session['auditResult'],
         routeConfidence: restoreRouteConfidence(record),
         rating: typeof record.rating === 'number' ? record.rating : undefined,
@@ -191,8 +209,23 @@ export default function App() {
         messages: upsertAssistantTool(session.messages, event.assistantMessageId!, event as ToolCallUpdate),
       } : session));
     });
+    const unsubscribeTrace = window.amd?.on('session:trace', (payload) => {
+      const event = payload as { type?: string; runId?: string; span?: RunTrace['spans'][number]; run?: RunTrace['run'] };
+      if (!event.runId || event.runId !== currentRunIdRef.current) return;
+      setLiveTrace((current) => {
+        const spans = event.span
+          ? [...(current?.spans.filter((span) => span.id !== event.span!.id) ?? []), event.span]
+          : current?.spans ?? [];
+        const run = event.run ?? current?.run ?? {
+          id: event.runId!, sessionId: '', status: 'running' as const,
+          startedAt: event.span?.startedAt ?? new Date().toISOString(),
+          totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0,
+        };
+        return { run, spans };
+      });
+    });
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
+      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
       const id = event.sessionId || event.taskId;
       if (!id) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
@@ -200,10 +233,10 @@ export default function App() {
       setSessions((existing) => existing.map((session) => session.id === id ? {
         ...session,
         messages: updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId),
-        output: event.output ?? '', modelUsed, routeConfidence: metrics?.routeConfidence, metrics,
+        output: event.output ?? '', modelUsed, runId: event.runId ?? session.runId, routeConfidence: metrics?.routeConfidence, metrics,
       } : session));
     });
-    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribe?.(); };
+    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
   }, []);
 
   const refreshProjects = async () => {
@@ -267,12 +300,18 @@ export default function App() {
     if (!currentSession || !currentSession.prompt.trim() || isLoading) return;
     if (selectedAgentModelIds.length === 1) { setCollaborationNotice('并行协作至少需要两款已启用模型。'); setCollaborationOpen(true); return; }
     const prompt = currentSession.prompt.trim();
+    const runId = crypto.randomUUID();
+    currentRunIdRef.current = runId;
+    setLiveTrace({
+      run: { id: runId, sessionId: currentSession.id, status: 'running', startedAt: new Date().toISOString(), totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 },
+      spans: [],
+    });
     // Keep the first title; overwriting it on every follow-up made sessions impossible to find.
     const title = currentSession.messages.length ? currentSession.title : prompt.slice(0, 36);
     const messageId = crypto.randomUUID();
     const collaboratorModels = models.filter((model) => selectedAgentModelIds.includes(model.id) && model.enabled && (model.hasApiKey || model.provider === 'custom'));
     const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined, collaboratorModels.map(({ id, name }) => ({ id, name })));
-    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, audit: undefined, auditResult: undefined, rating: undefined, updatedAt: new Date() };
+    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, runId: undefined, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, audit: undefined, auditResult: undefined, rating: undefined, updatedAt: new Date() };
     cancelRequestedRef.current = false;
     runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
     setLiveElapsedMs(0);
@@ -289,6 +328,7 @@ export default function App() {
       const result = await window.amd.sessions.execute({
         sessionId: currentSession.id,
         taskId: currentSession.id,
+        runId,
         assistantMessageId: `${messageId}-assistant`,
         prompt,
         taskType: 'general',
@@ -307,7 +347,7 @@ export default function App() {
         completedMessages = updateAssistantAgent(completedMessages, `${messageId}-assistant`, { agentId: agent.id, status: agent.status, content: agent.content, error: agent.error });
       }
       for (const call of (raw.toolCalls || []) as ToolCallUpdate[]) completedMessages = upsertAssistantTool(completedMessages, `${messageId}-assistant`, call);
-      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
+      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, runId: raw.runId ?? runId, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
       await window.amd.sessions.save(completedSession);
     } catch (cause) {
@@ -318,7 +358,7 @@ export default function App() {
           ...message,
           agents: message.agents.map((agent) => agent.status === 'queued' || agent.status === 'running' ? { ...agent, status: 'failed' as const, error: errorMessage(cause) } : agent),
         });
-        const failedSession: Session = { ...latestSession, messages: settledMessages, updatedAt: new Date() };
+        const failedSession: Session = { ...latestSession, runId, messages: settledMessages, updatedAt: new Date() };
         setSessions((existing) => existing.map((session) => session.id === currentSession.id ? failedSession : session));
         try { await window.amd?.sessions.save(failedSession); }
         catch (saveError) { setSessionError({ sessionId: currentSession.id, message: `${errorMessage(cause)}（会话保存失败：${errorMessage(saveError)}）` }); }
@@ -342,7 +382,7 @@ export default function App() {
   // ⌘N / ⌘K (Ctrl on Windows/Linux) as shown in the sidebar; disabled while a dialog is open.
   const newSessionRef = useRef(newSession);
   newSessionRef.current = newSession;
-  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject;
+  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject || showMemory || showRouting;
   useEffect(() => {
     if (modalOpen) return;
     const onKey = (event: KeyboardEvent) => {
@@ -373,6 +413,8 @@ export default function App() {
         <div className="workspace-title"><div className="eyebrow">Agent Workspace</div><h1><span className="title-text">{currentSession?.title || '开始一个新任务'}</span>{currentProject && <span className="header-pill" title={currentProject.root}><i className="live-dot pulse" />{currentProject.name}{branchLabel ? ` · ${branchLabel} 分支` : ''} · 工作区就绪</span>}</h1></div>
         <div className="header-actions">
           <span className="status-pill header-status"><i className="live-dot" />本地加密</span>
+          <button className="icon-button" title="长期记忆" aria-label="长期记忆" onClick={() => setShowMemory(true)}><BrainCircuit size={16} /></button>
+          <button className="icon-button" title="路由规则" aria-label="路由规则" onClick={() => setShowRouting(true)}><Waypoints size={16} /></button>
           <span className="panel-divider" />
           <button className="icon-button" title={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-pressed={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeft size={16} /></button>
           <button className="icon-button" title={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-label={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-pressed={projectDrawerOpen} onClick={() => setProjectDrawerOpen((open) => !open)}><PanelRight size={16} /></button>
@@ -419,9 +461,11 @@ export default function App() {
     {projectDrawerOpen && <aside className="right-drawer" aria-label="项目与运行信息">
       <div className="drawer-header"><div><div className="eyebrow">Project Workspace</div><h2>项目文件</h2></div><button className="icon-button" title="关闭右侧面板" aria-label="关闭右侧面板" onClick={() => setProjectDrawerOpen(false)}><X size={16} /></button></div>
       <div className="drawer-scroll"><ProjectPanel project={currentProject} reloadKey={projectReloadKey} onChangeDirectory={() => setShowNewProject(true)} onClear={() => void clearProject()} /></div>
-      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
+      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} trace={trace ?? liveTrace} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
+    {showMemory && <MemoryPanel onClose={() => setShowMemory(false)} hasProject={Boolean(currentProject)} />}
+    {showRouting && <RoutingPanel onClose={() => setShowRouting(false)} />}
     {showDashboard && <Dashboard onClose={() => setShowDashboard(false)} />}
     {showTerminal && <TerminalPanel onClose={() => setShowTerminal(false)} />}
     {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreated={handleProjectCreated} />}

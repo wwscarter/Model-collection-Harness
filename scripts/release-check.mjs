@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const required = ['dist/main/main.js', 'dist/preload/preload.mjs', 'dist/renderer/index.html'];
+const required = ['dist/main/main.js', 'dist/preload/preload.cjs', 'dist/renderer/index.html'];
 const missing = required.filter((entry) => !fs.existsSync(path.join(root, entry)));
 if (missing.length) {
   console.error(`[release] missing build artifacts: ${missing.join(', ')}`);
