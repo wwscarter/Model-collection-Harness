@@ -25,6 +25,7 @@
 - Extracted the session execution pipeline into RunCoordinator with integration tests; main now only handles IPC, cancellation and event forwarding.
 - Added trace retention settings/clear controls, pending review for auto-extracted memories, routing rule history/restore, and a packaged renderer smoke test.
 - Replaced the JSON-only routing editor with a field-based rule form (JSON remains an advanced mode) and added batch approve/delete for pending memories.
+- Added DeepSeek master orchestration: DeepSeek plans a JSON task allocation, invokes up to four read-only subagent models, and synthesizes the final answer; normal routing remains the fallback when DeepSeek is unavailable or the plan is invalid.
 
 ### Reliability
 
