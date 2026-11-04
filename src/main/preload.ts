@@ -18,6 +18,11 @@ const amdApi = {
     get: (runId: string) => ipcRenderer.invoke('trace:get', runId),
     recent: (sessionId: string, limit?: number) => ipcRenderer.invoke('trace:recent', sessionId, limit),
   },
+  memory: {
+    list: (options?: { scope?: 'global' | 'project' | 'session' }) => ipcRenderer.invoke('memory:list', options),
+    add: (input: unknown) => ipcRenderer.invoke('memory:add', input),
+    remove: (id: string) => ipcRenderer.invoke('memory:remove', id),
+  },
   verifyAuditLog: () => ipcRenderer.invoke('audit:verify'),
   project: {
     current: () => ipcRenderer.invoke('project:current'),

@@ -74,6 +74,25 @@ export interface TraceSpan {
 
 export interface RunTrace { run: TraceRun; spans: TraceSpan[]; }
 
+export type MemoryScope = 'global' | 'project' | 'session';
+export type MemoryKind = 'preference' | 'fact' | 'decision' | 'todo' | 'artifact';
+
+export interface MemoryRecord {
+  id: string;
+  scope: MemoryScope;
+  projectRoot?: string;
+  sessionId?: string;
+  kind: MemoryKind;
+  content: string;
+  tags: string[];
+  source: 'user' | 'agent' | 'tool';
+  confidence: number;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  lastUsedAt?: string | Date;
+  expiresAt?: string | Date;
+}
+
 export interface ExecutionResult {
   output: string;
   runId?: string;
@@ -169,6 +188,11 @@ export interface AmdApi {
   trace: {
     get: (runId: string) => Promise<RunTrace | undefined>;
     recent: (sessionId: string, limit?: number) => Promise<TraceRun[]>;
+  };
+  memory: {
+    list: (options?: { scope?: MemoryScope }) => Promise<MemoryRecord[]>;
+    add: (input: { content: string; kind?: MemoryKind; scope?: MemoryScope; tags?: string[] }) => Promise<MemoryRecord>;
+    remove: (id: string) => Promise<{ success: boolean }>;
   };
   verifyAuditLog: () => Promise<{ valid: boolean; entries: number; error?: string }>;
   getGrowthProfiles: () => Promise<unknown[]>;

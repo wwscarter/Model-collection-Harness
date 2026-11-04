@@ -3,6 +3,7 @@ import { Sidebar, SessionSummary } from './components/Sidebar';
 import { DetailsPanel } from './components/DetailsPanel';
 import { Settings } from './pages/Settings';
 import { Dashboard } from './components/Dashboard';
+import { MemoryPanel } from './components/MemoryPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { ProjectPanel } from './components/ProjectPanel';
 import { NewProjectDialog } from './components/NewProjectDialog';
@@ -12,7 +13,7 @@ import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
 import { ModelConfig, ProjectInfo, ProjectRecord, RunTrace, SessionMetrics } from './types';
 import { appendAssistantChunk, ChatAgentMessage, ChatMessage, historyForModel, preparePendingTurn, restoreMessages, settleAssistantTools, ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from './sessionMessages';
-import { ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
+import { BrainCircuit, ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
 import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
@@ -37,6 +38,7 @@ export default function App() {
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
@@ -355,7 +357,7 @@ export default function App() {
   // ⌘N / ⌘K (Ctrl on Windows/Linux) as shown in the sidebar; disabled while a dialog is open.
   const newSessionRef = useRef(newSession);
   newSessionRef.current = newSession;
-  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject;
+  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject || showMemory;
   useEffect(() => {
     if (modalOpen) return;
     const onKey = (event: KeyboardEvent) => {
@@ -386,6 +388,7 @@ export default function App() {
         <div className="workspace-title"><div className="eyebrow">Agent Workspace</div><h1><span className="title-text">{currentSession?.title || '开始一个新任务'}</span>{currentProject && <span className="header-pill" title={currentProject.root}><i className="live-dot pulse" />{currentProject.name}{branchLabel ? ` · ${branchLabel} 分支` : ''} · 工作区就绪</span>}</h1></div>
         <div className="header-actions">
           <span className="status-pill header-status"><i className="live-dot" />本地加密</span>
+          <button className="icon-button" title="长期记忆" aria-label="长期记忆" onClick={() => setShowMemory(true)}><BrainCircuit size={16} /></button>
           <span className="panel-divider" />
           <button className="icon-button" title={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-pressed={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeft size={16} /></button>
           <button className="icon-button" title={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-label={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-pressed={projectDrawerOpen} onClick={() => setProjectDrawerOpen((open) => !open)}><PanelRight size={16} /></button>
@@ -435,6 +438,7 @@ export default function App() {
       <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} trace={trace} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
+    {showMemory && <MemoryPanel onClose={() => setShowMemory(false)} hasProject={Boolean(currentProject)} />}
     {showDashboard && <Dashboard onClose={() => setShowDashboard(false)} />}
     {showTerminal && <TerminalPanel onClose={() => setShowTerminal(false)} />}
     {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreated={handleProjectCreated} />}

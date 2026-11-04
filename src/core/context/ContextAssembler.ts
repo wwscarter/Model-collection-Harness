@@ -35,6 +35,8 @@ export interface ContextAssemblyResult {
   summaryHash?: string;
   estimatedTokens: number;
   droppedTurns: number;
+  /** The previously-summarised prefix the assembler started from. */
+  previousCovers: number;
   compacted: boolean;
   summaryChanged: boolean;
 }
@@ -118,6 +120,7 @@ export function assembleContext(input: ContextAssemblyInput): ContextAssemblyRes
       summaryHash: baseSummary ? historyHash(input.history, baseCovers) : undefined,
       estimatedTokens: totalTokens,
       droppedTurns: baseCovers,
+      previousCovers: baseCovers,
       compacted: false,
       summaryChanged: false,
     };
@@ -175,6 +178,7 @@ export function assembleContext(input: ContextAssemblyInput): ContextAssemblyRes
     summaryHash: historyHash(input.history, finalCovers),
     estimatedTokens: estimated,
     droppedTurns: finalCovers,
+    previousCovers: baseCovers,
     compacted: true,
     summaryChanged: nextSummary !== existingSummary || finalCovers !== (input.summaryCovers ?? 0),
   };
