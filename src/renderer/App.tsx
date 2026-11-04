@@ -18,7 +18,7 @@ import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
 import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
 
-interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; runId?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; multiModel?: boolean; modelId?: string; updatedAt?: Date; }
+interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; runId?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; multiModel?: boolean; modelId?: string; projectId?: string; projectRoot?: string; updatedAt?: Date; }
 
 const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], multiModel: true, createdAt: new Date() });
 const formatDuration = (value?: number) => value === undefined || !Number.isFinite(value) ? undefined : value < 1000 ? Math.round(value) + ' ms' : (value / 1000).toFixed(1) + ' s';
@@ -136,6 +136,7 @@ export default function App() {
         audit: record.auditResult as Session['audit'], auditResult: record.auditResult as Session['auditResult'],
         routeConfidence: restoreRouteConfidence(record),
         multiModel: record.multiModel !== false, modelId: record.modelId ? String(record.modelId) : undefined,
+        projectId: record.projectId ? String(record.projectId) : undefined, projectRoot: record.projectRoot ? String(record.projectRoot) : undefined,
         rating: typeof record.rating === 'number' ? record.rating : undefined,
         createdAt: new Date(String(record.createdAt)), updatedAt: new Date(String(record.updatedAt || record.createdAt)),
       }));
@@ -239,11 +240,18 @@ export default function App() {
     void window.amd?.preferences?.get().then((value) => setApprovalMode(value.approvalMode)).catch(() => undefined);
   }, [showSettings]);
   const applyProject = (project: ProjectInfo | undefined) => { setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); void refreshProjects(); };
+  const bindSessionProject = (project: ProjectInfo) => {
+    if (!currentSession) return;
+    const patch: Partial<Session> = { projectId: project.id, projectRoot: project.root, updatedAt: new Date() };
+    updateCurrent(patch);
+    void window.amd?.sessions.save({ ...currentSession, ...patch });
+  };
   const openProject = async (id: string) => {
     if (!window.amd) return;
     try {
       const project = await window.amd.projects.open(id);
       applyProject(project);
+      bindSessionProject(project);
       setView('workspace');
       // Clicking a project is an explicit request for its files; reveal the tree
       // so the active association is visible even though it is hidden by default.
@@ -252,7 +260,7 @@ export default function App() {
   };
   const associateProject = async (id: string) => {
     if (!window.amd) return;
-    try { applyProject(await window.amd.projects.open(id)); }
+    try { const project = await window.amd.projects.open(id); applyProject(project); bindSessionProject(project); }
     catch (cause) { setProjectError(errorMessage(cause)); }
   };
   const removeProject = async (id: string) => {
@@ -263,7 +271,7 @@ export default function App() {
       void refreshProjects();
     } catch (cause) { setProjectError(errorMessage(cause)); }
   };
-  const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); applyProject(project); setProjectDrawerOpen(true); };
+  const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); applyProject(project); bindSessionProject(project); setProjectDrawerOpen(true); };
   const initGit = async () => {
     if (!window.amd || !currentProject) return;
     setGitBusy(true); setProjectError(null);
@@ -275,6 +283,14 @@ export default function App() {
     } catch (cause) { setProjectError(errorMessage(cause)); }
     finally { setGitBusy(false); }
   };
+  useEffect(() => {
+    if (!currentSession) return;
+    if (!currentSession.projectId) { setCurrentProject(undefined); return; }
+    if (currentProject?.id === currentSession.projectId) return;
+    let active = true;
+    void window.amd?.projects.open(currentSession.projectId).then((project) => { if (active) applyProject(project); }).catch((cause) => { if (active) setProjectError(errorMessage(cause)); });
+    return () => { active = false; };
+  }, [currentSessionId]);
 
   const updateCurrent = (patch: Partial<Session>) => setSessions((existing) => existing.map((session) => session.id === currentSessionId ? { ...session, ...patch } : session));
   const openFile = (path: string) => {
@@ -298,7 +314,7 @@ export default function App() {
   const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); setCurrentSessionId(id); setView('workspace'); };
   const newSession = () => {
     if (editingMessageId) cancelMessageEdit();
-    const session = starterSession();
+    const session: Session = { ...starterSession(), projectId: currentProject?.id, projectRoot: currentProject?.root };
     setSessions((existing) => [session, ...existing]);
     setCurrentSessionId(session.id);
     setView('workspace');

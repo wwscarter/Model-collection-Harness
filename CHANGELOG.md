@@ -7,7 +7,7 @@
 - Added progressive file preview: the right workspace is hidden by default, opens as a 270px file tree from the top-bar panel switch, expands to a code-preview + tree dual pane only after a file is clicked, and returns to the tree-only state when the preview is closed.
 - Swapped the sidebar brand toolbar sides and show concrete model ids (instead of display names) in the chat attribution, model menu and composer.
 - Opening a project now reveals its file tree immediately, the new-project dialog no longer polls Git status and uses transparent neutral surfaces, session rows omit timestamps for a compact list, and project folder paths are shown only as a hover tooltip.
-- New sessions close the right workspace by default; the composer now has an existing-project selector plus Git header row, a quick-command menu on `+`, and a permission-mode indicator. Project creation no longer shows the detection card.
+- New sessions close the right workspace by default; the composer now has an existing-project selector plus Git header row, a quick-command menu on `+`, and a permission-mode indicator. The selected project is persisted per session and restored on switch; project creation no longer shows the detection card.
 
 ## 0.0.4 — 2026-11-04
 

@@ -77,12 +77,14 @@ describe('SessionStorage', () => {
   it('persists per-session routing and assistant duration', () => {
     const storage = new SessionStorage(':memory:');
     const now = new Date('2026-01-01T00:00:00.000Z');
-    storage.save({ id: 'single', title: 'Single', prompt: '', output: 'done', multiModel: false, modelId: 'deepseek-chat', messages: [
+    storage.save({ id: 'single', title: 'Single', prompt: '', output: 'done', multiModel: false, modelId: 'deepseek-chat', projectId: 'project-1', projectRoot: '/tmp/project', messages: [
       { id: 'a1', role: 'assistant', content: 'done', modelUsed: 'deepseek-chat', durationMs: 1234 },
     ], createdAt: now, updatedAt: now });
     const loaded = storage.get('single');
     expect(loaded?.multiModel).toBe(false);
     expect(loaded?.modelId).toBe('deepseek-chat');
+    expect(loaded?.projectId).toBe('project-1');
+    expect(loaded?.projectRoot).toBe('/tmp/project');
     expect(loaded?.messages?.[0].durationMs).toBe(1234);
     storage.close();
   });
