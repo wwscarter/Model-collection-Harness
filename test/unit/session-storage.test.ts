@@ -26,6 +26,8 @@ describe('SessionStorage', () => {
     ]);
     expect(loaded?.metrics).toEqual({ cost: 1 });
     expect(loaded?.runId).toBe('run-a');
+    expect(storage.saveSummary('a', { text: 'earlier summary', coversTo: 2, hash: 'abc', tokens: 12 })).toBe(true);
+    expect(storage.getSummary('a')).toMatchObject({ text: 'earlier summary', coversTo: 2, hash: 'abc', tokens: 12 });
     expect(loaded?.createdAt).toEqual(now);
     expect(storage.delete('a')).toBe(true);
     expect(storage.get('a')).toBeUndefined();

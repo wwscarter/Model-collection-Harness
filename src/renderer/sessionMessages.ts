@@ -204,8 +204,20 @@ export function settleAssistantTools(messages: ChatMessage[], messageId: string)
 }
 
 /** Completed user/assistant turns sent to the model as conversation history. */
-export function historyForModel(messages: ChatMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
-  return messages.filter((message) => message.content.trim()).map((message) => ({ role: message.role, content: message.content }));
+export interface ModelHistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  tools?: Array<{ name: string; status?: string; label?: string; summary?: string }>;
+}
+
+export function historyForModel(messages: ChatMessage[]): ModelHistoryTurn[] {
+  return messages.filter((message) => message.content.trim()).map((message) => ({
+    role: message.role,
+    content: message.content,
+    ...(message.tools?.length ? {
+      tools: message.tools.map((tool) => ({ name: tool.toolName, status: tool.status, label: tool.label, summary: tool.summary })),
+    } : {}),
+  }));
 }
 
 function restoreTools(values: unknown[]): ChatToolCall[] {

@@ -25,6 +25,7 @@ import { GrowthEngine, type RoutingFeedback } from '@core/growth/GrowthEngine';
 import { TtyManager } from '@core/tty/TtyManager';
 import { ProjectManager } from '@core/project/ProjectManager';
 import type { ProjectContextResult } from '@core/project/ProjectContext';
+import { assembleContext, type ContextToolDigest, type ContextTurn } from '@core/context/ContextAssembler';
 import { CommandExecutor, type CommandExecutionRequest } from '@core/tty/CommandExecutor';
 import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
 import { createProjectCommandTools } from '@core/tools/projectCommandTools';
@@ -76,24 +77,35 @@ async function approveToolCall({ toolName, input, projectRoot }: { toolName: str
   return response === 1 ? undefined : '用户拒绝了这次工具调用';
 }
 
-type HistoryTurn = { role: 'user' | 'assistant'; content: string };
+type HistoryTurn = ContextTurn;
 
 function sanitizeHistory(value: unknown): HistoryTurn[] {
   if (!Array.isArray(value)) return [];
   return value.slice(-40).flatMap((turn): HistoryTurn[] => {
     const candidate = turn as Partial<HistoryTurn> | null;
     if (!candidate || (candidate.role !== 'user' && candidate.role !== 'assistant') || typeof candidate.content !== 'string') return [];
-    return [{ role: candidate.role, content: candidate.content.slice(0, 40_000) }];
+    const tools: ContextToolDigest[] = Array.isArray(candidate.tools)
+      ? candidate.tools.slice(0, 30).flatMap((tool): ContextToolDigest[] => {
+        if (!tool || typeof tool !== 'object' || typeof tool.name !== 'string' || !tool.name) return [];
+        return [{
+          name: tool.name.slice(0, 100),
+          status: typeof tool.status === 'string' ? tool.status.slice(0, 20) : undefined,
+          label: typeof tool.label === 'string' ? tool.label.slice(0, 300) : undefined,
+          summary: typeof tool.summary === 'string' ? tool.summary.slice(0, 600) : undefined,
+        }];
+      })
+      : [];
+    return [{ role: candidate.role, content: candidate.content.slice(0, 40_000), ...(tools.length ? { tools } : {}) }];
   });
 }
 
-async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; enableTools?: boolean; projectRoot?: string; projectAccess?: 'read' | 'write'; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
+async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; summary?: string; skipHistoryTrim?: boolean; enableTools?: boolean; projectRoot?: string; projectAccess?: 'read' | 'write'; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
   if (options.signal?.aborted) throw new Error('任务已取消');
   // Never turn a missing credential into a plausible-looking "demo" answer:
   // the router filters these models, and a direct call fails loudly instead.
   if (!hasUsableCredentials(model)) throw new Error(`模型「${model.name}」尚未配置 API Key，无法执行任务`);
   const result = await agentRuntime.run({
-    model, prompt, history: options.history, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
+    model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
   });
@@ -338,6 +350,33 @@ function registerHandlers(): void {
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
       const model = registry.getModel(decision.modelId);
       if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
+      const storedSummary = sessionStorage.getSummary(sessionId);
+      const contextAssembly = assembleContext({
+        history,
+        summary: storedSummary?.text,
+        summaryCovers: storedSummary?.coversTo,
+        summaryHash: storedSummary?.hash,
+        contextWindow: model.contextWindow ?? model.maxTokens,
+        maxOutputTokens: Math.min(model.maxTokens ?? 4_000, 4_000),
+      });
+      const agentHistory = contextAssembly.history;
+      const compactSpan = trace.child('compact', 'context.compact', { historyTurns: history.length });
+      if (contextAssembly.summary && (contextAssembly.compacted || contextAssembly.summaryChanged)) {
+        sessionStorage.saveSummary(sessionId, {
+          text: contextAssembly.summary,
+          coversTo: contextAssembly.summaryCovers,
+          hash: contextAssembly.summaryHash,
+          tokens: estimateTokens(contextAssembly.summary),
+        });
+      }
+      compactSpan.end({ attributes: {
+        compacted: contextAssembly.compacted,
+        summaryUsed: Boolean(contextAssembly.summary),
+        summaryTokens: contextAssembly.summary ? estimateTokens(contextAssembly.summary) : 0,
+        droppedTurns: contextAssembly.droppedTurns,
+        keptTurns: agentHistory.length,
+        estimatedTokens: contextAssembly.estimatedTokens,
+      } });
       let executionPrompt = contextPrompt;
       let planningModelId: string | undefined;
       // High-complexity tasks can use a second model for planning, then pass the
@@ -352,8 +391,8 @@ function registerHandlers(): void {
           const planningModelSpan = planningSpan.child('model', 'planning-model', { modelId: planningModel.id, role: 'planner' });
           const planningInvocationId = observability.recordInvocationStart(runId, planningModel.id);
           try {
-            const planningContext = history.length
-              ? `Conversation so far:\n${history.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n')}\n\nCurrent task:\n${contextPrompt}`
+            const planningContext = agentHistory.length
+              ? `Conversation so far:\n${agentHistory.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n')}${contextAssembly.summary ? `\n\nSummary of earlier conversation:\n${contextAssembly.summary}` : ''}\n\nCurrent task:\n${contextPrompt}`
               : contextPrompt;
             const planningSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]);
             const plan = await createProvider(planningModel).invoke(buildPlanningPrompt(planningContext), { maxTokens: Math.min(planningModel.maxTokens ?? 1200, 1200), temperature: 0.2, signal: planningSignal });
@@ -404,7 +443,7 @@ function registerHandlers(): void {
                 agentContent += delta;
                 agentMessages[index].content = agentContent;
                 mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
-              }, { history, enableTools, projectRoot, projectAccess: 'read', signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
+              }, { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools, projectRoot, projectAccess: 'read', signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
               observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
               const agentCost = costOf(agentResult.inputTokens, agentResult.outputTokens, agentModel);
               totalInputTokens += agentResult.inputTokens;
@@ -436,7 +475,7 @@ function registerHandlers(): void {
         result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
           chunkIndex += 1;
           mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
-        }, { history, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
+        }, { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
         const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
         const executionCost = costOf(result.inputTokens, result.outputTokens, model);
         totalInputTokens += result.inputTokens;

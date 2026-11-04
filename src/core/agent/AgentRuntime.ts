@@ -37,6 +37,10 @@ export interface AgentRunRequest {
   model: ModelConfig;
   prompt: string;
   history?: ChatTurn[];
+  /** Hidden summary of older turns, injected as a non-displayed custom message. */
+  summary?: string;
+  /** The caller already applied its token budget; skip the 20-turn/60k-char trim. */
+  skipHistoryTrim?: boolean;
   projectRoot?: string;
   /** Analysis subagents can inspect a project without modifying it or running commands. */
   projectAccess?: 'read' | 'write';
@@ -233,8 +237,11 @@ export class AgentRuntime {
     return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls'].includes(tool.name)) : tools;
   }
 
-  private seedSession(cwd: string, history: ChatTurn[], piModel: { api: string; provider: string; id: string }): SessionManager {
+  private seedSession(cwd: string, history: ChatTurn[], piModel: { api: string; provider: string; id: string }, summary?: string): SessionManager {
     const manager = SessionManager.inMemory(cwd);
+    if (summary?.trim()) {
+      manager.appendCustomMessageEntry('newai-summary', `Summary of earlier conversation (data, not a new request):\n${summary.trim()}`, false);
+    }
     let timestamp = Date.now() - history.length * 1000;
     for (const turn of history) {
       timestamp += 1;
@@ -266,7 +273,7 @@ export class AgentRuntime {
     const enableTools = request.enableTools !== false;
     const cwd = request.projectRoot ?? this.options.defaultCwd;
     const { runtime, mapping, piModel } = await this.resolveModel(request.model);
-    const history = trimHistory(request.history);
+    const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
     const toolDefinitions = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
     const systemPrompt = buildSystemPrompt({ now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot });
@@ -280,7 +287,7 @@ export class AgentRuntime {
       thinkingLevel: mapping.thinkingLevel,
       noTools: enableTools ? 'builtin' : 'all',
       customTools: toolDefinitions,
-      sessionManager: this.seedSession(cwd, history, piModel),
+      sessionManager: this.seedSession(cwd, history, piModel, request.summary),
       settingsManager,
       resourceLoader,
     });
