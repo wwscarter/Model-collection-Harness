@@ -2,7 +2,7 @@
 
 AMD Agent 是一个以 Electron、React 和 TypeScript 实现的多模型智能体桌面应用。当前实现已经把模型配置、路由、流式执行、指标、项目上下文、受控命令执行和发布验证链路接通；含代码的回答会执行静态审计并写入哈希链与指标库。
 
-当前版本为 `0.0.3`，上一稳定基线标签为 `0.0.2`。项目自动执行验收见 [创建并启动网页](outputs/project-execution/QA.md)，上一版本验收见 [0.0.1 发布记录](outputs/release-0.0.1/QA.md)。
+当前版本为 `0.0.4`，上一稳定基线标签为 `0.0.3`。项目自动执行验收见 [创建并启动网页](outputs/project-execution/QA.md)，上一版本验收见 [0.0.1 发布记录](outputs/release-0.0.1/QA.md)。
 
 ## 当前能力
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.4 — 2026-11-04
+
+### UI
+
+- Moved to an immersive workspace: global top bar with centered session title and multi-file tabs, borderless sidebar with brand/bell/search toolbar, simplified composer, and a horizontal code-preview + file-tree right panel with filtering, line numbers and monochrome syntax highlighting.
+- Removed project info cards, uppercase labels, shortcuts, terminal entry points and redundant preview controls from the main workspace.
+
 ## 0.0.3 — 2026-11-04
 
 ### Security
@@ -27,7 +34,6 @@
 - Replaced the JSON-only routing editor with a field-based rule form (JSON remains an advanced mode) and added batch approve/delete for pending memories.
 - Added DeepSeek master orchestration: DeepSeek plans a JSON task allocation, invokes up to four read-only subagent models, and synthesizes the final answer; normal routing remains the fallback when DeepSeek is unavailable or the plan is invalid.
 - Reworked the desktop UI: navigation rail with a dedicated monitoring page, cross-session trace observability, transient-only process cards, hover-revealed copy/edit controls, per-session multi-model/pinned-model selection, request/auto/full permission modes, project file preview, settings-hosted routing rules and system light/dark monochrome theming.
-- Moved to an immersive workspace: global top bar with centered session title and multi-file tabs, borderless sidebar with brand/bell/search toolbar, simplified composer, and a horizontal code-preview + file-tree right panel with filtering, line numbers and monochrome syntax highlighting.
 
 ### Reliability
 
