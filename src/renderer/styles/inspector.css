@@ -100,3 +100,22 @@
   .inspector-runtime-status.is-live > i, .inspector-tree-loading span, .inspector-tree-loading i { animation: none; }
   .inspector-confidence-track i, .inspector-tree-caret svg { transition: none; }
 }
+.trace-timeline { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.trace-timeline > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; cursor: pointer; list-style: none; color: var(--text); font-size: 11px; }
+.trace-timeline > summary::-webkit-details-marker { display: none; }
+.trace-timeline > summary span:first-child { display: grid; gap: 2px; }
+.trace-timeline > summary small { color: var(--text-secondary); font-size: 10px; }
+.trace-body { max-height: 260px; overflow: auto; border-top: 1px solid var(--line); }
+.trace-row { display: grid; grid-template-columns: 8px 42px minmax(90px, 1fr) minmax(60px, 120px) 48px 58px 58px auto; align-items: center; gap: 5px; min-height: 25px; padding-right: 8px; border-bottom: 1px solid #f1f5f9; font-size: 10px; }
+.trace-row:last-child { border-bottom: 0; }
+.trace-status-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+.trace-bad .trace-status-dot { background: #ef4444; }
+.trace-warn .trace-status-dot { background: #f59e0b; }
+.trace-live .trace-status-dot { background: #3b82f6; animation: trace-pulse 1.2s infinite; }
+.trace-kind { overflow: hidden; color: #64748b; text-overflow: ellipsis; white-space: nowrap; }
+.trace-name { overflow: hidden; color: #0f172a; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.trace-model { overflow: hidden; color: #64748b; text-overflow: ellipsis; white-space: nowrap; }
+.trace-metric { color: #64748b; text-align: right; white-space: nowrap; }
+.trace-failed { color: #b91c1c; font-size: 9px; }
+.trace-empty { padding: 12px; color: var(--text-secondary); font-size: 11px; }
+@keyframes trace-pulse { 50% { opacity: .35; } }

@@ -9,7 +9,7 @@ describe('SessionStorage', () => {
   it('round trips sessions and orders by updated time', () => {
     const storage = new SessionStorage(':memory:');
     const now = new Date('2026-01-01T00:00:00.000Z');
-    storage.save({ id: 'a', title: 'A', prompt: '', userMessage: 'hello', output: 'world', messages: [
+    storage.save({ id: 'a', title: 'A', prompt: '', userMessage: 'hello', output: 'world', runId: 'run-a', messages: [
       { id: 'u1', role: 'user', content: 'hello' },
       { id: 'a1', role: 'assistant', content: 'world' },
       { id: 'u2', role: 'user', content: 'follow up' },
@@ -25,6 +25,7 @@ describe('SessionStorage', () => {
       { id: 'a2', role: 'assistant', content: 'second reply', modelUsed: 'model-1' },
     ]);
     expect(loaded?.metrics).toEqual({ cost: 1 });
+    expect(loaded?.runId).toBe('run-a');
     expect(loaded?.createdAt).toEqual(now);
     expect(storage.delete('a')).toBe(true);
     expect(storage.get('a')).toBeUndefined();

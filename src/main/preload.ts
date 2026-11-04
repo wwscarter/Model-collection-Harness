@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:trace', 'tty:data', 'execution:data']);
 
 const amdApi = {
   listModels: () => ipcRenderer.invoke('model:list'),
@@ -14,6 +14,10 @@ const amdApi = {
   getRecentInvocations: (limit?: number) => ipcRenderer.invoke('metrics:recent', limit),
   getDashboard: (options?: unknown) => ipcRenderer.invoke('metrics:dashboard', options),
   getReportMarkdown: (options?: unknown) => ipcRenderer.invoke('metrics:report', options),
+  trace: {
+    get: (runId: string) => ipcRenderer.invoke('trace:get', runId),
+    recent: (sessionId: string, limit?: number) => ipcRenderer.invoke('trace:recent', sessionId, limit),
+  },
   verifyAuditLog: () => ipcRenderer.invoke('audit:verify'),
   project: {
     current: () => ipcRenderer.invoke('project:current'),

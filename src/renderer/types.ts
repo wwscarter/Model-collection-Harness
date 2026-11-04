@@ -35,8 +35,48 @@ export interface SessionMetrics {
   cost?: number;
 }
 
+export type RunStatus = 'running' | 'success' | 'failed' | 'cancelled';
+export type SpanStatus = RunStatus;
+export type SpanKind = 'run' | 'route' | 'context' | 'memory' | 'compact' | 'plan' | 'model' | 'tool' | 'synthesis' | 'audit';
+
+export interface TraceRun {
+  id: string;
+  sessionId: string;
+  taskType?: string;
+  complexity?: string;
+  status: RunStatus;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCost: number;
+  errorMessage?: string;
+}
+
+export interface TraceSpan {
+  id: string;
+  runId: string;
+  parentSpanId?: string;
+  kind: SpanKind;
+  name: string;
+  status: SpanStatus;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  modelId?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  attributes?: Record<string, unknown>;
+  errorMessage?: string;
+}
+
+export interface RunTrace { run: TraceRun; spans: TraceSpan[]; }
+
 export interface ExecutionResult {
   output: string;
+  runId?: string;
   modelUsed?: string;
   metrics?: SessionMetrics;
   auditResult?: { passed?: boolean; score?: number; issueCount?: number };
@@ -126,6 +166,10 @@ export interface AmdApi {
   getRecentInvocations: (limit?: number) => Promise<unknown>;
   getDashboard: (options?: { range?: '24h' | '7d' | '30d' }) => Promise<DashboardSnapshot>;
   getReportMarkdown: (options?: { range?: '24h' | '7d' | '30d' }) => Promise<string>;
+  trace: {
+    get: (runId: string) => Promise<RunTrace | undefined>;
+    recent: (sessionId: string, limit?: number) => Promise<TraceRun[]>;
+  };
   verifyAuditLog: () => Promise<{ valid: boolean; entries: number; error?: string }>;
   getGrowthProfiles: () => Promise<unknown[]>;
   recordGrowthFeedback: (feedback: unknown) => Promise<unknown>;
@@ -149,7 +193,7 @@ export interface AmdApi {
     get: (id: string) => Promise<Record<string, unknown> | undefined>;
     save: (session: unknown) => Promise<Record<string, unknown>>;
     delete: (id: string) => Promise<{ success: boolean }>;
-    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string }>; enableTools?: boolean }) => Promise<ExecutionResult>;
+    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string }>; enableTools?: boolean }) => Promise<ExecutionResult>;
     cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
   agent: {
@@ -157,7 +201,7 @@ export interface AmdApi {
     searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;
     setSearchProvider: (id: string) => Promise<Array<{ id: string; label: string; active: boolean }>>;
   };
-  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
+  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
 }
 
 declare global {
