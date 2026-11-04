@@ -47,6 +47,8 @@ export default function App() {
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
   const [currentProject, setCurrentProject] = useState<ProjectInfo>();
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [gitBusy, setGitBusy] = useState(false);
+  const [approvalMode, setApprovalMode] = useState<'ask' | 'auto' | 'full'>('ask');
   const [projectReloadKey, setProjectReloadKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 760);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
@@ -233,6 +235,9 @@ export default function App() {
     void refreshProjects();
     void window.amd?.project.current().then(setCurrentProject).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    void window.amd?.preferences?.get().then((value) => setApprovalMode(value.approvalMode)).catch(() => undefined);
+  }, [showSettings]);
   const applyProject = (project: ProjectInfo | undefined) => { setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); void refreshProjects(); };
   const openProject = async (id: string) => {
     if (!window.amd) return;
@@ -254,6 +259,17 @@ export default function App() {
     } catch (cause) { setProjectError(errorMessage(cause)); }
   };
   const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); applyProject(project); setProjectDrawerOpen(true); };
+  const initGit = async () => {
+    if (!window.amd || !currentProject) return;
+    setGitBusy(true); setProjectError(null);
+    try {
+      const project = await window.amd.project.initGit();
+      setCurrentProject(project);
+      setProjectReloadKey((key) => key + 1);
+      await refreshProjects();
+    } catch (cause) { setProjectError(errorMessage(cause)); }
+    finally { setGitBusy(false); }
+  };
 
   const updateCurrent = (patch: Partial<Session>) => setSessions((existing) => existing.map((session) => session.id === currentSessionId ? { ...session, ...patch } : session));
   const openFile = (path: string) => {
@@ -445,7 +461,7 @@ export default function App() {
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        project={currentProject} value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}

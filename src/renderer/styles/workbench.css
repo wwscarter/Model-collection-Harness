@@ -503,3 +503,20 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .composer-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-project.is-empty { color: var(--text-faint); }
 
+
+.composer-contextbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 1px 5px; }
+.composer-project-main { display: inline-flex; min-width: 0; align-items: center; gap: 5px; padding: 2px 5px 2px 1px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 11px; }
+.composer-project-main:hover { color: var(--text); background: var(--surface-low); }
+.composer-project-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-git-state { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint); font: 10px var(--code-font); }
+.composer-git-create { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; }
+.composer-git-create:hover:not(:disabled) { color: var(--text); background: var(--surface-low); }
+.quick-menu-wrap { position: relative; }
+.quick-menu { position: absolute; z-index: 46; bottom: 34px; left: -4px; width: 190px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-float); }
+.quick-menu-item { display: block; width: 100%; padding: 7px 8px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; text-align: left; }
+.quick-menu-item:hover { color: var(--text); background: var(--surface-low); }
+
+
+.composer-permission { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 5px; color: var(--text-faint); background: transparent; font-size: 9px; }
+.composer-permission:hover { color: var(--text); background: var(--surface-low); }
+

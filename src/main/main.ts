@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +46,7 @@ import { AgentRuntime, type ToolEvent } from '@core/agent/AgentRuntime';
 import { executeRun, type RunDependencies, type RunRequest } from '@core/agent/RunCoordinator';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let storage: ModelStorage;
 let sessionStorage: SessionStorage;
@@ -483,6 +486,19 @@ function registerHandlers(): void {
     const file = projects.readFile(relativePath);
     if (!file) throw new Error('项目尚未打开或文件不存在');
     return file;
+  });
+  handle('project:init-git', async () => {
+    const root = projects.getRoot();
+    if (!root) throw new Error('请先选择项目');
+    if (describeProject(root).git) return describeProject(root);
+    try {
+      await execFileAsync('git', ['init'], { cwd: root, timeout: 15_000, windowsHide: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error('无法创建 Git 存储库：' + message);
+    }
+    projectStorage.recordOpened(root);
+    return describeProject(root);
   });
   handle('projects:list', () => {
     const activeRoot = projects.getRoot();

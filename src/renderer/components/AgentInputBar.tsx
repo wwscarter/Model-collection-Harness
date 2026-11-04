@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, Plus, Sparkles, Square, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, X } from 'lucide-react';
 import type { ModelConfig, ProjectInfo } from '../types';
 
 interface AgentInputBarProps {
@@ -13,6 +13,10 @@ interface AgentInputBarProps {
   pinnedModelId?: string;
   models: ModelConfig[];
   project?: ProjectInfo;
+  gitBusy: boolean;
+  onInitGit: () => void;
+  approvalMode: 'ask' | 'auto' | 'full';
+  onOpenSettings: () => void;
   onToggleMultiModel: () => void;
   onSelectModel: (id: string) => void;
   onChange: (value: string) => void;
@@ -23,23 +27,45 @@ interface AgentInputBarProps {
   onCancelEdit: () => void;
 }
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
+const QUICK_COMMANDS = [
+  { label: '解释当前文件', prompt: '请解释当前打开文件的实现、关键流程和潜在风险。' },
+  { label: '审查当前改动', prompt: '请审查当前工作区未提交的改动，指出问题并给出修复建议。' },
+  { label: '运行测试并修复', prompt: '请运行项目测试，定位失败原因并修复。' },
+  { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
+];
+
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => { if (event.target instanceof Element && !event.target.closest('.model-menu, .model-menu-trigger')) setMenuOpen(false); };
+    if (!menuOpen && !quickOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (!event.target.closest('.model-menu, .model-menu-trigger')) setMenuOpen(false);
+      if (!event.target.closest('.quick-menu, .quick-menu-trigger')) setQuickOpen(false);
+    };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [menuOpen]);
+  }, [menuOpen, quickOpen]);
+  const insertCommand = (promptText: string) => {
+    onChange(value.trim() ? value.replace(/\s*$/, '') + '\n\n' + promptText : promptText);
+    setQuickOpen(false);
+  };
   const selected = models.find((model) => model.id === pinnedModelId) ?? models[0];
   const label = multiModel ? '自动调度' : selected?.modelId || selected?.name || '选择模型';
+  const permissionLabel = approvalMode === 'full' ? '完全控制' : approvalMode === 'auto' ? '帮我批准' : '请求批准';
   return <section className="composer" aria-label="任务输入">
     <div className="prompt-card">
       {editing && <div className="prompt-editing-bar"><span>编辑消息 · 重新发送后将生成新的回复</span><button className="message-icon-button" title="取消编辑" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></button></div>}
+      <div className="composer-contextbar">
+        <button className="composer-project-main" title={project?.root || '关联本地项目'} aria-label={project ? '当前项目：' + project.name : '关联本地项目'} onClick={onOpenContext}>{project ? <Folder size={13} strokeWidth={1.7} /> : <FolderPlus size={13} strokeWidth={1.7} />}<span>{project?.name || '关联项目'}</span></button>
+        {project && (project.git ? <span className="composer-git-state" title={project.git.branch || project.git.head || 'Git'}><GitBranch size={12} strokeWidth={1.7} />{project.git.branch || 'Git'}</span>
+          : <button className="composer-git-create" disabled={gitBusy} onClick={onInitGit}>{gitBusy ? <LoaderCircle size={12} className="spinning" /> : null}{gitBusy ? '创建中…' : '创建 Git 存储库'}</button>)}
+      </div>
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <footer>
-        <div className="dock-left"><button className="attach-button" title="添加项目上下文" aria-label="添加项目上下文" onClick={onOpenContext}><Plus size={18} /></button>{project ? <button className="composer-project" title={project.root} aria-label={'当前项目：' + project.name} onClick={onOpenContext}><Folder size={12} strokeWidth={1.7} /><span>{project.name}</span></button> : <button className="composer-project is-empty" title="关联本地项目" aria-label="关联本地项目" onClick={onOpenContext}><FolderPlus size={12} strokeWidth={1.7} /><span>关联项目</span></button>}</div>
+        <div className="dock-left quick-menu-wrap"><button className="attach-button quick-menu-trigger" title="快捷指令" aria-label="快捷指令" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><Plus size={18} /></button>{quickOpen && <div className="quick-menu" role="menu" aria-label="快捷指令">{QUICK_COMMANDS.map((command) => <button key={command.label} className="quick-menu-item" role="menuitem" onClick={() => insertCommand(command.prompt)}>{command.label}</button>)}</div>}<button className="composer-permission" title="执行权限设置" aria-label={'执行权限：' + permissionLabel} onClick={onOpenSettings}><ShieldCheck size={12} strokeWidth={1.7} /><span>{permissionLabel}</span></button></div>
         <div className="dock-right">
           <div className="model-menu-wrap">
             <button className="model-menu-trigger" aria-label="切换模型" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>{multiModel ? <Sparkles size={12} /> : null}<span>{label}</span><ChevronDown size={11} className={menuOpen ? 'is-open' : ''} /></button>
