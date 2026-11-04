@@ -19,6 +19,9 @@
 - Added per-tool policies: call/result budgets, tool deadlines, result truncation, TTL caching for safe read-only tools and `process_list`.
 - Added routing rules (`routing-rules.json`), RPM/daily-token quota guards, execution fallback chains and a default `plan+verify` strategy for high-complexity code.
 - Added an independent verifier with one revision attempt, plus a per-run cost/duration budget of $0.25/10 minutes.
+- Added live trace events, 30-day/1,000-run trace retention and JSON export.
+- Added FTS5 memory search, memory export/clear and an opt-in automatic memory extractor.
+- Added a routing rules editor, automatic parallel collaborators and an escalate revision strategy.
 
 ### Reliability
 

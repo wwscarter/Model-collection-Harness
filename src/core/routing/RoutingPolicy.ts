@@ -29,7 +29,7 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = { version: 1, rules: [], de
 
 export interface RoutingGuard { isAvailable(modelId: string): boolean; }
 
-const STRATEGIES: RoutingStrategy[] = ['single', 'plan', 'parallel', 'plan+verify'];
+const STRATEGIES: RoutingStrategy[] = ['single', 'plan', 'parallel', 'plan+verify', 'escalate'];
 const TASK_TYPES: TaskType[] = ['code', 'reasoning', 'analysis', 'review', 'creative', 'general'];
 const COMPLEXITIES: TaskComplexity[] = ['low', 'medium', 'high'];
 
@@ -110,6 +110,7 @@ export class RoutingPolicyEngine {
     if (!available.has(primary)) primary = base.alternativeModels.find((id) => available.has(id)) ?? usable[0].id;
     const ruleFallback = appliedRule?.then.fallbackModelIds ?? [];
     const fallbackModels = [...new Set([...ruleFallback, ...base.alternativeModels])].filter((id) => id !== primary && available.has(id)).slice(0, 3);
+    const collaboratorModelIds = (appliedRule?.then.collaboratorModelIds ?? []).filter((id) => id !== primary && available.has(id)).slice(0, 4);
     // High-complexity code gets an independent verifier by default; rules can
     // override this or opt out with strategy: 'single'.
     const defaultStrategy = base.taskType === 'code' && base.complexity === 'high' ? 'plan+verify' : this.policy.defaults.strategy;
@@ -121,6 +122,7 @@ export class RoutingPolicyEngine {
       fallbackModels,
       strategy,
       ruleId: appliedRule?.id,
+      collaboratorModelIds,
       reason: appliedRule
         ? `规则「${appliedRule.id}」为 ${base.taskType}/${base.complexity} 选择 ${primary}。 ${base.reason}`
         : base.reason,

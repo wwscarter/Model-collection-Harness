@@ -12,7 +12,7 @@ import { inspectProject } from '@core/project/ProjectInspector';
 import { ModelRegistry } from '@core/models/ModelRegistry';
 import { credentialOrigin, hasUsableCredentials, type ModelConfig, type ModelConfigInput } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
-import { loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
+import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { shouldFallback } from '@core/routing/Fallback';
 import { BudgetExceededError, RunBudget } from '@core/routing/RunBudget';
@@ -35,6 +35,7 @@ import { summarizeContext } from '@core/context/SummaryService';
 import { MemoryStore, type MemoryKind } from '@core/memory/MemoryStore';
 import { retrieveMemories } from '@core/memory/MemoryRetriever';
 import { createMemoryTools } from '@core/tools/memoryTools';
+import { extractMemories } from '@core/memory/MemoryExtractor';
 import { CommandExecutor, type CommandExecutionRequest } from '@core/tty/CommandExecutor';
 import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
 import { createProjectCommandTools } from '@core/tools/projectCommandTools';
@@ -48,6 +49,7 @@ let projectStorage: ProjectStorage;
 let registry: ModelRegistry;
 let router: AgentRouter;
 let routingPolicy: RoutingPolicyEngine;
+let routingRulesPath = '';
 let modelQuota: ModelQuota;
 let observability: ObservabilityEngine;
 let auditLog: AuditLog;
@@ -275,6 +277,20 @@ function registerHandlers(): void {
     return { ...await testModelConnection({ id, provider: model.provider }, registry), model: publicModel(model) };
   });
   handle('routing:status', () => router.getLocalModelStatus());
+  handle('routing:rules:get', () => ({
+    path: routingRulesPath,
+    text: fs.existsSync(routingRulesPath) ? fs.readFileSync(routingRulesPath, 'utf8') : `${JSON.stringify(DEFAULT_ROUTING_POLICY, null, 2)}\n`,
+  }));
+  handle('routing:rules:set', (_event, text: unknown) => {
+    if (typeof text !== 'string' || text.length > 100_000) throw new Error('路由规则内容无效');
+    JSON.parse(text);
+    const temporary = `${routingRulesPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, routingRulesPath);
+    const state = loadRoutingPolicy(routingRulesPath);
+    routingPolicy = new RoutingPolicyEngine(router, state.policy);
+    return { policy: state.policy, diagnostics: state.diagnostics };
+  });
   handle('session:execute', async (_event, payload: { sessionId?: string; taskId?: string; runId?: string; assistantMessageId?: string; prompt: string; taskType?: string; complexity?: 'low' | 'medium' | 'high'; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: unknown; enableTools?: boolean }) => {
     if (!payload || typeof payload.prompt !== 'string' || !payload.prompt.trim()) throw new Error('任务描述不能为空');
     if (payload.prompt.length > 200_000) throw new Error('任务描述过长');
@@ -324,7 +340,7 @@ function registerHandlers(): void {
     };
     const collaboratorIds = [...new Set(payload.collaboratorModelIds ?? [])];
     if (collaboratorIds.length === 1 || collaboratorIds.length > 4) throw new Error('并行子智能体需要选择 2–4 个不同的模型。');
-    const collaboratorModels = collaboratorIds.map((id) => {
+    const collaboratorModels: ModelConfig[] = collaboratorIds.map((id) => {
       const candidate = registry.getModel(id);
       if (!candidate || !candidate.enabled || !hasUsableCredentials(candidate)) throw new Error('子智能体只能使用已启用且配置了可用 API Key 的模型，请检查模型配置。');
       if (!modelQuota.isAvailable(candidate)) throw new Error(`模型「${candidate.name}」已达到速率或每日配额，请稍后再试`);
@@ -381,6 +397,23 @@ function registerHandlers(): void {
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
       const model = registry.getModel(decision.modelId);
       if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
+      if (!collaboratorModels.length && (decision.collaboratorModelIds?.length || decision.strategy === 'parallel')) {
+        const requested = decision.collaboratorModelIds?.length
+          ? decision.collaboratorModelIds
+          : registry.getEnabledModels()
+            .filter((candidate) => candidate.id !== model.id && candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate))
+            .sort((a, b) => (a.costPer1kTokens.input + a.costPer1kTokens.output) - (b.costPer1kTokens.input + b.costPer1kTokens.output) || a.priority - b.priority)
+            .slice(0, 2)
+            .map((candidate) => candidate.id);
+        for (const id of requested) {
+          const candidate = registry.getModel(id);
+          if (!candidate || candidate.id === model.id || !candidate.enabled || !hasUsableCredentials(candidate) || !modelQuota.isAvailable(candidate)) continue;
+          if (collaboratorModels.some((entry) => entry.id === candidate.id)) continue;
+          collaboratorModels.push(candidate);
+          if (collaboratorModels.length >= 4) break;
+        }
+        if (collaboratorModels.length === 1) collaboratorModels.length = 0;
+      }
       const storedSummary = sessionStorage.getSummary(sessionId);
       const contextAssembly = assembleContext({
         history,
@@ -596,7 +629,7 @@ function registerHandlers(): void {
         if (!result) throw new Error('模型没有返回结果');
         synthesisSpan?.end({ attributes: { reports: agentReports.length, failedAgents: failedAgentCount } });
         let verification: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string } | undefined;
-        if (decision.strategy === 'plan+verify' && hasCode(result.content)) {
+        if ((decision.strategy === 'plan+verify' || decision.strategy === 'escalate') && hasCode(result.content)) {
           const verifierModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => candidate.id !== executionModel.id && modelQuota.isAvailable(candidate)),
             executionModel.id,
@@ -626,31 +659,35 @@ function registerHandlers(): void {
                     auditModelId: verified.audit.auditModelId,
                   };
                   if (shouldRevise(verified.audit)) {
-                    const revisionSpan = verificationSpan.child('model', 'revision', { modelId: executionModel.id, role: 'reviser' });
+                    const revisionModel = decision.strategy === 'escalate'
+                      ? (executionCandidates.find((candidate) => candidate.id !== executionModel.id) ?? executionModel)
+                      : executionModel;
+                    const revisionSpan = verificationSpan.child('model', 'revision', { modelId: revisionModel.id, role: decision.strategy === 'escalate' ? 'escalated-reviser' : 'reviser' });
                     try {
                       runBudget.assertAvailable();
-                      modelQuota.record(executionModel.id);
-                      const revisionInvocationId = observability.recordInvocationStart(runId, executionModel.id);
+                      modelQuota.record(revisionModel.id);
+                      const revisionInvocationId = observability.recordInvocationStart(runId, revisionModel.id);
                       try {
                         const revised = await invokeStreamed(
-                          executionModel,
+                          revisionModel,
                           buildRevisionPrompt(payload.prompt, result.content, verified.audit),
                           4000,
                           () => undefined,
                           { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools: false, projectRoot, signal: controller.signal },
                         );
-                        const revisionCost = costOf(revised.inputTokens, revised.outputTokens, executionModel);
-                        observability.recordInvocationEnd(revisionInvocationId, revised.inputTokens, revised.outputTokens, executionModel.costPer1kTokens, 'success');
+                        const revisionCost = costOf(revised.inputTokens, revised.outputTokens, revisionModel);
+                        observability.recordInvocationEnd(revisionInvocationId, revised.inputTokens, revised.outputTokens, revisionModel.costPer1kTokens, 'success');
                         totalInputTokens += revised.inputTokens;
                         totalOutputTokens += revised.outputTokens;
                         totalCost += revisionCost;
                         runBudget.add({ cost: revisionCost, tokens: revised.inputTokens + revised.outputTokens });
                         result = { ...result, content: revised.content };
+                        executionModel = revisionModel;
                         verification.revised = true;
                         revisionSpan.end({ inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost });
                       } catch (revisionError) {
                         const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
-                        observability.recordInvocationEnd(revisionInvocationId, 0, 0, executionModel.costPer1kTokens, 'failure', message);
+                        observability.recordInvocationEnd(revisionInvocationId, 0, 0, revisionModel.costPer1kTokens, 'failure', message);
                         revisionSpan.end({ status: 'failed', error: message });
                         if (controller.signal.aborted) throw new Error('任务已取消');
                       }
@@ -685,13 +722,61 @@ function registerHandlers(): void {
         const auditSpan = trace.child('audit', 'static-audit', { modelId: executionModel.id });
         const audit = auditCodeAnswer(result.content, runId, executionModel.id, { auditor: codeAuditor, log: auditLog, metrics: observability });
         auditSpan.end({ attributes: audit ? { passed: audit.passed, score: audit.score, issues: audit.issueCount, auditModelId: audit.auditModelId } : { skipped: 'no-code' } });
+        const extractedMemoryIds: string[] = [];
+        let autoExtract = false;
+        try { autoExtract = memoryStore.getAutoExtract(); } catch { /* memory settings must not fail an answer */ }
+        if (autoExtract && !controller.signal.aborted) {
+          const extractionModel = selectUtilityModel(
+            registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)),
+            executionModel.id,
+          );
+          if (extractionModel) {
+            const extractionSpan = trace.child('memory', 'memory.extract', { modelId: extractionModel.id, role: 'extractor' });
+            try {
+              runBudget.assertAvailable();
+              modelQuota.record(extractionModel.id);
+              const extractionInvocationId = observability.recordInvocationStart(runId, extractionModel.id);
+              try {
+                const extraction = await extractMemories({
+                  prompt: payload.prompt,
+                  answer: result.content,
+                  model: extractionModel,
+                  signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
+                });
+                const extractionCost = costOf(extraction.inputTokens, extraction.outputTokens, extractionModel);
+                observability.recordInvocationEnd(extractionInvocationId, extraction.inputTokens, extraction.outputTokens, extractionModel.costPer1kTokens, 'success');
+                totalInputTokens += extraction.inputTokens;
+                totalOutputTokens += extraction.outputTokens;
+                totalCost += extractionCost;
+                runBudget.add({ cost: extractionCost, tokens: extraction.inputTokens + extraction.outputTokens });
+                for (const memory of extraction.memories) {
+                  try {
+                    const scope = projectRoot ? 'project' : 'global';
+                    const saved = memoryStore.add({
+                      content: memory.content, kind: memory.kind, tags: memory.tags, source: 'agent',
+                      scope, projectRoot: scope === 'project' ? projectRoot : undefined,
+                    });
+                    extractedMemoryIds.push(saved.id);
+                  } catch { /* rejected content must not fail the answer */ }
+                }
+                extractionSpan.end({ inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, cost: extractionCost, attributes: { extracted: extractedMemoryIds.length, modelId: extractionModel.id } });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                observability.recordInvocationEnd(extractionInvocationId, 0, 0, extractionModel.costPer1kTokens, 'failure', message);
+                extractionSpan.end({ status: 'failed', error: message });
+              }
+            } catch (error) {
+              extractionSpan.end({ status: 'failed', error: error instanceof Error ? error.message : String(error) });
+            }
+          }
+        }
         if (metrics) {
           recordGrowth({ modelId: executionModel.id, taskType: decision.taskType, success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration, auditApproval: audit?.passed });
         }
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, metrics, verification, audit, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, metrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace('success');
         mainWindow?.webContents.send('session:completed', output);
         return output;
@@ -758,6 +843,14 @@ function registerHandlers(): void {
     });
   });
   handle('memory:remove', (_event, id: unknown) => typeof id === 'string' ? { success: memoryStore.remove(id) } : { success: false });
+  handle('memory:export', () => memoryStore.exportAll());
+  handle('memory:clear', () => ({ removed: memoryStore.clear() }));
+  handle('memory:settings', () => ({ autoExtract: memoryStore.getAutoExtract() }));
+  handle('memory:set-auto-extract', (_event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') throw new Error('自动提取设置无效');
+    memoryStore.setAutoExtract(enabled);
+    return { autoExtract: enabled };
+  });
   handle('metrics:task', (_event, taskId: string) => observability.getTaskMetrics(taskId));
   handle('metrics:recent', (_event, limit?: number) => observability.getRecent(limit));
   handle('metrics:dashboard', (_event, options?: { range?: '24h' | '7d' | '30d'; from?: string; to?: string }) => observability.getDashboardSnapshot(resolveMetricsRange(options)));
@@ -912,7 +1005,8 @@ async function bootstrap(): Promise<void> {
   }
   growth = new GrowthEngine({ storagePath: path.join(app.getPath('userData'), 'growth-profiles.json') });
   router = new AgentRouter(registry, growth);
-  const routingPolicyState = loadRoutingPolicy(path.join(app.getPath('userData'), 'routing-rules.json'));
+  routingRulesPath = path.join(app.getPath('userData'), 'routing-rules.json');
+  const routingPolicyState = loadRoutingPolicy(routingRulesPath);
   routingPolicy = new RoutingPolicyEngine(router, routingPolicyState.policy);
   for (const diagnostic of routingPolicyState.diagnostics) console.warn('[routing]', diagnostic);
   tty = new TtyManager({ defaultCwd: workspaceRoot });

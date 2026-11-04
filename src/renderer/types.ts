@@ -190,10 +190,18 @@ export interface AmdApi {
     get: (runId: string) => Promise<RunTrace | undefined>;
     recent: (sessionId: string, limit?: number) => Promise<TraceRun[]>;
   };
+  routingRules: {
+    get: () => Promise<{ path: string; text: string }>;
+    set: (text: string) => Promise<{ policy: unknown; diagnostics: string[] }>;
+  };
   memory: {
     list: (options?: { scope?: MemoryScope }) => Promise<MemoryRecord[]>;
     add: (input: { content: string; kind?: MemoryKind; scope?: MemoryScope; tags?: string[] }) => Promise<MemoryRecord>;
     remove: (id: string) => Promise<{ success: boolean }>;
+    exportAll: () => Promise<MemoryRecord[]>;
+    clear: () => Promise<{ removed: number }>;
+    settings: () => Promise<{ autoExtract: boolean }>;
+    setAutoExtract: (enabled: boolean) => Promise<{ autoExtract: boolean }>;
   };
   verifyAuditLog: () => Promise<{ valid: boolean; entries: number; error?: string }>;
   getGrowthProfiles: () => Promise<unknown[]>;

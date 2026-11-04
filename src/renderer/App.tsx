@@ -4,6 +4,7 @@ import { DetailsPanel } from './components/DetailsPanel';
 import { Settings } from './pages/Settings';
 import { Dashboard } from './components/Dashboard';
 import { MemoryPanel } from './components/MemoryPanel';
+import { RoutingPanel } from './components/RoutingPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { ProjectPanel } from './components/ProjectPanel';
 import { NewProjectDialog } from './components/NewProjectDialog';
@@ -13,7 +14,7 @@ import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
 import { ModelConfig, ProjectInfo, ProjectRecord, RunTrace, SessionMetrics } from './types';
 import { appendAssistantChunk, ChatAgentMessage, ChatMessage, historyForModel, preparePendingTurn, restoreMessages, settleAssistantTools, ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from './sessionMessages';
-import { BrainCircuit, ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, X } from 'lucide-react';
+import { BrainCircuit, ChevronDown, Copy, PanelLeft, PanelRight, Pencil, Sparkles, UsersRound, Waypoints, X } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
 import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
@@ -39,6 +40,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showMemory, setShowMemory] = useState(false);
+  const [showRouting, setShowRouting] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
@@ -380,7 +382,7 @@ export default function App() {
   // ⌘N / ⌘K (Ctrl on Windows/Linux) as shown in the sidebar; disabled while a dialog is open.
   const newSessionRef = useRef(newSession);
   newSessionRef.current = newSession;
-  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject || showMemory;
+  const modalOpen = showSettings || showDashboard || showTerminal || showNewProject || showMemory || showRouting;
   useEffect(() => {
     if (modalOpen) return;
     const onKey = (event: KeyboardEvent) => {
@@ -412,6 +414,7 @@ export default function App() {
         <div className="header-actions">
           <span className="status-pill header-status"><i className="live-dot" />本地加密</span>
           <button className="icon-button" title="长期记忆" aria-label="长期记忆" onClick={() => setShowMemory(true)}><BrainCircuit size={16} /></button>
+          <button className="icon-button" title="路由规则" aria-label="路由规则" onClick={() => setShowRouting(true)}><Waypoints size={16} /></button>
           <span className="panel-divider" />
           <button className="icon-button" title={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} aria-pressed={sidebarOpen} onClick={() => setSidebarOpen((open) => !open)}><PanelLeft size={16} /></button>
           <button className="icon-button" title={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-label={projectDrawerOpen ? '关闭右侧面板' : '打开右侧面板'} aria-pressed={projectDrawerOpen} onClick={() => setProjectDrawerOpen((open) => !open)}><PanelRight size={16} /></button>
@@ -462,6 +465,7 @@ export default function App() {
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
     {showMemory && <MemoryPanel onClose={() => setShowMemory(false)} hasProject={Boolean(currentProject)} />}
+    {showRouting && <RoutingPanel onClose={() => setShowRouting(false)} />}
     {showDashboard && <Dashboard onClose={() => setShowDashboard(false)} />}
     {showTerminal && <TerminalPanel onClose={() => setShowTerminal(false)} />}
     {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreated={handleProjectCreated} />}

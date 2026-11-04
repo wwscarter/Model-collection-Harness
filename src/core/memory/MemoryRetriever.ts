@@ -39,10 +39,14 @@ function score(record: MemoryRecord, queryTerms: string[], query: string, taskTy
 
 export function retrieveMemories(store: MemoryStore, input: MemoryRetrievalInput): MemoryRetrievalResult {
   const limit = Math.min(20, Math.max(1, input.limit ?? 6));
+  const scopeHits = (scopes: Array<'global' | 'project' | 'session'>, extra: { projectRoot?: string; sessionId?: string } = {}) => {
+    const hits = store.search(input.query, { scopes, ...extra });
+    return hits.length ? hits : store.list({ scopes, ...extra });
+  };
   const records = [
-    ...store.list({ scopes: ['global'] }),
-    ...(input.projectRoot ? store.list({ scopes: ['project'], projectRoot: input.projectRoot }) : []),
-    ...store.list({ scopes: ['session'], sessionId: input.sessionId }),
+    ...scopeHits(['global']),
+    ...(input.projectRoot ? scopeHits(['project'], { projectRoot: input.projectRoot }) : []),
+    ...scopeHits(['session'], { sessionId: input.sessionId }),
   ];
   const queryTerms = terms(input.query);
   const ranked = records

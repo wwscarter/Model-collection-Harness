@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../../src/core/memory/MemoryStore';
 import { retrieveMemories } from '../../src/core/memory/MemoryRetriever';
+import { extractMemories } from '../../src/core/memory/MemoryExtractor';
+import type { ModelConfig } from '../../src/core/models/ModelConfig';
 
 describe('long-term memory', () => {
   it('stores global/project/session memories and retrieves relevant ones', () => {
@@ -32,6 +34,36 @@ describe('long-term memory', () => {
     expect(store.list()).toHaveLength(1);
     expect(store.remove(record.id)).toBe(true);
     expect(store.list()).toHaveLength(0);
+    store.close();
+  });
+
+  it('searches with FTS and supports export/clear', () => {
+    const store = new MemoryStore(':memory:');
+    store.add({ content: '项目使用 pnpm 管理依赖', kind: 'decision', scope: 'project', projectRoot: '/p' });
+    store.add({ content: '用户喜欢简洁的回答', kind: 'preference', scope: 'global' });
+    expect(store.search('pnpm', { scopes: ['project'], projectRoot: '/p' })).toHaveLength(1);
+    expect(store.exportAll()).toHaveLength(2);
+    expect(store.clear()).toBe(2);
+    expect(store.list()).toHaveLength(0);
+    store.close();
+  });
+
+  it('persists the auto-extract setting and parses extracted memories', async () => {
+    const store = new MemoryStore(':memory:');
+    expect(store.getAutoExtract()).toBe(false);
+    store.setAutoExtract(true);
+    expect(store.getAutoExtract()).toBe(true);
+    const model: ModelConfig = {
+      id: 'm', provider: 'deepseek', name: 'm', apiKey: 'test', modelId: 'm', costPer1kTokens: { input: 0, output: 0 },
+      capabilities: [], maxTokens: 1000, rateLimit: { requestsPerMinute: 1, tokensPerDay: 1000 }, enabled: true, priority: 0,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const result = await extractMemories({
+      prompt: '以后都用 pnpm', answer: '好的，后续使用 pnpm。', model,
+      provider: { invoke: async () => ({ content: '[{"content":"项目使用 pnpm","kind":"decision","tags":["pnpm"]}]', inputTokens: 10, outputTokens: 5, modelId: 'm' }) },
+    });
+    expect(result.memories).toEqual([{ content: '项目使用 pnpm', kind: 'decision', tags: ['pnpm'] }]);
+    expect(result.inputTokens).toBe(10);
     store.close();
   });
 

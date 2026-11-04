@@ -77,7 +77,21 @@ export class MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope, project_root);
       CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
       CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC);
+      CREATE TABLE IF NOT EXISTS memory_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, tags, content='memories', content_rowid='rowid');
+      CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES ('delete', old.rowid, old.content, old.tags);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES ('delete', old.rowid, old.content, old.tags);
+        INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
+      END;
     `);
+    try { this.db.exec("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')"); } catch { /* FTS rebuild is best effort */ }
   }
 
   add(input: MemoryInput): MemoryRecord {
@@ -126,6 +140,45 @@ export class MemoryStore {
     const limit = Math.min(2_000, Math.max(1, Math.floor(filter.limit ?? 500)));
     const rows = this.db.prepare(`SELECT * FROM memories${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit) as MemoryRow[];
     return rows.map(toRecord).filter((record) => !record.expiresAt || record.expiresAt.getTime() > Date.now());
+  }
+
+  /** FTS5 candidate search; filters are applied after the ranked query. */
+  search(query: string, filter: MemoryFilter = {}): MemoryRecord[] {
+    const trimmed = query.trim();
+    if (!trimmed) return this.list(filter);
+    const terms = trimmed.split(/\s+/).filter(Boolean).slice(0, 12).map((term) => `"${term.replace(/"/g, '""')}"`);
+    if (!terms.length) return this.list(filter);
+    try {
+      const rows = this.db.prepare(
+        `SELECT m.* FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE memories_fts MATCH ? ORDER BY rank LIMIT 200`,
+      ).all(terms.join(' OR ')) as MemoryRow[];
+      const scopes = new Set(filter.scopes ?? ['global', 'project', 'session']);
+      return rows.map(toRecord).filter((record) => {
+        if (!scopes.has(record.scope)) return false;
+        if (filter.projectRoot && record.scope === 'project' && record.projectRoot !== filter.projectRoot) return false;
+        if (filter.projectRoot && record.scope === 'session') return false;
+        if (filter.sessionId && record.scope === 'session' && record.sessionId !== filter.sessionId) return false;
+        if (filter.kind && record.kind !== filter.kind) return false;
+        return !record.expiresAt || record.expiresAt.getTime() > Date.now();
+      }).slice(0, Math.min(200, Math.max(1, filter.limit ?? 50)));
+    } catch {
+      return this.list(filter).filter((record) => record.content.toLowerCase().includes(trimmed.toLowerCase())).slice(0, Math.min(200, Math.max(1, filter.limit ?? 50)));
+    }
+  }
+
+  getAutoExtract(): boolean {
+    const row = this.db.prepare('SELECT value FROM memory_settings WHERE key = ?').get('auto_extract') as { value: string } | undefined;
+    return row?.value === '1';
+  }
+
+  setAutoExtract(enabled: boolean): void {
+    this.db.prepare('INSERT INTO memory_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('auto_extract', enabled ? '1' : '0');
+  }
+
+  exportAll(): MemoryRecord[] { return this.list({ limit: 2_000 }); }
+
+  clear(): number {
+    return this.db.transaction(() => this.db.prepare('DELETE FROM memories').run().changes)();
   }
 
   remove(id: string): boolean {

@@ -52,6 +52,18 @@ describe('RoutingPolicyEngine', () => {
     expect(decision.ruleId).toBeUndefined();
   });
 
+  it('exposes parallel collaborators and accepts the escalate strategy', async () => {
+    const models = [model('primary'), model('analyst'), model('strong')];
+    const policy: RoutingPolicy = {
+      version: 1,
+      rules: [{ id: 'escalate', enabled: true, priority: 5, when: { taskTypes: ['code'] }, then: { primaryModelId: 'primary', strategy: 'escalate', collaboratorModelIds: ['analyst'], fallbackModelIds: ['strong'] } }],
+      defaults: { strategy: 'single' },
+    };
+    const decision = await new RoutingPolicyEngine(routerFor(models), policy).routeTask({ id: 't', type: 'code', description: 'fix', complexity: 'medium' }, models);
+    expect(decision).toMatchObject({ strategy: 'escalate', collaboratorModelIds: ['analyst'] });
+    expect(decision.fallbackModels).toContain('strong');
+  });
+
   it('validates on-disk rules and ignores malformed entries', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-routing-'));
     const file = path.join(directory, 'rules.json');
