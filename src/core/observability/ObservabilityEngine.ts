@@ -204,6 +204,12 @@ export class ObservabilityEngine implements TraceStore {
     return rows.map(toTraceRun);
   }
 
+  listRecentRuns(limit = 50): TraceRunRecord[] {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 50;
+    const rows = this.db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT ?').all(safeLimit) as TraceRunRow[];
+    return rows.map(toTraceRun);
+  }
+
   recordAuditResult(input: { taskId: string; modelId?: string; approved: boolean; score?: number; createdAt?: Date }): AuditMetric {
     const result: AuditMetric = { id: randomUUID(), taskId: input.taskId, modelId: input.modelId, approved: input.approved, score: input.score, createdAt: input.createdAt ?? new Date() };
     this.db.prepare('INSERT INTO audit_results (id, task_id, model_id, approved, score, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(result.id, result.taskId, result.modelId ?? null, result.approved ? 1 : 0, result.score ?? null, result.createdAt.toISOString());

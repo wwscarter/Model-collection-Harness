@@ -183,6 +183,10 @@ export class TraceRecorder {
     return this.store.listTraceRuns(sessionId, limit);
   }
 
+  listRecentRuns(limit = 50): TraceRunRecord[] {
+    return this.store.listRecentRuns(limit);
+  }
+
   private emit(event: TraceEvent): void {
     try { this.onEvent?.(event); } catch { /* tracing must never fail the run */ }
   }
@@ -204,5 +208,8 @@ export class InMemoryTraceStore implements TraceStore {
   }
   listTraceRuns(sessionId: string, limit = 20): TraceRunRecord[] {
     return [...this.runs.values()].filter((run) => run.sessionId === sessionId).sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit);
+  }
+  listRecentRuns(limit = 50): TraceRunRecord[] {
+    return [...this.runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit);
   }
 }

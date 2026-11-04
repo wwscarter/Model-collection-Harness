@@ -169,6 +169,7 @@ export interface AmdApi {
     clear: () => Promise<{ success: boolean }>;
     tree: (options?: { path?: string; maxDepth?: number }) => Promise<unknown>;
     context: (options?: { paths?: string[]; maxTokens?: number }) => Promise<unknown>;
+    file: (path: string) => Promise<{ content: string; truncated: boolean; size: number }>;
   };
   projects: {
     list: () => Promise<ProjectRecord[]>;
@@ -190,9 +191,14 @@ export interface AmdApi {
   trace: {
     get: (runId: string) => Promise<RunTrace | undefined>;
     recent: (sessionId: string, limit?: number) => Promise<TraceRun[]>;
+    list: (limit?: number) => Promise<TraceRun[]>;
     settings: () => Promise<{ maxAgeDays: number; maxRuns: number }>;
     setSettings: (options: { maxAgeDays?: number; maxRuns?: number }) => Promise<{ maxAgeDays: number; maxRuns: number }>;
     clear: () => Promise<{ runs: number; spans: number }>;
+  };
+  preferences: {
+    get: () => Promise<{ approvalMode: 'ask' | 'auto' | 'full' }>;
+    set: (input: { approvalMode: 'ask' | 'auto' | 'full' }) => Promise<{ approvalMode: 'ask' | 'auto' | 'full' }>;
   };
   routingRules: {
     get: () => Promise<{ path: string; text: string }>;
@@ -235,7 +241,7 @@ export interface AmdApi {
     get: (id: string) => Promise<Record<string, unknown> | undefined>;
     save: (session: unknown) => Promise<Record<string, unknown>>;
     delete: (id: string) => Promise<{ success: boolean }>;
-    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
+    execute: (input: { sessionId: string; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; pinnedModelId?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
     cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
   agent: {

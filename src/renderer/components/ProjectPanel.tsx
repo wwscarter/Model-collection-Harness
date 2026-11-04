@@ -12,12 +12,13 @@ interface ProjectPanelProps {
   reloadKey: number;
   onChangeDirectory: () => void;
   onClear: () => void;
+  onPreview?: (path: string) => void;
 }
 
 const CODE_EXTENSIONS = /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|kt|rb|php|swift|c|cc|cpp|h|hpp|cs|vue|svelte|sh|sql|css|scss|html)$/i;
 const TEXT_EXTENSIONS = /\.(md|txt|json|ya?ml|toml|ini|conf|lock|xml|csv|log|env\.example)$/i;
 
-export function ProjectPanel({ project, reloadKey, onChangeDirectory, onClear }: ProjectPanelProps) {
+export function ProjectPanel({ project, reloadKey, onChangeDirectory, onClear, onPreview }: ProjectPanelProps) {
   const [tree, setTree] = useState<ProjectNode>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -69,12 +70,12 @@ export function ProjectPanel({ project, reloadKey, onChangeDirectory, onClear }:
 
     <div className="inspector-tree-heading"><span>工作区文件</span><small>{loading ? '读取中' : fileCount === undefined ? '—' : `${fileCount} 个可见文件`}</small></div>
     {error ? <div className="inspector-tree-error" role="alert"><strong>暂时无法读取目录</strong><span>{error}</span><button type="button" onClick={() => setRefreshCount((count) => count + 1)}><RefreshCw size={12} />重新读取</button></div> : <div className="inspector-file-tree" role="tree" aria-label="项目文件" aria-busy={loading}>
-      {loading ? <div className="inspector-tree-loading" role="status" aria-label="正在读取目录">{[74, 90, 58, 80, 64, 86].map((width, index) => <div key={index}><span /><i style={{ width: `${width}%` }} /></div>)}</div> : tree?.children?.length ? tree.children.map((child) => <TreeNode key={child.path} node={child} depth={0} markers={markers} />) : <div className="inspector-tree-empty"><FolderOpen size={20} strokeWidth={1.4} /><strong>这里还没有可见文件</strong><span>目录为空，或文件已被忽略规则排除。</span></div>}
+      {loading ? <div className="inspector-tree-loading" role="status" aria-label="正在读取目录">{[74, 90, 58, 80, 64, 86].map((width, index) => <div key={index}><span /><i style={{ width: `${width}%` }} /></div>)}</div> : tree?.children?.length ? tree.children.map((child) => <TreeNode key={child.path} node={child} depth={0} markers={markers} onPreview={onPreview} />) : <div className="inspector-tree-empty"><FolderOpen size={20} strokeWidth={1.4} /><strong>这里还没有可见文件</strong><span>目录为空，或文件已被忽略规则排除。</span></div>}
     </div>}
   </div>;
 }
 
-function TreeNode({ node, depth, markers }: { node: ProjectNode; depth: number; markers: Set<string> }) {
+function TreeNode({ node, depth, markers, onPreview }: { node: ProjectNode; depth: number; markers: Set<string>; onPreview?: (path: string) => void }) {
   const [expanded, setExpanded] = useState(depth < 1);
   const isDirectory = node.kind === 'directory';
   const isMarker = depth === 0 && markers.has(node.name);
@@ -88,8 +89,8 @@ function TreeNode({ node, depth, markers }: { node: ProjectNode; depth: number; 
   </>;
 
   return <div className="inspector-tree-node" role="treeitem" aria-expanded={isDirectory ? expanded : undefined}>
-    {isDirectory ? <button type="button" className={`inspector-tree-row is-directory ${isMarker ? 'is-marker' : ''}`} style={{ paddingLeft: 4 + depth * 13 }} title={node.path} onClick={() => setExpanded((value) => !value)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); setExpanded(event.key === 'ArrowRight'); } }}>{rowContent}</button> : <div className={`inspector-tree-row ${isMarker ? 'is-marker' : ''}`} style={{ paddingLeft: 4 + depth * 13 }} title={node.path}>{rowContent}</div>}
-    {expanded && node.children && <div role="group">{node.children.map((child) => <TreeNode key={child.path} node={child} depth={depth + 1} markers={markers} />)}</div>}
+    {isDirectory ? <button type="button" className={`inspector-tree-row is-directory ${isMarker ? 'is-marker' : ''}`} style={{ paddingLeft: 4 + depth * 13 }} title={node.path} onClick={() => setExpanded((value) => !value)} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); setExpanded(event.key === 'ArrowRight'); } }}>{rowContent}</button> : <button type="button" className={`inspector-tree-row ${isMarker ? 'is-marker' : ''}`} style={{ paddingLeft: 4 + depth * 13 }} title={node.path} onClick={() => onPreview?.(node.path)}>{rowContent}</button>}
+    {expanded && node.children && <div role="group">{node.children.map((child) => <TreeNode key={child.path} node={child} depth={depth + 1} markers={markers} onPreview={onPreview} />)}</div>}
   </div>;
 }
 

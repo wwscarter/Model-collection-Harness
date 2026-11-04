@@ -22,6 +22,10 @@ export class ProjectManager {
     return this.context?.buildContext(relativePaths, maxTokens);
   }
 
+  readFile(relativePath: string): { content: string; truncated: boolean; size: number } | undefined {
+    return this.context?.readTextFile(relativePath);
+  }
+
   /** Non-blocking variant used by the session execution path. */
   async getContextAsync(relativePaths?: string[], maxTokens?: number): Promise<ProjectContextResult | undefined> {
     return this.context?.buildContextAsync(relativePaths, maxTokens);

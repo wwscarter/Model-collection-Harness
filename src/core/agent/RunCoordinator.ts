@@ -37,6 +37,8 @@ export interface RunRequest {
   complexity?: 'low' | 'medium' | 'high';
   stream?: boolean;
   collaboratorModelIds?: string[];
+  /** When set, skip routing/orchestration and run this exact model. */
+  pinnedModelId?: string;
   contextPaths?: string[];
   includeProjectContext?: boolean;
   contextMaxTokens?: number;
@@ -238,12 +240,19 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId } });
       if (controller.signal.aborted) throw new Error('任务已取消');
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
-      let model = registry.getModel(decision.modelId);
+      const pinnedCandidate = payload.pinnedModelId ? registry.getModel(payload.pinnedModelId) : undefined;
+      const pinned = pinnedCandidate && pinnedCandidate.enabled && hasUsableCredentials(pinnedCandidate) && modelQuota.isAvailable(pinnedCandidate) ? pinnedCandidate : undefined;
+      let model = pinned ?? registry.getModel(decision.modelId);
       if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
+      if (pinned) {
+        collaboratorModels.splice(0, collaboratorModels.length);
+        decision = { ...decision, modelId: pinned.id, strategy: 'single', reason: 'Session model override', alternativeModels: [], fallbackModels: [], collaboratorModelIds: [] };
+        routeSpan.setAttributes({ modelId: pinned.id, strategy: 'single', reason: decision.reason, pinned: true });
+      }
       let orchestration: OrchestrationPlan | undefined;
       let orchestrated = false;
       const plannerModels = registry.getAllModels().filter((candidate) => modelQuota.isAvailable(candidate));
-      const orchestrator = selectOrchestratorModel(plannerModels);
+      const orchestrator = pinned ? undefined : selectOrchestratorModel(plannerModels);
       if (orchestrator) {
         const planSpan = trace.child('plan', 'orchestrator-plan', { modelId: orchestrator.id, role: 'orchestrator' });
         const planModelSpan = planSpan.child('model', 'orchestrator-plan-model', { modelId: orchestrator.id, role: 'orchestrator' });
@@ -386,7 +395,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       // High-complexity tasks can use a second model for planning, then pass the
       // verified plan to the execution model. Ordinary prompts (including "你好")
       // remain a single call so they do not incur an unnecessary second request.
-      if (!orchestrated && decision.complexity === 'high') {
+      if (!pinned && !orchestrated && decision.complexity === 'high') {
         const planningModel = selectPlanningModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id);
         if (planningModel) {
           planningModelId = planningModel.id;
@@ -469,7 +478,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               agentSpan.end({ inputTokens: agentResult.inputTokens, outputTokens: agentResult.outputTokens, cost: agentCost });
               agentMessages[index].status = 'completed';
               agentMessages[index].content = agentResult.content;
-              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'completed', content: agentResult.content });
+              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'completed', content: agentResult.content });
               return { modelName: agentModel.name, content: agentResult.content };
             } catch (agentError) {
               const message = agentError instanceof Error ? agentError.message : String(agentError);
@@ -478,7 +487,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               agentMessages[index].status = 'failed';
               agentMessages[index].content = agentContent;
               Object.assign(agentMessages[index], { error: message });
-              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'failed', content: agentContent, error: message });
+              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'failed', content: agentContent, error: message });
               throw agentError;
             }
           });
@@ -673,7 +682,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace('success');
         mainWindow?.webContents.send('session:completed', output);
         return output;

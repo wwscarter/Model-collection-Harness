@@ -98,6 +98,28 @@ describe('RunCoordinator', () => {
     } finally { cleanup(); }
   });
 
+  it('runs the pinned session model without DeepSeek orchestration', async () => {
+    const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', capabilities: [{ type: 'reasoning', score: 95 }] });
+    const reviewer = model('reviewer', { name: 'Reviewer', capabilities: [{ type: 'code', score: 90 }] });
+    let calls = 0;
+    const { deps, traceStore, cleanup } = makeDeps([deepseek, reviewer], async (current, _prompt, _max, onDelta) => {
+      calls += 1;
+      onDelta('pinned answer');
+      return { content: 'pinned answer', inputTokens: 10, outputTokens: 5, modelId: current.id };
+    }, () => { throw new Error('orchestrator must not run for a pinned model'); });
+    try {
+      const output = await executeRun({
+        sessionId: 'session-1', taskId: 'session-1', runId: 'run-pinned', assistantMessageId: 'a-pinned',
+        prompt: 'just answer with the selected model', pinnedModelId: 'reviewer', includeProjectContext: false, enableTools: false, history: [],
+      }, deps, () => undefined);
+      expect(output.output).toBe('pinned answer');
+      expect((output.modelUsed as { id: string }).id).toBe('reviewer');
+      expect(output.orchestration).toBeUndefined();
+      expect(calls).toBe(1);
+      expect(traceStore.getTrace('run-pinned')?.spans.some((span) => span.name === 'orchestrator-plan')).toBe(false);
+    } finally { cleanup(); }
+  });
+
   it('falls back to the next model before any output', async () => {
     const models = [model('primary'), model('fallback')];
     let calls = 0;

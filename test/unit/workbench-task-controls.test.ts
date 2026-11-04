@@ -45,7 +45,7 @@ afterEach(async () => {
 });
 
 describe('workbench task controls', () => {
-  it.each(['任务已取消', '模型连接已中断'])('saves streamed text and unfinished tools when a turn ends: %s', async (reason) => {
+  it.each(['任务已取消', '模型连接已中断'])('saves final text without transient tool cards when a turn ends: %s', async (reason) => {
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="执行任务"]')!.click(); });
     expect(execute).toHaveBeenCalledOnce();
     const request = execute.mock.calls[0][0];
@@ -63,10 +63,8 @@ describe('workbench task controls', () => {
     if (reason === '任务已取消') expect(cancel).toHaveBeenCalledWith('s1');
     const saved = save.mock.calls.at(-1)![0];
     expect(saved.output).toBe('已读取项目说明。');
-    expect(saved.messages.at(-1)).toMatchObject({
-      content: '已读取项目说明。',
-      tools: [{ id: 't1', toolName: 'read', status: 'failed', label: 'README.md' }],
-    });
+    expect(saved.messages.at(-1)).toMatchObject({ content: '已读取项目说明。' });
+    expect(saved.messages.at(-1)).not.toHaveProperty('tools');
     expect(container.textContent).toContain(reason);
     expect(container.querySelector('[aria-label="停止任务"]')).toBeNull();
   });

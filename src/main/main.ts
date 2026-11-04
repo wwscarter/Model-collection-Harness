@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, session, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, session, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,9 @@ let codeAuditor: CodeAuditor;
 let traceRecorder: TraceRecorder;
 let memoryStore: MemoryStore;
 let workspaceRoot = '';
+let preferencesPath = '';
+type ApprovalMode = 'ask' | 'auto' | 'full';
+let approvalMode: ApprovalMode = 'ask';
 const ttyUnsubscribers = new Map<string, () => void>();
 const commandUnsubscribers = new Map<string, () => void>();
 /** One controller per running task so the renderer can cancel it. */
@@ -83,9 +86,30 @@ function recordGrowth(feedback: RoutingFeedback): void {
 
 const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'process_list', 'remember', 'recall']);
 
-/** Read operations run directly. Mutations and commands use the existing per-call confirmation. */
+function isDangerousCommand(command: string): boolean {
+  return /(^|[;&|]\s*)(sudo|su|shutdown|reboot|diskutil|mkfs|dd\s+if=|rm\s+-rf\s+\/|chmod\s+-R\s+777|:?\(\)\s*\{)/i.test(command)
+    || /(curl|wget)[^|]*\|\s*(ba|z|da)?sh/i.test(command);
+}
+
+function loadApprovalMode(file: string): ApprovalMode {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as { approvalMode?: unknown };
+    return value.approvalMode === 'auto' || value.approvalMode === 'full' ? value.approvalMode : 'ask';
+  } catch { return 'ask'; }
+}
+
+function savePreferences(): void {
+  try {
+    fs.mkdirSync(path.dirname(preferencesPath), { recursive: true });
+    fs.writeFileSync(preferencesPath, JSON.stringify({ approvalMode }, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  } catch (error) { console.error('Failed to save preferences', error); }
+}
+
+/** Read operations run directly. Mutations follow the user-selected approval mode. */
 async function approveToolCall({ toolName, input, projectRoot }: { toolName: string; input: Record<string, unknown>; projectRoot?: string }): Promise<string | undefined> {
   if (SAFE_TOOLS.has(toolName)) return undefined;
+  const dangerous = toolName === 'run_command' && isDangerousCommand(String(input.command ?? ''));
+  if (approvalMode === 'full' || (approvalMode === 'auto' && !dangerous)) return undefined;
   const labels: Record<string, string> = { write: '写入项目文件', edit: '编辑项目文件', run_command: input.background ? '启动后台服务' : '执行项目命令', stop_process: '停止后台服务' };
   const preview = toolName === 'run_command' ? String(input.command ?? '') : JSON.stringify(input, null, 2).slice(0, 1600);
   const detail = `${projectRoot ? `项目目录：${displayPath(projectRoot)}\n\n` : ''}${preview}${toolName === 'run_command' ? '\n\n命令以当前系统用户权限运行。' : ''}`;
@@ -216,6 +240,7 @@ function handle<T extends unknown[]>(channel: string, listener: (event: IpcMainI
 
 /** The renderer cannot approve its own command; the main process shows the native dialog. */
 async function confirmCommand(command: string, cwd: string): Promise<boolean> {
+  if (approvalMode === 'full' || (approvalMode === 'auto' && !isDangerousCommand(command))) return true;
   const options = {
     type: 'warning' as const,
     buttons: ['取消', '执行命令'],
@@ -368,6 +393,7 @@ function registerHandlers(): void {
   });
   handle('trace:get', (_event, runId: unknown) => typeof runId === 'string' ? traceRecorder.getTrace(runId) : undefined);
   handle('trace:recent', (_event, sessionId: unknown, limit?: number) => typeof sessionId === 'string' ? traceRecorder.listRecent(sessionId, limit) : []);
+  handle('trace:list', (_event, limit?: number) => traceRecorder.listRecentRuns(limit));
   handle('trace:settings:get', () => observability.getTraceRetention());
   handle('trace:settings:set', (_event, options: unknown) => {
     if (!options || typeof options !== 'object') throw new Error('Trace 保留设置无效');
@@ -378,6 +404,15 @@ function registerHandlers(): void {
     });
   });
   handle('trace:clear', () => observability.clearTraces());
+  handle('preferences:get', () => ({ approvalMode }));
+  handle('preferences:set', (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('设置无效');
+    const value = input as { approvalMode?: unknown };
+    if (value.approvalMode !== 'ask' && value.approvalMode !== 'auto' && value.approvalMode !== 'full') throw new Error('权限模式无效');
+    approvalMode = value.approvalMode;
+    savePreferences();
+    return { approvalMode };
+  });
   handle('memory:list', (_event, options?: { scope?: 'global' | 'project' | 'session' } | null) => {
     const projectRoot = projects.getRoot();
     const scope = options?.scope;
@@ -443,6 +478,12 @@ function registerHandlers(): void {
   handle('project:clear', () => { projects.clear(); return { success: true }; });
   handle('project:tree', (_event, options?: { path?: string; maxDepth?: number }) => projects.getTree(options?.path, options?.maxDepth));
   handle('project:context', async (_event, options?: { paths?: string[]; maxTokens?: number }) => projects.getContextAsync(options?.paths, options?.maxTokens));
+  handle('project:file', (_event, relativePath: unknown) => {
+    if (typeof relativePath !== 'string' || !relativePath || relativePath.length > 1_000) throw new Error('文件路径无效');
+    const file = projects.readFile(relativePath);
+    if (!file) throw new Error('项目尚未打开或文件不存在');
+    return file;
+  });
   handle('projects:list', () => {
     const activeRoot = projects.getRoot();
     return projectStorage.list().map((project) => ({ ...project, displayRoot: displayPath(project.root), active: project.root === activeRoot }));
@@ -534,7 +575,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 1000,
     minHeight: 680,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF',
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 21 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.cjs'),
@@ -546,6 +587,7 @@ function createWindow(): void {
       spellcheck: false,
     }
   });
+  nativeTheme.on('updated', () => { mainWindow?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF'); });
   if (process.env.ELECTRON_RENDERER_URL) mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   else mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -572,6 +614,8 @@ async function bootstrap(): Promise<void> {
   }
   growth = new GrowthEngine({ storagePath: path.join(app.getPath('userData'), 'growth-profiles.json') });
   router = new AgentRouter(registry, growth);
+  preferencesPath = path.join(app.getPath('userData'), 'preferences.json');
+  approvalMode = loadApprovalMode(preferencesPath);
   routingRulesPath = path.join(app.getPath('userData'), 'routing-rules.json');
   routingHistoryDir = path.join(app.getPath('userData'), 'routing-rules.history');
   fs.mkdirSync(routingHistoryDir, { recursive: true });
