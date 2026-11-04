@@ -42,11 +42,11 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
   return (
     <aside className="sidebar">
       <div className="sidebar-brandbar">
+        <div className="sidebar-wordmark"><Sparkles size={14} strokeWidth={1.8} /><span>NewAI</span></div>
         <div className="sidebar-brand-actions">
           <button className="sidebar-brand-button" title="会话完成提醒" aria-label="会话完成提醒" onClick={() => onClearCompletion?.()}><Bell size={15} strokeWidth={1.7} />{completionNotice && <i className="brand-notice-dot" />}</button>
           <button className="sidebar-brand-button" title="搜索会话" aria-label="搜索会话" aria-expanded={searchOpen} onClick={() => searchOpen ? closeSearch() : openSearch()}><Search size={15} strokeWidth={1.7} /></button>
         </div>
-        <div className="sidebar-wordmark"><Sparkles size={14} strokeWidth={1.8} /><span>NewAI</span></div>
       </div>
       {searchOpen && <div className="sidebar-search-inline"><Search size={13} /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话" aria-label="搜索会话" /><button className="sidebar-search-close" aria-label="关闭搜索" onClick={closeSearch}><X size={12} /></button></div>}
       <div className="sidebar-actions">
