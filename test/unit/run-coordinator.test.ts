@@ -26,7 +26,7 @@ function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
   };
 }
 
-function makeDeps(models: ModelConfig[], run: RunDependencies['invokeStreamed']): { deps: RunDependencies; traceStore: InMemoryTraceStore; cleanup: () => void } {
+function makeDeps(models: ModelConfig[], run: RunDependencies['invokeStreamed'], createProvider?: RunDependencies['createProvider']): { deps: RunDependencies; traceStore: InMemoryTraceStore; cleanup: () => void } {
   const registry = new ModelRegistry(undefined, { initializePresets: false, persist: false });
   for (const item of models) registry.registerModel(item);
   const observability = new ObservabilityEngine();
@@ -45,7 +45,7 @@ function makeDeps(models: ModelConfig[], run: RunDependencies['invokeStreamed'])
     models: registry, routing, quota: new ModelQuota(observability), traces: traceRecorder,
     observability, growth, codeAuditor, auditLog, memory, summaries: sessions,
     projectContext: { getRoot: () => undefined, getContextAsync: async () => undefined },
-    controller: new AbortController(), invokeStreamed: run,
+    controller: new AbortController(), invokeStreamed: run, ...(createProvider ? { createProvider } : {}),
   };
   return { deps, traceStore, cleanup: () => { observability.close(); memory.close(); sessions.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
@@ -67,6 +67,34 @@ describe('RunCoordinator', () => {
       const trace = traceStore.getTrace('run-1');
       expect(trace?.run.status).toBe('success');
       expect(trace?.spans.some((span) => span.kind === 'model')).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('lets DeepSeek plan and delegate to a subagent before synthesizing', async () => {
+    const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', capabilities: [{ type: 'reasoning', score: 95 }] });
+    const reviewer = model('reviewer', { name: 'Reviewer', capabilities: [{ type: 'reasoning', score: 90 }, { type: 'code', score: 90 }] });
+    const prompts: Array<{ model: string; prompt: string }> = [];
+    const plan = JSON.stringify({
+      mode: 'delegate', taskType: 'code', complexity: 'high', plan: 'Review the API, then rewrite the handler.',
+      subagents: [{ modelId: 'reviewer', role: 'review', instruction: 'Find correctness and security issues in src/api.ts.' }], verify: false,
+    });
+    const { deps, traceStore, cleanup } = makeDeps([deepseek, reviewer], async (current, prompt, _max, onDelta) => {
+      prompts.push({ model: current.id, prompt });
+      const content = current.id === 'reviewer' ? 'reviewer report: handlers need validation' : 'final synthesized answer';
+      onDelta(content);
+      return { content, inputTokens: 10, outputTokens: 5, modelId: current.id };
+    }, () => ({ modelId: 'deepseek-chat', invoke: async () => ({ content: plan, inputTokens: 20, outputTokens: 10, modelId: 'deepseek-chat' }) }));
+    try {
+      const output = await executeRun({
+        sessionId: 'session-1', taskId: 'session-1', runId: 'run-3', assistantMessageId: 'a-3',
+        prompt: 'review and fix the API', includeProjectContext: false, enableTools: false, history: [],
+      }, deps, () => undefined);
+      expect(output.output).toBe('final synthesized answer');
+      expect(output.orchestration).toMatchObject({ orchestratorModelId: 'deepseek-chat', mode: 'delegate' });
+      expect(prompts.map((entry) => entry.model)).toEqual(['reviewer', 'deepseek-chat']);
+      expect(prompts[0].prompt).toContain('Find correctness and security issues');
+      expect(prompts[1].prompt).toContain('reviewer report: handlers need validation');
+      expect(traceStore.getTrace('run-3')?.spans.some((span) => span.name === 'orchestrator-plan')).toBe(true);
     } finally { cleanup(); }
   });
 

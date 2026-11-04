@@ -171,7 +171,7 @@ export default function App() {
       }));
     });
     const unsubscribeModel = window.amd?.on('session:model-switched', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; modelId?: string; role?: 'routing' | 'planning' | 'execution'; planningModelId?: string; confidence?: number };
+      const event = payload as { sessionId?: string; taskId?: string; modelId?: string; role?: 'routing' | 'planning' | 'execution' | 'orchestrator'; planningModelId?: string; confidence?: number };
       const id = event.sessionId || event.taskId;
       if (!id || !event.modelId) return;
       const timing = runTimingRef.current;
@@ -179,6 +179,7 @@ export default function App() {
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         if (event.role === 'routing') return { ...session, routeConfidence: event.confidence };
+        if (event.role === 'orchestrator') return { ...session, modelUsed: event.modelId };
         if (event.role === 'planning') return { ...session, messages: updateLatestAssistantAttribution(session.messages, { planningModelId: event.modelId }) };
         if (event.role === 'execution') return {
           ...session,

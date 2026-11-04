@@ -23,6 +23,7 @@ import { assembleContext, type ContextToolDigest, type ContextTurn } from '@core
 import { summarizeContext } from '@core/context/SummaryService';
 import { createProvider as createProviderImpl, type ModelProvider, type ModelResponse } from '@core/providers/ModelProvider';
 import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel, selectUtilityModel } from '@core/routing/ModelCollaboration';
+import { buildOrchestratedFinalPrompt, buildOrchestratorPrompt, buildSubagentInstruction, parseOrchestratorPlan, selectOrchestratorModel, type OrchestrationPlan } from '@core/routing/Orchestrator';
 import { buildRevisionPrompt, hasCode, shouldRevise, verifyCodeAnswer } from './VerificationService';
 import type { ToolEvent } from './AgentRuntime';
 
@@ -229,7 +230,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       // Classify the user's request, not the project snapshot: a large context
       // used to make almost every project conversation look "high complexity".
       const routeSpan = trace.child('route', 'route', { requestedTaskType: payload.taskType, requestedComplexity: payload.complexity });
-      const decision = await routingPolicy.routeTask(
+      let decision = await routingPolicy.routeTask(
         { id: runId, type: (payload.taskType || 'general') as any, description: payload.prompt, complexity: payload.complexity },
         registry.getAllModels(),
         { isAvailable: (modelId) => { const candidate = registry.getModel(modelId); return Boolean(candidate && modelQuota.isAvailable(candidate)); } },
@@ -237,8 +238,74 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId } });
       if (controller.signal.aborted) throw new Error('任务已取消');
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
-      const model = registry.getModel(decision.modelId);
+      let model = registry.getModel(decision.modelId);
       if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
+      let orchestration: OrchestrationPlan | undefined;
+      let orchestrated = false;
+      const plannerModels = registry.getAllModels().filter((candidate) => modelQuota.isAvailable(candidate));
+      const orchestrator = selectOrchestratorModel(plannerModels);
+      if (orchestrator) {
+        const planSpan = trace.child('plan', 'orchestrator-plan', { modelId: orchestrator.id, role: 'orchestrator' });
+        const planModelSpan = planSpan.child('model', 'orchestrator-plan-model', { modelId: orchestrator.id, role: 'orchestrator' });
+        try {
+          runBudget.assertAvailable();
+          modelQuota.record(orchestrator.id);
+          const planInvocationId = observability.recordInvocationStart(runId, orchestrator.id);
+          try {
+            const planResponse = await createProvider(orchestrator).invoke(buildOrchestratorPrompt({
+              prompt: payload.prompt,
+              availableModels: plannerModels,
+              orchestratorId: orchestrator.id,
+              projectRoot,
+              files: projectContext?.files.map((file) => file.path),
+              memory: memory?.text,
+            }), { maxTokens: 1_500, temperature: 0.2, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]) });
+            const planCost = costOf(planResponse.inputTokens, planResponse.outputTokens, orchestrator);
+            observability.recordInvocationEnd(planInvocationId, planResponse.inputTokens, planResponse.outputTokens, orchestrator.costPer1kTokens, 'success');
+            totalInputTokens += planResponse.inputTokens;
+            totalOutputTokens += planResponse.outputTokens;
+            totalCost += planCost;
+            runBudget.add({ cost: planCost, tokens: planResponse.inputTokens + planResponse.outputTokens });
+            planModelSpan.end({ inputTokens: planResponse.inputTokens, outputTokens: planResponse.outputTokens, cost: planCost });
+            const parsed = parseOrchestratorPlan(planResponse.content, plannerModels, orchestrator.id);
+            if (parsed) {
+              orchestration = parsed;
+              orchestrated = true;
+              model = orchestrator;
+              collaboratorModels.splice(0, collaboratorModels.length, ...parsed.subagents
+                .map((subagent) => registry.getModel(subagent.modelId))
+                .filter((candidate): candidate is ModelConfig => Boolean(candidate && candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate))) );
+              decision = {
+                ...decision,
+                modelId: orchestrator.id,
+                taskType: parsed.taskType,
+                complexity: parsed.complexity,
+                strategy: parsed.verify ? 'plan+verify' : parsed.mode === 'delegate' ? 'parallel' : 'single',
+                reason: 'DeepSeek orchestrator: ' + (parsed.reason || parsed.mode),
+                alternativeModels: decision.alternativeModels,
+                fallbackModels: decision.fallbackModels ?? decision.alternativeModels,
+                collaboratorModelIds: parsed.subagents.map((subagent) => subagent.modelId),
+              };
+              routeSpan.setAttributes({ modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, strategy: decision.strategy, reason: decision.reason, fallbackModels: decision.fallbackModels, orchestrator: orchestrator.id });
+              mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: orchestrator.id, role: 'orchestrator', mode: parsed.mode, taskType: parsed.taskType, complexity: parsed.complexity, subagents: parsed.subagents, reason: parsed.reason });
+              planSpan.end({ attributes: { mode: parsed.mode, taskType: parsed.taskType, complexity: parsed.complexity, subagents: parsed.subagents.map((subagent) => subagent.modelId), verify: parsed.verify } });
+            } else {
+              planSpan.end({ attributes: { valid: false, fallback: 'normal-routing' } });
+            }
+          } catch (planError) {
+            const message = planError instanceof Error ? planError.message : String(planError);
+            observability.recordInvocationEnd(planInvocationId, 0, 0, orchestrator.costPer1kTokens, 'failure', message);
+            planModelSpan.end({ status: 'failed', error: message });
+            planSpan.end({ status: 'failed', error: message });
+            if (planError instanceof BudgetExceededError) throw planError;
+            if (controller.signal.aborted) throw new Error('任务已取消');
+          }
+        } catch (planError) {
+          if (planError instanceof BudgetExceededError) throw planError;
+          if (controller.signal.aborted) throw new Error('任务已取消');
+          // Planning is optional: fall back to the normal routing path.
+        }
+      }
       const executionPlan = buildExecutionPlan({
         primary: model,
         decision,
@@ -319,7 +386,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       // High-complexity tasks can use a second model for planning, then pass the
       // verified plan to the execution model. Ordinary prompts (including "你好")
       // remain a single call so they do not incur an unnecessary second request.
-      if (decision.complexity === 'high') {
+      if (!orchestrated && decision.complexity === 'high') {
         const planningModel = selectPlanningModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id);
         if (planningModel) {
           planningModelId = planningModel.id;
@@ -386,7 +453,9 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
             agentMessages[index].status = 'running';
             mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'running' });
             try {
-              const agentResult = await invokeStreamed(agentModel, buildParallelAgentPrompt(contextPrompt, index), 1800, (delta) => {
+              const subagent = orchestration?.subagents.find((candidate) => candidate.modelId === agentModel.id);
+              const agentPrompt = subagent ? buildSubagentInstruction(contextPrompt, subagent) : buildParallelAgentPrompt(contextPrompt, index);
+              const agentResult = await invokeStreamed(agentModel, agentPrompt, 1800, (delta) => {
                 agentContent += delta;
                 agentMessages[index].content = agentContent;
                 mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
@@ -416,9 +485,11 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           agentReports = agentResults.flatMap((agentResult) => agentResult.status === 'fulfilled' ? [agentResult.value] : []);
           failedAgentCount = agentResults.length - agentReports.length;
         }
-        const finalPrompt = collaboratorModels.length
-          ? buildSynthesisPrompt(executionPrompt, agentReports, failedAgentCount)
-          : executionPrompt;
+        const finalPrompt = orchestration
+          ? buildOrchestratedFinalPrompt(executionPrompt, orchestration, agentReports, failedAgentCount)
+          : collaboratorModels.length
+            ? buildSynthesisPrompt(executionPrompt, agentReports, failedAgentCount)
+            : executionPrompt;
         let chunkIndex = 0;
         for (let index = 0; index < executionCandidates.length; index += 1) {
           const candidate = executionCandidates[index];
@@ -602,7 +673,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, metrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace('success');
         mainWindow?.webContents.send('session:completed', output);
         return output;
