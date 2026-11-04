@@ -49,7 +49,7 @@ export default function App() {
   const [projectError, setProjectError] = useState<string | null>(null);
   const [projectReloadKey, setProjectReloadKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 760);
-  const [projectDrawerOpen, setProjectDrawerOpen] = useState(() => window.innerWidth >= 1180);
+  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [isMacOS] = useState(() => navigator.userAgent.toLowerCase().includes('mac'));
   const [liveTrace, setLiveTrace] = useState<RunTrace>();
   const currentRunIdRef = useRef<string | undefined>(undefined);

@@ -4,7 +4,7 @@
 
 ### UI
 
-- Added progressive file preview: the right workspace defaults to a 270px file tree, expands to a code-preview + tree dual pane only after a file is clicked, and returns to the tree-only state when the preview is closed.
+- Added progressive file preview: the right workspace is hidden by default, opens as a 270px file tree from the top-bar panel switch, expands to a code-preview + tree dual pane only after a file is clicked, and returns to the tree-only state when the preview is closed.
 
 ## 0.0.4 — 2026-11-04
 
