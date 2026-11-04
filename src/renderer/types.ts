@@ -170,6 +170,7 @@ export interface AmdApi {
     tree: (options?: { path?: string; maxDepth?: number }) => Promise<unknown>;
     context: (options?: { paths?: string[]; maxTokens?: number }) => Promise<unknown>;
     file: (path: string) => Promise<{ content: string; truncated: boolean; size: number }>;
+    initGit: () => Promise<ProjectInfo>;
   };
   projects: {
     list: () => Promise<ProjectRecord[]>;

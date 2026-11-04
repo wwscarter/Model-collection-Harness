@@ -47,6 +47,8 @@ export default function App() {
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
   const [currentProject, setCurrentProject] = useState<ProjectInfo>();
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [gitBusy, setGitBusy] = useState(false);
+  const [approvalMode, setApprovalMode] = useState<'ask' | 'auto' | 'full'>('ask');
   const [projectReloadKey, setProjectReloadKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 760);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
@@ -233,11 +235,20 @@ export default function App() {
     void refreshProjects();
     void window.amd?.project.current().then(setCurrentProject).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    void window.amd?.preferences?.get().then((value) => setApprovalMode(value.approvalMode)).catch(() => undefined);
+  }, [showSettings]);
   const applyProject = (project: ProjectInfo | undefined) => { setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); void refreshProjects(); };
   const openProject = async (id: string) => {
     if (!window.amd) return;
-    try { applyProject(await window.amd.projects.open(id)); }
-    catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
+    try {
+      const project = await window.amd.projects.open(id);
+      applyProject(project);
+      setView('workspace');
+      // Clicking a project is an explicit request for its files; reveal the tree
+      // so the active association is visible even though it is hidden by default.
+      setProjectDrawerOpen(true);
+    } catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
   };
   const removeProject = async (id: string) => {
     try {
@@ -248,6 +259,17 @@ export default function App() {
     } catch (cause) { setProjectError(errorMessage(cause)); }
   };
   const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); applyProject(project); setProjectDrawerOpen(true); };
+  const initGit = async () => {
+    if (!window.amd || !currentProject) return;
+    setGitBusy(true); setProjectError(null);
+    try {
+      const project = await window.amd.project.initGit();
+      setCurrentProject(project);
+      setProjectReloadKey((key) => key + 1);
+      await refreshProjects();
+    } catch (cause) { setProjectError(errorMessage(cause)); }
+    finally { setGitBusy(false); }
+  };
 
   const updateCurrent = (patch: Partial<Session>) => setSessions((existing) => existing.map((session) => session.id === currentSessionId ? { ...session, ...patch } : session));
   const openFile = (path: string) => {
@@ -269,7 +291,18 @@ export default function App() {
     setEditingMessageId(null);
   };
   const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); setCurrentSessionId(id); setView('workspace'); };
-  const newSession = () => { if (editingMessageId) cancelMessageEdit(); const session = starterSession(); setSessions((existing) => [session, ...existing]); setCurrentSessionId(session.id); setView('workspace'); setSessionError(null); void window.amd?.sessions.save({ ...session, updatedAt: new Date() }); };
+  const newSession = () => {
+    if (editingMessageId) cancelMessageEdit();
+    const session = starterSession();
+    setSessions((existing) => [session, ...existing]);
+    setCurrentSessionId(session.id);
+    setView('workspace');
+    setProjectDrawerOpen(false);
+    setOpenFiles([]);
+    setActiveFilePath(undefined);
+    setSessionError(null);
+    void window.amd?.sessions.save({ ...session, updatedAt: new Date() });
+  };
   const enabledModelOptions = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
   const defaultSessionModelId = enabledModelOptions.find((model) => model.isPrimary)?.id ?? enabledModelOptions[0]?.id;
   const saveSessionPreference = (patch: Partial<Session>) => {
@@ -428,7 +461,7 @@ export default function App() {
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}

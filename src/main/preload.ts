@@ -52,6 +52,7 @@ const amdApi = {
     tree: (options?: unknown) => ipcRenderer.invoke('project:tree', options),
     context: (options?: unknown) => ipcRenderer.invoke('project:context', options),
     file: (path: string) => ipcRenderer.invoke('project:file', path),
+    initGit: () => ipcRenderer.invoke('project:init-git'),
   },
   projects: {
     list: () => ipcRenderer.invoke('projects:list'),

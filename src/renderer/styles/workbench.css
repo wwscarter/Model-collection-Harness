@@ -472,3 +472,51 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
   .workspace-panel.is-preview { width: calc(100vw - 52px); }
 }
 
+
+/* Compact session rows without timestamps. */
+.session-item .item-main { min-height: 30px; padding: 5px 8px; }
+.session-item .item-copy { gap: 0; }
+.session-item .item-title { line-height: 19px; }
+.session-item .session-ring { margin-top: 4px; }
+
+/* New-project dialog: no gray blocks, readable in both themes. */
+.new-project-window .dialog-icon { color: var(--text); background: var(--surface-low); border: 1px solid var(--line); box-shadow: none; }
+.dialog-header p { color: var(--text-muted); }
+.field-label { color: var(--text); }
+.field-label small, .field-hint, .field-help { color: var(--text-faint); }
+.field-hint.accent { color: var(--text-secondary); }
+.input:hover { border-color: var(--text-faint); }
+.directory-path { color: var(--text); border-color: var(--line); background: var(--surface-low); }
+.directory-path svg { color: var(--text-muted); }
+.directory-picker { border-color: var(--line); color: var(--text-secondary); }
+.directory-picker:hover { border-color: var(--text-faint); color: var(--text); background: var(--surface-low); }
+.detection-card { border-color: var(--line); background: transparent; }
+.detection-row { color: var(--text-secondary); }
+.detection-row strong { color: var(--text); }
+.detection-left svg, .detection-right svg { color: var(--text-muted); }
+.detection-right { color: var(--text-muted); }
+.dialog-footer { border-top-color: var(--line); background: var(--surface); }
+
+
+.composer-project { display: inline-flex; max-width: 180px; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 10px; }
+.composer-project:hover { color: var(--text); background: var(--surface-low); }
+.composer-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-project.is-empty { color: var(--text-faint); }
+
+
+.composer-contextbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 1px 5px; }
+.composer-project-main { display: inline-flex; min-width: 0; align-items: center; gap: 5px; padding: 2px 5px 2px 1px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 11px; }
+.composer-project-main:hover { color: var(--text); background: var(--surface-low); }
+.composer-project-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-git-state { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint); font: 10px var(--code-font); }
+.composer-git-create { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; }
+.composer-git-create:hover:not(:disabled) { color: var(--text); background: var(--surface-low); }
+.quick-menu-wrap { position: relative; }
+.quick-menu { position: absolute; z-index: 46; bottom: 34px; left: -4px; width: 190px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-float); }
+.quick-menu-item { display: block; width: 100%; padding: 7px 8px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; text-align: left; }
+.quick-menu-item:hover { color: var(--text); background: var(--surface-low); }
+
+
+.composer-permission { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 5px; color: var(--text-faint); background: transparent; font-size: 9px; }
+.composer-permission:hover { color: var(--text); background: var(--surface-low); }
+
