@@ -45,6 +45,7 @@ export interface TraceStore {
   saveTraceSpan(span: TraceSpanRecord): void;
   getTrace(runId: string): RunTrace | undefined;
   listTraceRuns(sessionId: string, limit?: number): TraceRunRecord[];
+  listRecentRuns(limit?: number): TraceRunRecord[];
 }
 
 export interface TraceEvent {

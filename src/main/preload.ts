@@ -17,9 +17,14 @@ const amdApi = {
   trace: {
     get: (runId: string) => ipcRenderer.invoke('trace:get', runId),
     recent: (sessionId: string, limit?: number) => ipcRenderer.invoke('trace:recent', sessionId, limit),
+    list: (limit?: number) => ipcRenderer.invoke('trace:list', limit),
     settings: () => ipcRenderer.invoke('trace:settings:get'),
     setSettings: (options: { maxAgeDays?: number; maxRuns?: number }) => ipcRenderer.invoke('trace:settings:set', options),
     clear: () => ipcRenderer.invoke('trace:clear'),
+  },
+  preferences: {
+    get: () => ipcRenderer.invoke('preferences:get'),
+    set: (input: { approvalMode: 'ask' | 'auto' | 'full' }) => ipcRenderer.invoke('preferences:set', input),
   },
   routingRules: {
     get: () => ipcRenderer.invoke('routing:rules:get'),
@@ -46,6 +51,7 @@ const amdApi = {
     clear: () => ipcRenderer.invoke('project:clear'),
     tree: (options?: unknown) => ipcRenderer.invoke('project:tree', options),
     context: (options?: unknown) => ipcRenderer.invoke('project:context', options),
+    file: (path: string) => ipcRenderer.invoke('project:file', path),
   },
   projects: {
     list: () => ipcRenderer.invoke('projects:list'),

@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react';
 import type { ModelConfig } from '../types';
+import { RuntimeSettings } from '../components/RuntimeSettings';
 import { errorMessage } from '../format';
 import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults, settingsPayload } from '../settingsForm';
 import type { ProviderCategory, SettingsDraft } from '../settingsForm';
 import '../styles/settings.css';
 
-interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; }
+interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; onOpenRouting: () => void; }
 type Busy = 'saving' | 'testing' | 'fetching' | 'refreshing' | null;
 type ConnectionResult = { success: boolean; latency?: number; error?: string; demo?: boolean };
 type TestedEndpoint = { fingerprint: string; result: ConnectionResult };
@@ -23,7 +24,8 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
   return <label className="field"><span className="field-label"><span>{label}</span>{hint && <small>{hint}</small>}</span>{children}</label>;
 }
 
-export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
+export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: SettingsProps) {
+  const [tab, setTab] = useState<'models' | 'runtime'>('models');
   const firstModel = models.find((model) => model.isPrimary && model.enabled) ?? models[0];
   const [selectedId, setSelectedId] = useState<string | null>(firstModel?.id ?? null);
   const selected = models.find((model) => model.id === selectedId);
@@ -176,10 +178,11 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
   return <div className="modal-overlay settings-overlay">
     <section ref={dialogRef} className="modal-window settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
       <header className="settings-titlebar">
-        <div className="titlebar-left"><span className="titlebar-symbol"><SlidersHorizontal size={14} /></span><h2 id="settings-title">设置 · 模型与端点配置 <span className="settings-title-english">(Settings)</span></h2><span className="settings-version mono">Switch</span></div>
+        <div className="titlebar-left"><span className="titlebar-symbol"><SlidersHorizontal size={14} /></span><h2 id="settings-title">设置 <span className="settings-title-english">(Settings)</span></h2></div>
         <div className="titlebar-right"><span className="kbd-hint"><kbd>Esc</kbd>关闭</span><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
-      <div className="settings-body">
+      <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button></div>
+      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} /> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">
             <div className="endpoint-list-title"><strong>端点与路由</strong><span className="count-pill accent endpoint-ready-count">{models.filter((model) => model.enabled).length} 个启用</span><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>
@@ -247,7 +250,7 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
           {notice && <div className={'settings-notice ' + notice.tone} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'success' ? <CircleCheck size={14} /> : <X size={14} />}<span>{notice.text}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice(null)}><X size={12} /></button></div>}
           <footer className="detail-foot"><span className="foot-note"><ShieldCheck size={14} /><span>{dirty ? '配置有未保存的修改' : '配置已关联至本地环境'}</span></span><div className="foot-actions">{selected && <button className="button danger" disabled={Boolean(busy)} title="删除此模型配置" onClick={() => void removeSelected()}><Trash2 size={13} />删除模型</button>}<button className="button soft" disabled={Boolean(busy) || !draft.modelId.trim()} onClick={() => void testConnection()}>{busy === 'testing' && <LoaderCircle size={13} className="spinning" />}{busy === 'testing' ? '测试中…' : '连通测试'}</button><button className="button outline" disabled={busy === 'saving'} onClick={onClose}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.name.trim() || !draft.modelId.trim()} onClick={() => void save()}>{busy === 'saving' && <LoaderCircle size={13} className="spinning" />}{busy === 'saving' ? '保存中…' : '保存配置'}</button></div></footer>
         </main>
-      </div>
+      </div>}
     </section>
   </div>;
 }

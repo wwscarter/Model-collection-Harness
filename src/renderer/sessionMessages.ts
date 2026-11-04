@@ -4,6 +4,7 @@ export interface ChatMessage {
   content: string;
   modelUsed?: string;
   planningModelId?: string;
+  durationMs?: number;
   agents?: ChatAgentMessage[];
   tools?: ChatToolCall[];
 }
@@ -56,6 +57,7 @@ export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
         content: message.content,
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
+        ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
         ...(Array.isArray(message.agents) ? { agents: restoreAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: restoreTools(message.tools) } : {}),
       }];
@@ -121,14 +123,31 @@ export function preparePendingTurn(
 export function updateAssistantAgent(
   messages: ChatMessage[],
   messageId: string,
-  update: { agentId: string; status?: ChatAgentMessage['status']; delta?: string; content?: string; error?: string },
+  update: { agentId: string; modelId?: string; modelName?: string; status?: ChatAgentMessage['status']; delta?: string; content?: string; error?: string },
 ): ChatMessage[] {
   return messages.map((message) => {
-    if (message.id !== messageId || message.role !== 'assistant' || !message.agents) return message;
+    if (message.id !== messageId || message.role !== 'assistant') return message;
+    const agents = message.agents ?? [];
+    const existing = agents.find((agent) => agent.id === update.agentId);
+    if (!existing) {
+      return {
+        ...message,
+        agents: [...agents, {
+          id: update.agentId,
+          modelId: update.modelId ?? update.agentId,
+          modelName: update.modelName ?? update.modelId ?? 'subagent',
+          status: update.status ?? 'running',
+          content: update.content ?? update.delta ?? '',
+          ...(update.error ? { error: update.error } : {}),
+        }],
+      };
+    }
     return {
       ...message,
-      agents: message.agents.map((agent) => agent.id !== update.agentId ? agent : {
+      agents: agents.map((agent) => agent.id !== update.agentId ? agent : {
         ...agent,
+        ...(update.modelId ? { modelId: update.modelId } : {}),
+        ...(update.modelName ? { modelName: update.modelName } : {}),
         ...(update.status ? { status: update.status } : {}),
         ...(update.content !== undefined ? { content: update.content } : update.delta ? { content: `${agent.content}${update.delta}` } : {}),
         ...(update.error ? { error: update.error } : {}),
@@ -142,6 +161,20 @@ export function updateLatestAssistantAttribution(messages: ChatMessage[], update
   while (messageIndex >= 0 && messages[messageIndex].role !== 'assistant') messageIndex -= 1;
   if (messageIndex < 0) return messages;
   return messages.map((message, index) => index === messageIndex ? { ...message, ...update } : message);
+}
+
+export function setLatestAssistantDuration(messages: ChatMessage[], durationMs: number, messageId?: string): ChatMessage[] {
+  const target = messageId ?? [...messages].reverse().find((message) => message.role === 'assistant')?.id;
+  return messages.map((message) => message.id === target && message.role === 'assistant' ? { ...message, durationMs } : message);
+}
+
+/** Process cards are live-only; persist the final answer without tool/agent traces. */
+export function stripAssistantProcess(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    const { agents: _agents, tools: _tools, ...final } = message;
+    return final;
+  });
 }
 
 export function updateLatestAssistantContent(messages: ChatMessage[], content: string, modelUsed?: string, planningModelId?: string): ChatMessage[] {

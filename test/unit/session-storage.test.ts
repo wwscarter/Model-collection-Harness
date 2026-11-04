@@ -74,6 +74,19 @@ describe('SessionStorage', () => {
     storage.close();
   });
 
+  it('persists per-session routing and assistant duration', () => {
+    const storage = new SessionStorage(':memory:');
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    storage.save({ id: 'single', title: 'Single', prompt: '', output: 'done', multiModel: false, modelId: 'deepseek-chat', messages: [
+      { id: 'a1', role: 'assistant', content: 'done', modelUsed: 'deepseek-chat', durationMs: 1234 },
+    ], createdAt: now, updatedAt: now });
+    const loaded = storage.get('single');
+    expect(loaded?.multiModel).toBe(false);
+    expect(loaded?.modelId).toBe('deepseek-chat');
+    expect(loaded?.messages?.[0].durationMs).toBe(1234);
+    storage.close();
+  });
+
   it('migrates existing session databases to retain submitted user messages', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-sessions-'));
     const dbPath = path.join(directory, 'sessions.db');

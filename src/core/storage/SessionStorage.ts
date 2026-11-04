@@ -10,6 +10,10 @@ export interface SessionRecord {
   output: string;
   messages?: SessionMessageRecord[];
   modelUsed?: string;
+  /** Session-level routing preference: true enables automatic multi-model routing. */
+  multiModel?: boolean;
+  /** Pinned execution model when multi-model routing is off. */
+  modelId?: string;
   /** Per-turn run id used by traces; distinct from the session id. */
   runId?: string;
   /** Deterministic/LLM summary of older turns. */
@@ -50,11 +54,12 @@ export interface SessionMessageRecord {
   content: string;
   modelUsed?: string;
   planningModelId?: string;
+  durationMs?: number;
   agents?: SessionAgentRecord[];
   tools?: SessionToolRecord[];
 }
 
-interface SessionRow { id: string; title: string; prompt: string; user_message: string | null; output: string; messages: string | null; model_used: string | null; last_run_id: string | null; summary: string | null; summary_covers_to: number | null; summary_hash: string | null; summary_tokens: number | null; summary_updated_at: string | null; metrics: string | null; audit_result: string | null; rating: number | null; created_at: string; updated_at: string; }
+interface SessionRow { id: string; title: string; prompt: string; user_message: string | null; output: string; messages: string | null; model_used: string | null; multi_model: number | null; model_id: string | null; last_run_id: string | null; summary: string | null; summary_covers_to: number | null; summary_hash: string | null; summary_tokens: number | null; summary_updated_at: string | null; metrics: string | null; audit_result: string | null; rating: number | null; created_at: string; updated_at: string; }
 
 export interface SessionSummaryRecord {
   text: string;
@@ -79,13 +84,15 @@ export class SessionStorage {
     if (!columns.some((column) => column.name === 'summary_hash')) this.db.exec("ALTER TABLE sessions ADD COLUMN summary_hash TEXT");
     if (!columns.some((column) => column.name === 'summary_tokens')) this.db.exec("ALTER TABLE sessions ADD COLUMN summary_tokens INTEGER");
     if (!columns.some((column) => column.name === 'summary_updated_at')) this.db.exec("ALTER TABLE sessions ADD COLUMN summary_updated_at TEXT");
+    if (!columns.some((column) => column.name === 'multi_model')) this.db.exec('ALTER TABLE sessions ADD COLUMN multi_model INTEGER');
+    if (!columns.some((column) => column.name === 'model_id')) this.db.exec('ALTER TABLE sessions ADD COLUMN model_id TEXT');
   }
   save(session: SessionRecord): SessionRecord {
     const messages = this.normalizeMessages(session.messages) ?? this.legacyMessages(session.userMessage, session.prompt, session.output, session.title);
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant')?.content;
     const record: SessionRecord = { ...session, messages, userMessage: lastUserMessage, output: lastAssistantMessage ?? session.output ?? '' };
-    this.db.prepare(`INSERT INTO sessions (id,title,prompt,user_message,output,messages,model_used,last_run_id,metrics,audit_result,rating,created_at,updated_at) VALUES (@id,@title,@prompt,@user_message,@output,@messages,@model_used,@last_run_id,@metrics,@audit_result,@rating,@created_at,@updated_at) ON CONFLICT(id) DO UPDATE SET title=excluded.title,prompt=excluded.prompt,user_message=excluded.user_message,output=excluded.output,messages=excluded.messages,model_used=excluded.model_used,last_run_id=excluded.last_run_id,metrics=excluded.metrics,audit_result=excluded.audit_result,rating=excluded.rating,updated_at=excluded.updated_at`).run({ id: record.id, title: record.title, prompt: record.prompt, user_message: record.userMessage ?? '', output: record.output ?? '', messages: JSON.stringify(messages), model_used: record.modelUsed ?? null, last_run_id: record.runId ?? null, metrics: record.metrics === undefined ? null : JSON.stringify(record.metrics), audit_result: record.auditResult === undefined ? null : JSON.stringify(record.auditResult), rating: record.rating ?? null, created_at: record.createdAt.toISOString(), updated_at: record.updatedAt.toISOString() });
+    this.db.prepare(`INSERT INTO sessions (id,title,prompt,user_message,output,messages,model_used,multi_model,model_id,last_run_id,metrics,audit_result,rating,created_at,updated_at) VALUES (@id,@title,@prompt,@user_message,@output,@messages,@model_used,@multi_model,@model_id,@last_run_id,@metrics,@audit_result,@rating,@created_at,@updated_at) ON CONFLICT(id) DO UPDATE SET title=excluded.title,prompt=excluded.prompt,user_message=excluded.user_message,output=excluded.output,messages=excluded.messages,model_used=excluded.model_used,multi_model=excluded.multi_model,model_id=excluded.model_id,last_run_id=excluded.last_run_id,metrics=excluded.metrics,audit_result=excluded.audit_result,rating=excluded.rating,updated_at=excluded.updated_at`).run({ id: record.id, title: record.title, prompt: record.prompt, user_message: record.userMessage ?? '', output: record.output ?? '', messages: JSON.stringify(messages), model_used: record.modelUsed ?? null, multi_model: record.multiModel === false ? 0 : 1, model_id: record.modelId ?? null, last_run_id: record.runId ?? null, metrics: record.metrics === undefined ? null : JSON.stringify(record.metrics), audit_result: record.auditResult === undefined ? null : JSON.stringify(record.auditResult), rating: record.rating ?? null, created_at: record.createdAt.toISOString(), updated_at: record.updatedAt.toISOString() });
     return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt) };
   }
   list(): SessionRecord[] { const rows = this.db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all() as SessionRow[]; return rows.map((row) => this.fromRow(row)); }
@@ -113,7 +120,7 @@ export class SessionStorage {
     const messages = this.normalizeMessages(parseJson<unknown>(row.messages, undefined)) ?? this.legacyMessages(row.user_message, row.prompt, row.output, row.title);
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant')?.content;
-    return { id: row.id, title: row.title, prompt: row.prompt, userMessage: lastUserMessage, output: lastAssistantMessage ?? row.output, messages, modelUsed: row.model_used ?? undefined, runId: row.last_run_id ?? undefined, summary: row.summary ?? undefined, summaryCoversTo: row.summary_covers_to ?? undefined, summaryHash: row.summary_hash ?? undefined, summaryTokens: row.summary_tokens ?? undefined, summaryUpdatedAt: row.summary_updated_at ? new Date(row.summary_updated_at) : undefined, metrics: parseJson<unknown>(row.metrics, undefined), auditResult: parseJson<unknown>(row.audit_result, undefined), rating: row.rating ?? undefined, createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at) };
+    return { id: row.id, title: row.title, prompt: row.prompt, userMessage: lastUserMessage, output: lastAssistantMessage ?? row.output, messages, modelUsed: row.model_used ?? undefined, multiModel: row.multi_model === 0 ? false : true, modelId: row.model_id ?? undefined, runId: row.last_run_id ?? undefined, summary: row.summary ?? undefined, summaryCoversTo: row.summary_covers_to ?? undefined, summaryHash: row.summary_hash ?? undefined, summaryTokens: row.summary_tokens ?? undefined, summaryUpdatedAt: row.summary_updated_at ? new Date(row.summary_updated_at) : undefined, metrics: parseJson<unknown>(row.metrics, undefined), auditResult: parseJson<unknown>(row.audit_result, undefined), rating: row.rating ?? undefined, createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at) };
   }
 
   private normalizeMessages(value: unknown): SessionMessageRecord[] | undefined {
@@ -128,6 +135,7 @@ export class SessionStorage {
         content: message.content,
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
+        ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
         ...(Array.isArray(message.agents) ? { agents: this.normalizeAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: this.normalizeTools(message.tools) } : {}),
       }];

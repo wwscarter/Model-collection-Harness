@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Activity, ChevronRight, Folder, Plus, Search, Settings, Sparkles, SquareTerminal, X } from 'lucide-react';
+import { ChevronRight, Folder, Plus, Search, Sparkles, X } from 'lucide-react';
 import type { ProjectRecord } from '../types';
 import { relativeTime } from '../format';
 
@@ -22,15 +22,12 @@ interface SidebarProps {
   onNewSession: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  onSettings: () => void;
-  onMonitoring: () => void;
-  onTerminal: () => void;
   onNewProject: () => void;
   onOpenProject: (id: string) => void;
   onRemoveProject: (id: string) => void;
 }
 
-export function Sidebar({ sessions, currentSessionId, runningSessionId, projects, activeProjectId, projectError, isMacOS, searchInputRef, onNewSession, onSelectSession, onDeleteSession, onSettings, onMonitoring, onTerminal, onNewProject, onOpenProject, onRemoveProject }: SidebarProps) {
+export function Sidebar({ sessions, currentSessionId, runningSessionId, projects, activeProjectId, projectError, isMacOS, searchInputRef, onNewSession, onSelectSession, onDeleteSession, onNewProject, onOpenProject, onRemoveProject }: SidebarProps) {
   const [query, setQuery] = useState('');
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [sessionsOpen, setSessionsOpen] = useState(true);
@@ -83,10 +80,6 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
             })}
           </div>}
         </section>
-      </div>
-      <div className="sidebar-footer">
-        <button className="settings-link" onClick={onSettings}><Settings size={14} /><span>设置</span></button>
-        <div className="utility-actions"><button title="运行监测" aria-label="运行监测" onClick={onMonitoring}><Activity size={14} /></button><button title="终端" aria-label="终端" onClick={onTerminal}><SquareTerminal size={14} /></button></div>
       </div>
     </aside>
   );
