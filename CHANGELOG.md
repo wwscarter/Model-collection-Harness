@@ -11,6 +11,15 @@
 - Terminal sessions no longer accept renderer-supplied shell, cwd or env; only an allow-listed environment is inherited. Command execution now requires a main-process native confirmation and runs in a killable process group.
 - Saved API keys are bound to the endpoint origin; changing the host requires a new key.
 
+### Agent runtime
+
+- Added per-turn `runId`s, `runs`/`spans` trace storage and a call-chain timeline in the inspector, with a persistent `last_run_id` per session.
+- Added a budgeted context assembler: tool digests, deterministic incremental summaries, hash-validated summary reuse and a hidden Pi checkpoint message.
+- Added scoped long-term memory (`memory.db`), `remember`/`recall`/`forget` tools, a memory panel and memory retrieval injection.
+- Added per-tool policies: call/result budgets, tool deadlines, result truncation, TTL caching for safe read-only tools and `process_list`.
+- Added routing rules (`routing-rules.json`), RPM/daily-token quota guards, execution fallback chains and a default `plan+verify` strategy for high-complexity code.
+- Added an independent verifier with one revision attempt, plus a per-run cost/duration budget of $0.25/10 minutes.
+
 ### Reliability
 
 - Removed the no-key demo path: presets are not auto-enabled, keyless models are excluded from routing/planning/collaboration, and direct execution fails loudly.

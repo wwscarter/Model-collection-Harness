@@ -110,7 +110,10 @@ export class RoutingPolicyEngine {
     if (!available.has(primary)) primary = base.alternativeModels.find((id) => available.has(id)) ?? usable[0].id;
     const ruleFallback = appliedRule?.then.fallbackModelIds ?? [];
     const fallbackModels = [...new Set([...ruleFallback, ...base.alternativeModels])].filter((id) => id !== primary && available.has(id)).slice(0, 3);
-    const strategy = appliedRule?.then.strategy ?? this.policy.defaults.strategy;
+    // High-complexity code gets an independent verifier by default; rules can
+    // override this or opt out with strategy: 'single'.
+    const defaultStrategy = base.taskType === 'code' && base.complexity === 'high' ? 'plan+verify' : this.policy.defaults.strategy;
+    const strategy = appliedRule?.then.strategy ?? defaultStrategy;
     return {
       ...base,
       modelId: primary,

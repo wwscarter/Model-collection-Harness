@@ -100,6 +100,7 @@ export interface ExecutionResult {
   metrics?: SessionMetrics;
   auditResult?: { passed?: boolean; score?: number; issueCount?: number };
   audit?: { passed: boolean; score: number; issueCount: number; auditModelId?: string };
+  verification?: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string };
   project?: { root: string; files: string[]; tokenCount: number; truncated: boolean; skippedFiles: number };
 }
 

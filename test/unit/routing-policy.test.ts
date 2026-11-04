@@ -34,6 +34,12 @@ describe('RoutingPolicyEngine', () => {
     expect(decision.fallbackModels).toEqual(expect.arrayContaining(['fallback']));
   });
 
+  it('defaults high-complexity code to plan+verify', async () => {
+    const models = [model('coder')];
+    const decision = await new RoutingPolicyEngine(routerFor(models), DEFAULT_ROUTING_POLICY).routeTask({ id: 't', type: 'code', description: 'refactor', complexity: 'high' }, models);
+    expect(decision.strategy).toBe('plan+verify');
+  });
+
   it('skips a primary excluded by the availability guard', async () => {
     const models = [model('primary'), model('alternate', { capabilities: [{ type: 'code', score: 50 }] })];
     const policy: RoutingPolicy = { ...DEFAULT_ROUTING_POLICY, rules: [{ id: 'rule', enabled: true, priority: 1, when: { taskTypes: ['code'] }, then: { primaryModelId: 'primary' } }] };

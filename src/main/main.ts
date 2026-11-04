@@ -15,6 +15,8 @@ import { AgentRouter } from '@core/routing/AgentRouter';
 import { loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { shouldFallback } from '@core/routing/Fallback';
+import { BudgetExceededError, RunBudget } from '@core/routing/RunBudget';
+import { buildRevisionPrompt, hasCode, shouldRevise, verifyCodeAnswer } from '@core/agent/VerificationService';
 import { createProvider, type ModelResponse } from '@core/providers/ModelProvider';
 import { fetchModelIdentifiers, testModelConnection, type ModelConnectionInput } from '@core/providers/ModelConnection';
 import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel, selectUtilityModel } from '@core/routing/ModelCollaboration';
@@ -329,6 +331,7 @@ function registerHandlers(): void {
       return candidate;
     });
     const trace = traceRecorder.startRun({ runId, sessionId, taskType: payload.taskType, complexity: payload.complexity });
+    const runBudget = new RunBudget({ maxCost: 0.25, maxDurationMs: 10 * 60_000 });
     const projectRoot = projects.getRoot();
     const memorySpan = trace.child('memory', 'memory.retrieve', { projectRoot });
     let memory: ReturnType<typeof retrieveMemories> | undefined;
@@ -393,6 +396,7 @@ function registerHandlers(): void {
         ? selectUtilityModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id)
         : undefined;
       if (summaryModel) {
+        runBudget.assertAvailable();
         const summarySpan = compactSpan.child('model', 'summary-model', { modelId: summaryModel.id, role: 'summarizer' });
         modelQuota.record(summaryModel.id);
         const summaryInvocationId = observability.recordInvocationStart(runId, summaryModel.id);
@@ -410,6 +414,7 @@ function registerHandlers(): void {
             totalInputTokens += summaryResult.inputTokens;
             totalOutputTokens += summaryResult.outputTokens;
             totalCost += summaryResult.cost;
+            runBudget.add({ cost: summaryResult.cost, tokens: summaryResult.inputTokens + summaryResult.outputTokens });
             observability.recordInvocationEnd(summaryInvocationId, summaryResult.inputTokens, summaryResult.outputTokens, summaryModel.costPer1kTokens, 'success');
             summarySpan.end({ inputTokens: summaryResult.inputTokens, outputTokens: summaryResult.outputTokens, cost: summaryResult.cost });
           } else {
@@ -420,6 +425,7 @@ function registerHandlers(): void {
           const message = error instanceof Error ? error.message : String(error);
           observability.recordInvocationEnd(summaryInvocationId, 0, 0, summaryModel.costPer1kTokens, 'failure', message);
           summarySpan.end({ status: 'failed', error: message });
+          if (error instanceof BudgetExceededError) throw error;
           if (controller.signal.aborted) throw new Error('任务已取消');
         }
       }
@@ -451,6 +457,7 @@ function registerHandlers(): void {
         const planningModel = selectPlanningModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id);
         if (planningModel) {
           planningModelId = planningModel.id;
+          runBudget.assertAvailable();
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: planningModel.id, role: 'planning', reason: '为高复杂度任务生成执行计划', confidence: decision.confidence });
           const planningSpan = trace.child('plan', 'planning', { modelId: planningModel.id });
           const planningModelSpan = planningSpan.child('model', 'planning-model', { modelId: planningModel.id, role: 'planner' });
@@ -467,6 +474,7 @@ function registerHandlers(): void {
             totalInputTokens += plan.inputTokens;
             totalOutputTokens += plan.outputTokens;
             totalCost += cost;
+            runBudget.add({ cost, tokens: plan.inputTokens + plan.outputTokens });
             planningModelSpan.end({ inputTokens: plan.inputTokens, outputTokens: plan.outputTokens, cost });
             planningSpan.end({ attributes: { status: 'ok' } });
             executionPrompt = buildPlannedTask(contextPrompt, plan.content);
@@ -475,6 +483,7 @@ function registerHandlers(): void {
             observability.recordInvocationEnd(planningInvocationId, 0, 0, planningModel.costPer1kTokens, 'failure', message);
             planningModelSpan.end({ status: 'failed', error: message });
             planningSpan.end({ status: 'failed', error: message });
+            if (error instanceof BudgetExceededError) throw error;
             if (controller.signal.aborted) throw new Error('任务已取消');
             planningModelId = undefined;
           }
@@ -507,6 +516,7 @@ function registerHandlers(): void {
         if (collaboratorModels.length) {
           const agentResults = await runParallelAgents(collaboratorModels, async (agentModel, index) => {
             const agentId = `${assistantMessageId}-agent-${index + 1}`;
+            runBudget.assertAvailable();
             const agentSpan = trace.child('model', 'collaborator', { agentId, modelId: agentModel.id, role: 'analyst' });
             agentSpans.set(agentId, agentSpan);
             modelQuota.record(agentModel.id);
@@ -525,6 +535,7 @@ function registerHandlers(): void {
               totalInputTokens += agentResult.inputTokens;
               totalOutputTokens += agentResult.outputTokens;
               totalCost += agentCost;
+              runBudget.add({ cost: agentCost, tokens: agentResult.inputTokens + agentResult.outputTokens });
               agentSpan.end({ inputTokens: agentResult.inputTokens, outputTokens: agentResult.outputTokens, cost: agentCost });
               agentMessages[index].status = 'completed';
               agentMessages[index].content = agentResult.content;
@@ -550,6 +561,7 @@ function registerHandlers(): void {
         let chunkIndex = 0;
         for (let index = 0; index < executionCandidates.length; index += 1) {
           const candidate = executionCandidates[index];
+          runBudget.assertAvailable();
           modelQuota.record(candidate.id);
           const attemptInvocationId = observability.recordInvocationStart(runId, candidate.id);
           let emittedText = false;
@@ -567,6 +579,7 @@ function registerHandlers(): void {
             totalInputTokens += attemptResult.inputTokens;
             totalOutputTokens += attemptResult.outputTokens;
             totalCost += executionCost;
+            runBudget.add({ cost: executionCost, tokens: attemptResult.inputTokens + attemptResult.outputTokens });
             executionSpan.setAttributes({ fallbackAttempts });
             executionSpan.end({ inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost });
             break;
@@ -582,6 +595,90 @@ function registerHandlers(): void {
         }
         if (!result) throw new Error('模型没有返回结果');
         synthesisSpan?.end({ attributes: { reports: agentReports.length, failedAgents: failedAgentCount } });
+        let verification: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string } | undefined;
+        if (decision.strategy === 'plan+verify' && hasCode(result.content)) {
+          const verifierModel = selectUtilityModel(
+            registry.getEnabledModels().filter((candidate) => candidate.id !== executionModel.id && modelQuota.isAvailable(candidate)),
+            executionModel.id,
+          );
+          if (verifierModel) {
+            const verificationSpan = trace.child('audit', 'model-verify', { modelId: verifierModel.id });
+            try {
+              runBudget.assertAvailable();
+              modelQuota.record(verifierModel.id);
+              const verificationInvocationId = observability.recordInvocationStart(runId, verifierModel.id);
+              try {
+                const verified = await verifyCodeAnswer({
+                  content: result.content, taskId: runId, executionModelId: executionModel.id, model: verifierModel, signal: controller.signal,
+                });
+                if (verified) {
+                  observability.recordInvocationEnd(verificationInvocationId, verified.inputTokens, verified.outputTokens, verifierModel.costPer1kTokens, 'success');
+                  totalInputTokens += verified.inputTokens;
+                  totalOutputTokens += verified.outputTokens;
+                  totalCost += verified.cost;
+                  runBudget.add({ cost: verified.cost, tokens: verified.inputTokens + verified.outputTokens });
+                  verification = {
+                    modelId: verifierModel.id,
+                    approved: verified.audit.approval,
+                    score: verified.audit.overallScore,
+                    issueCount: verified.audit.issues.length,
+                    revised: false,
+                    auditModelId: verified.audit.auditModelId,
+                  };
+                  if (shouldRevise(verified.audit)) {
+                    const revisionSpan = verificationSpan.child('model', 'revision', { modelId: executionModel.id, role: 'reviser' });
+                    try {
+                      runBudget.assertAvailable();
+                      modelQuota.record(executionModel.id);
+                      const revisionInvocationId = observability.recordInvocationStart(runId, executionModel.id);
+                      try {
+                        const revised = await invokeStreamed(
+                          executionModel,
+                          buildRevisionPrompt(payload.prompt, result.content, verified.audit),
+                          4000,
+                          () => undefined,
+                          { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools: false, projectRoot, signal: controller.signal },
+                        );
+                        const revisionCost = costOf(revised.inputTokens, revised.outputTokens, executionModel);
+                        observability.recordInvocationEnd(revisionInvocationId, revised.inputTokens, revised.outputTokens, executionModel.costPer1kTokens, 'success');
+                        totalInputTokens += revised.inputTokens;
+                        totalOutputTokens += revised.outputTokens;
+                        totalCost += revisionCost;
+                        runBudget.add({ cost: revisionCost, tokens: revised.inputTokens + revised.outputTokens });
+                        result = { ...result, content: revised.content };
+                        verification.revised = true;
+                        revisionSpan.end({ inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost });
+                      } catch (revisionError) {
+                        const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
+                        observability.recordInvocationEnd(revisionInvocationId, 0, 0, executionModel.costPer1kTokens, 'failure', message);
+                        revisionSpan.end({ status: 'failed', error: message });
+                        if (controller.signal.aborted) throw new Error('任务已取消');
+                      }
+                    } catch (revisionError) {
+                      const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
+                      revisionSpan.end({ status: 'failed', error: message });
+                      if (controller.signal.aborted) throw new Error('任务已取消');
+                      if (!(revisionError instanceof BudgetExceededError)) throw revisionError;
+                    }
+                  }
+                  verificationSpan.end({ inputTokens: verified.inputTokens, outputTokens: verified.outputTokens, cost: verified.cost, attributes: { approved: verification.approved, score: verification.score, issues: verification.issueCount, revised: verification.revised, auditModelId: verification.auditModelId } });
+                } else {
+                  observability.recordInvocationEnd(verificationInvocationId, 0, 0, verifierModel.costPer1kTokens, 'failure', 'empty verification');
+                  verificationSpan.end({ status: 'failed', error: 'empty verification' });
+                }
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                observability.recordInvocationEnd(verificationInvocationId, 0, 0, verifierModel.costPer1kTokens, 'failure', message);
+                verificationSpan.end({ status: 'failed', error: message });
+                if (controller.signal.aborted) throw new Error('任务已取消');
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              verificationSpan.end({ status: 'failed', error: message });
+              if (!(error instanceof BudgetExceededError) && controller.signal.aborted) throw new Error('任务已取消');
+            }
+          }
+        }
         // Static code audit is deterministic and free. It runs only when the
         // answer actually contains code, and its result feeds the same audit log,
         // metrics table and growth profile instead of leaving them empty.
@@ -594,7 +691,7 @@ function registerHandlers(): void {
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id])], fallbackAttempts, planningModelId, decision, metrics, audit, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id, ...(verification?.modelId ? [verification.modelId] : [])])], fallbackAttempts, planningModelId, decision, metrics, verification, audit, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace('success');
         mainWindow?.webContents.send('session:completed', output);
         return output;
