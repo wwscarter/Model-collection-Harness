@@ -386,9 +386,18 @@ export default function App() {
     }
   };
 
-  return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view === 'monitoring' ? 'monitoring-shell' : ''}`}>
-    <TopBar title={view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} onSelectTab={setActiveFilePath} onToggleRight={() => { if (view !== 'workspace') setView('workspace'); setProjectDrawerOpen((open) => !open); }} />
-    <NavRail view={view} onView={(next) => { setView(next); if (next === 'monitoring') setProjectDrawerOpen(false); }} onSettings={() => setShowSettings(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+  const previewOpen = Boolean(activeFilePath) && view === 'workspace';
+  const closePreview = () => { setActiveFilePath(undefined); setOpenFiles([]); };
+  const toggleWorkspacePanel = () => {
+    if (view !== 'workspace') setView('workspace');
+    setProjectDrawerOpen((open) => {
+      if (open) { setActiveFilePath(undefined); setOpenFiles([]); }
+      return !open;
+    });
+  };
+  return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${previewOpen && projectDrawerOpen ? 'preview-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view === 'monitoring' ? 'monitoring-shell' : ''}`}>
+    <TopBar title={view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
+    <NavRail view={view} onView={(next) => { setView(next); if (next === 'monitoring') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); } }} onSettings={() => setShowSettings(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
     <Sidebar sessions={sessions} currentSessionId={currentSessionId} runningSessionId={runningSessionId} projects={projectList} activeProjectId={currentProject?.id} projectError={projectError} completionNotice={completionNotice} onClearCompletion={() => setCompletionNotice(false)} onNewSession={newSession} onSelectSession={selectSession} onDeleteSession={deleteSession} onNewProject={() => setShowNewProject(true)} onOpenProject={(id) => void openProject(id)} onRemoveProject={(id) => void removeProject(id)} />
     {sidebarOpen && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
     {view === 'monitoring' ? <MonitoringPage liveTrace={liveTrace} /> : <main className="workspace">

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FileText, GitBranch, LoaderCircle } from 'lucide-react';
+import { GitBranch, LoaderCircle } from 'lucide-react';
 import type { ProjectInfo } from '../types';
 import { errorMessage } from '../format';
 import { highlightCode, type CodeToken } from '../highlightCode';
@@ -37,17 +37,17 @@ export function WorkspacePanel({ project, reloadKey, activePath, onPreview, onCh
     return () => { active = false; };
   }, [activePath, reloadKey]);
   const branch = project?.git?.branch ?? project?.git?.head;
+  const previewOpen = Boolean(activePath);
   const language = activePath ? languageOf(activePath) : 'text';
   const lines = content ? content.split('\n') : [];
   const highlighted = lines.map((line) => highlightCode(line, language).tokens);
-  return <aside className="workspace-panel" aria-label="工作区文件与预览">
+  return <aside className={'workspace-panel ' + (previewOpen ? 'is-preview' : 'is-tree-only')} aria-label="工作区文件与预览">
     <div className="workspace-panel-main">
-      <section className="workspace-preview" aria-label="文件内容预览">
-        {!activePath ? <div className="workspace-preview-empty"><FileText size={20} strokeWidth={1.4} /><span>从右侧目录选择文件</span><small>在这里查看代码与内容，不会修改工作区</small></div>
-          : error ? <div className="workspace-preview-empty"><span>无法读取文件</span><small>{error}</small></div>
-            : loading ? <div className="workspace-preview-empty"><LoaderCircle size={18} className="spinning" /><span>读取中…</span></div>
-              : <div className="workspace-code"><div className="workspace-code-lines" aria-hidden="true">{lines.map((_line, index) => <span key={index}>{index + 1}</span>)}</div><pre>{lines.map((line, index) => <span className="workspace-code-line" key={index}>{renderTokens(highlighted[index])}{line === '' ? ' ' : ''}</span>)}</pre></div>}
-      </section>
+      {previewOpen && <section className="workspace-preview" aria-label="文件内容预览">
+        {error ? <div className="workspace-preview-empty"><span>无法读取文件</span><small>{error}</small></div>
+          : loading ? <div className="workspace-preview-empty"><LoaderCircle size={18} className="spinning" /><span>读取中…</span></div>
+            : <div className="workspace-code"><div className="workspace-code-lines" aria-hidden="true">{lines.map((_line, index) => <span key={index}>{index + 1}</span>)}</div><pre>{lines.map((line, index) => <span className="workspace-code-line" key={index}>{renderTokens(highlighted[index])}{line === '' ? ' ' : ''}</span>)}</pre></div>}
+      </section>}
       <ProjectPanel project={project} reloadKey={reloadKey} activePath={activePath} onPreview={onPreview} onChangeDirectory={onChangeDirectory} />
     </div>
     <footer className="workspace-footer">

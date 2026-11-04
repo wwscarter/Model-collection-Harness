@@ -448,3 +448,27 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .user-message-footer { border-top: 0; }
 .assistant-card-header { margin-bottom: 6px; padding-bottom: 0; border-bottom: 0; }
 
+
+/* Progressive preview: tree-only by default, wide dual-pane only with a file open. */
+.app-shell.drawer-open { grid-template-columns: 52px 250px minmax(0, 1fr) 270px; }
+.app-shell.drawer-open.preview-open { grid-template-columns: 52px 250px minmax(0, 1fr) min(700px, 48vw); }
+.app-shell.sidebar-collapsed.drawer-open { grid-template-columns: 52px 0 minmax(0, 1fr) 270px; }
+.app-shell.sidebar-collapsed.drawer-open.preview-open { grid-template-columns: 52px 0 minmax(0, 1fr) min(700px, 48vw); }
+.workspace-panel-main { grid-template-columns: minmax(0, 1fr) 250px; }
+.workspace-panel.is-tree-only .workspace-panel-main { grid-template-columns: 1fr; }
+.workspace-panel.is-tree-only .file-tree-panel { border-left: 0; }
+.workspace-panel.is-tree-only .workspace-footer { padding-left: 13px; }
+.composer .prompt-card footer { border-top: 0; padding-top: 2px; }
+@media (max-width: 1180px) {
+  .app-shell.drawer-open, .app-shell.drawer-open.preview-open { grid-template-columns: 52px 230px minmax(0, 1fr); }
+  .workspace-panel { width: 270px; }
+  .workspace-panel.is-preview { width: min(700px, calc(100vw - 52px)); }
+}
+@media (max-width: 900px) {
+  .app-shell.drawer-open, .app-shell.drawer-open.preview-open { grid-template-columns: 52px 220px minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .workspace-panel { width: 270px; }
+  .workspace-panel.is-preview { width: calc(100vw - 52px); }
+}
+
