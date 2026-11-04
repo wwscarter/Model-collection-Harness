@@ -89,4 +89,16 @@ describe('TraceStore', () => {
     expect(engine.listTraceRuns('session-db')).toHaveLength(1);
     engine.close();
   });
+
+  it('prunes old runs and their spans', () => {
+    const engine = new ObservabilityEngine();
+    const base = { sessionId: 's', status: 'success' as const, totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 };
+    engine.saveTraceRun({ ...base, id: 'old', startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:00:01.000Z' });
+    engine.saveTraceSpan({ id: 'old-span', runId: 'old', kind: 'model', name: 'old', status: 'success', startedAt: '2026-01-01T00:00:00.000Z', inputTokens: 0, outputTokens: 0, cost: 0 });
+    engine.saveTraceRun({ ...base, id: 'new', startedAt: '2026-11-04T00:00:00.000Z', endedAt: '2026-11-04T00:00:01.000Z' });
+    expect(engine.pruneTraces({ maxAgeDays: 1, maxRuns: 10, now: new Date('2026-11-04T12:00:00.000Z') })).toEqual({ runs: 1, spans: 1 });
+    expect(engine.getTrace('old')).toBeUndefined();
+    expect(engine.getTrace('new')).toBeDefined();
+    engine.close();
+  });
 });

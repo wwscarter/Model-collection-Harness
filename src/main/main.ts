@@ -935,6 +935,7 @@ async function bootstrap(): Promise<void> {
   traceRecorder = new TraceRecorder(observability, {
     onEvent: (event) => { mainWindow?.webContents.send('session:trace', event); },
   });
+  try { observability.pruneTraces({ maxAgeDays: 30, maxRuns: 1_000 }); } catch (error) { console.warn('Trace retention failed', error); }
   auditLog = new AuditLog(path.join(app.getPath('userData'), 'audit.jsonl'));
   codeAuditor = new CodeAuditor();
   installSessionHardening();

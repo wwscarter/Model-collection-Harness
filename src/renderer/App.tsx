@@ -49,6 +49,8 @@ export default function App() {
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(() => window.innerWidth >= 1180);
   const [isMacOS] = useState(() => navigator.userAgent.toLowerCase().includes('mac'));
   const [trace, setTrace] = useState<RunTrace>();
+  const [liveTrace, setLiveTrace] = useState<RunTrace>();
+  const currentRunIdRef = useRef<string | undefined>(undefined);
   const [sessionError, setSessionError] = useState<{ sessionId: string; message: string } | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [selectedAgentModelIds, setSelectedAgentModelIds] = useState<string[]>([]);
@@ -124,6 +126,7 @@ export default function App() {
   useEffect(() => {
     setEditingMessageId(null);
     promptBeforeEditingRef.current = '';
+    setLiveTrace(undefined);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -204,6 +207,21 @@ export default function App() {
         messages: upsertAssistantTool(session.messages, event.assistantMessageId!, event as ToolCallUpdate),
       } : session));
     });
+    const unsubscribeTrace = window.amd?.on('session:trace', (payload) => {
+      const event = payload as { type?: string; runId?: string; span?: RunTrace['spans'][number]; run?: RunTrace['run'] };
+      if (!event.runId || event.runId !== currentRunIdRef.current) return;
+      setLiveTrace((current) => {
+        const spans = event.span
+          ? [...(current?.spans.filter((span) => span.id !== event.span!.id) ?? []), event.span]
+          : current?.spans ?? [];
+        const run = event.run ?? current?.run ?? {
+          id: event.runId!, sessionId: '', status: 'running' as const,
+          startedAt: event.span?.startedAt ?? new Date().toISOString(),
+          totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0,
+        };
+        return { run, spans };
+      });
+    });
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
       const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
       const id = event.sessionId || event.taskId;
@@ -216,7 +234,7 @@ export default function App() {
         output: event.output ?? '', modelUsed, runId: event.runId ?? session.runId, routeConfidence: metrics?.routeConfidence, metrics,
       } : session));
     });
-    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribe?.(); };
+    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
   }, []);
 
   const refreshProjects = async () => {
@@ -281,6 +299,11 @@ export default function App() {
     if (selectedAgentModelIds.length === 1) { setCollaborationNotice('并行协作至少需要两款已启用模型。'); setCollaborationOpen(true); return; }
     const prompt = currentSession.prompt.trim();
     const runId = crypto.randomUUID();
+    currentRunIdRef.current = runId;
+    setLiveTrace({
+      run: { id: runId, sessionId: currentSession.id, status: 'running', startedAt: new Date().toISOString(), totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0 },
+      spans: [],
+    });
     // Keep the first title; overwriting it on every follow-up made sessions impossible to find.
     const title = currentSession.messages.length ? currentSession.title : prompt.slice(0, 36);
     const messageId = crypto.randomUUID();
@@ -435,7 +458,7 @@ export default function App() {
     {projectDrawerOpen && <aside className="right-drawer" aria-label="项目与运行信息">
       <div className="drawer-header"><div><div className="eyebrow">Project Workspace</div><h2>项目文件</h2></div><button className="icon-button" title="关闭右侧面板" aria-label="关闭右侧面板" onClick={() => setProjectDrawerOpen(false)}><X size={16} /></button></div>
       <div className="drawer-scroll"><ProjectPanel project={currentProject} reloadKey={projectReloadKey} onChangeDirectory={() => setShowNewProject(true)} onClear={() => void clearProject()} /></div>
-      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} trace={trace} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
+      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} trace={trace ?? liveTrace} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
     {showMemory && <MemoryPanel onClose={() => setShowMemory(false)} hasProject={Boolean(currentProject)} />}

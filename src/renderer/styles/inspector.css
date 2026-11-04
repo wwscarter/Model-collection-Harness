@@ -119,3 +119,6 @@
 .trace-failed { color: #b91c1c; font-size: 9px; }
 .trace-empty { padding: 12px; color: var(--text-secondary); font-size: 11px; }
 @keyframes trace-pulse { 50% { opacity: .35; } }
+.trace-summary-right { display: inline-flex; align-items: center; gap: 8px; }
+.trace-export { padding: 2px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--text-secondary); background: var(--surface); font-size: 9px; }
+.trace-export:hover { color: var(--text); background: var(--surface-soft); }

@@ -150,6 +150,24 @@ export class ObservabilityEngine implements TraceStore {
     return { run: toTraceRun(runRow), spans: spanRows.map(toTraceSpan) };
   }
 
+  /** Remove old/excess traces; returns the number of runs and spans deleted. */
+  pruneTraces(options: { maxAgeDays?: number; maxRuns?: number; now?: Date } = {}): { runs: number; spans: number } {
+    const maxAgeDays = Number.isFinite(options.maxAgeDays) ? Math.max(0, options.maxAgeDays!) : 30;
+    const maxRuns = Number.isFinite(options.maxRuns) ? Math.max(1, Math.floor(options.maxRuns!)) : 1_000;
+    const cutoff = new Date((options.now ?? new Date()).getTime() - maxAgeDays * 86_400_000).toISOString();
+    const ids = this.db.prepare(
+      `SELECT id FROM runs WHERE started_at < ? OR id NOT IN (SELECT id FROM runs ORDER BY started_at DESC LIMIT ?)`,
+    ).all(cutoff, maxRuns) as Array<{ id: string }>;
+    if (!ids.length) return { runs: 0, spans: 0 };
+    const placeholders = ids.map(() => '?').join(',');
+    const values = ids.map((row) => row.id);
+    return this.db.transaction(() => {
+      const spans = this.db.prepare(`DELETE FROM spans WHERE run_id IN (${placeholders})`).run(...values).changes;
+      const runs = this.db.prepare(`DELETE FROM runs WHERE id IN (${placeholders})`).run(...values).changes;
+      return { runs, spans };
+    })();
+  }
+
   listTraceRuns(sessionId: string, limit = 20): TraceRunRecord[] {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 20;
     const rows = this.db.prepare('SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC LIMIT ?').all(sessionId, safeLimit) as TraceRunRow[];

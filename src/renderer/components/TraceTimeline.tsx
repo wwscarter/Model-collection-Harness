@@ -27,6 +27,21 @@ export function TraceTimeline({ trace }: Props) {
   }, [trace]);
 
   if (!trace) return null;
+  const totalInput = trace.run.totalInputTokens || tree.spans.reduce((sum, span) => sum + span.inputTokens, 0);
+  const totalOutput = trace.run.totalOutputTokens || tree.spans.reduce((sum, span) => sum + span.outputTokens, 0);
+  const totalCost = trace.run.totalCost || tree.spans.reduce((sum, span) => sum + span.cost, 0);
+  const started = trace.run.startedAt ? new Date(trace.run.startedAt).getTime() : 0;
+  const latestEnd = tree.spans.reduce((latest, span) => Math.max(latest, span.endedAt ? new Date(span.endedAt).getTime() : 0), 0);
+  const runDuration = trace.run.durationMs ?? (started ? Math.max(0, (latestEnd || Date.now()) - started) : undefined);
+  const exportTrace = () => {
+    const blob = new Blob([JSON.stringify(trace, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `trace-${trace.run.id}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   const renderSpan = (span: TraceSpan, depth: number): React.ReactNode => {
     const children = tree.children.get(span.id) ?? [];
     return <React.Fragment key={span.id}>
@@ -47,8 +62,8 @@ export function TraceTimeline({ trace }: Props) {
 
   return <details className="trace-timeline" open>
     <summary>
-      <span><strong>调用链</strong><small>{tree.spans.length} 步 · {tree.spans.filter((span) => span.kind === 'model').length} 次模型调用</small></span>
-      <span className="mono">{duration(trace.run.durationMs)} · {tokens(trace.run.totalInputTokens + trace.run.totalOutputTokens)} tok · {money(trace.run.totalCost)}</span>
+      <span><strong>调用链</strong><small>{trace.run.status === 'running' ? '进行中 · ' : ''}{tree.spans.length} 步 · {tree.spans.filter((span) => span.kind === 'model').length} 次模型调用</small></span>
+      <span className="trace-summary-right"><span className="mono">{duration(runDuration)} · {tokens(totalInput + totalOutput)} tok · {money(totalCost)}</span><button type="button" className="trace-export" onClick={(event) => { event.preventDefault(); exportTrace(); }}>导出</button></span>
     </summary>
     <div className="trace-body">
       {tree.roots.length ? tree.roots.map((span) => renderSpan(span, 0)) : <div className="trace-empty">本轮没有可读取的调用链</div>}
