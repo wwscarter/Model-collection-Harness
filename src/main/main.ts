@@ -12,10 +12,13 @@ import { inspectProject } from '@core/project/ProjectInspector';
 import { ModelRegistry } from '@core/models/ModelRegistry';
 import { credentialOrigin, hasUsableCredentials, type ModelConfig, type ModelConfigInput } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
+import { loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
+import { ModelQuota } from '@core/routing/ModelQuota';
+import { shouldFallback } from '@core/routing/Fallback';
 import { createProvider, type ModelResponse } from '@core/providers/ModelProvider';
 import { fetchModelIdentifiers, testModelConnection, type ModelConnectionInput } from '@core/providers/ModelConnection';
 import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel, selectUtilityModel } from '@core/routing/ModelCollaboration';
-import { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
+import { ObservabilityEngine, type ModelInvocation } from '@core/observability/ObservabilityEngine';
 import { AuditLog } from '@core/audit/AuditLog';
 import { CodeAuditor } from '@core/audit/CodeAuditor';
 import { auditCodeAnswer } from '@core/audit/AuditService';
@@ -42,6 +45,8 @@ let sessionStorage: SessionStorage;
 let projectStorage: ProjectStorage;
 let registry: ModelRegistry;
 let router: AgentRouter;
+let routingPolicy: RoutingPolicyEngine;
+let modelQuota: ModelQuota;
 let observability: ObservabilityEngine;
 let auditLog: AuditLog;
 let growth: GrowthEngine;
@@ -320,6 +325,7 @@ function registerHandlers(): void {
     const collaboratorModels = collaboratorIds.map((id) => {
       const candidate = registry.getModel(id);
       if (!candidate || !candidate.enabled || !hasUsableCredentials(candidate)) throw new Error('子智能体只能使用已启用且配置了可用 API Key 的模型，请检查模型配置。');
+      if (!modelQuota.isAvailable(candidate)) throw new Error(`模型「${candidate.name}」已达到速率或每日配额，请稍后再试`);
       return candidate;
     });
     const trace = traceRecorder.startRun({ runId, sessionId, taskType: payload.taskType, complexity: payload.complexity });
@@ -362,8 +368,12 @@ function registerHandlers(): void {
       // Classify the user's request, not the project snapshot: a large context
       // used to make almost every project conversation look "high complexity".
       const routeSpan = trace.child('route', 'route', { requestedTaskType: payload.taskType, requestedComplexity: payload.complexity });
-      const decision = await router.routeTask({ id: runId, type: (payload.taskType || 'general') as any, description: payload.prompt, complexity: payload.complexity });
-      routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, alternatives: decision.alternativeModels } });
+      const decision = await routingPolicy.routeTask(
+        { id: runId, type: (payload.taskType || 'general') as any, description: payload.prompt, complexity: payload.complexity },
+        registry.getAllModels(),
+        { isAvailable: (modelId) => { const candidate = registry.getModel(modelId); return Boolean(candidate && modelQuota.isAvailable(candidate)); } },
+      );
+      routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId } });
       if (controller.signal.aborted) throw new Error('任务已取消');
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
       const model = registry.getModel(decision.modelId);
@@ -380,10 +390,11 @@ function registerHandlers(): void {
       const compactSpan = trace.child('compact', 'context.compact', { historyTurns: history.length });
       let summarySource: 'none' | 'existing' | 'deterministic' | 'llm' = contextAssembly.summary ? (contextAssembly.compacted ? 'deterministic' : 'existing') : 'none';
       const summaryModel = contextAssembly.compacted && contextAssembly.summaryCovers > contextAssembly.previousCovers
-        ? selectUtilityModel(registry.getEnabledModels(), model.id)
+        ? selectUtilityModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id)
         : undefined;
       if (summaryModel) {
         const summarySpan = compactSpan.child('model', 'summary-model', { modelId: summaryModel.id, role: 'summarizer' });
+        modelQuota.record(summaryModel.id);
         const summaryInvocationId = observability.recordInvocationStart(runId, summaryModel.id);
         try {
           const summaryResult = await summarizeContext({
@@ -437,12 +448,13 @@ function registerHandlers(): void {
       // verified plan to the execution model. Ordinary prompts (including "你好")
       // remain a single call so they do not incur an unnecessary second request.
       if (decision.complexity === 'high') {
-        const planningModel = selectPlanningModel(registry.getEnabledModels(), model.id);
+        const planningModel = selectPlanningModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id);
         if (planningModel) {
           planningModelId = planningModel.id;
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: planningModel.id, role: 'planning', reason: '为高复杂度任务生成执行计划', confidence: decision.confidence });
           const planningSpan = trace.child('plan', 'planning', { modelId: planningModel.id });
           const planningModelSpan = planningSpan.child('model', 'planning-model', { modelId: planningModel.id, role: 'planner' });
+          modelQuota.record(planningModel.id);
           const planningInvocationId = observability.recordInvocationStart(runId, planningModel.id);
           try {
             const planningContext = agentHistory.length
@@ -469,11 +481,20 @@ function registerHandlers(): void {
         }
       }
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: model.id, role: 'execution', planningModelId });
-      const invocationId = observability.recordInvocationStart(runId, model.id);
+      const executionCandidates: ModelConfig[] = [];
+      for (const candidateId of [model.id, ...(decision.fallbackModels ?? [])]) {
+        const candidate = registry.getModel(candidateId);
+        if (!candidate || !candidate.enabled || !hasUsableCredentials(candidate) || !modelQuota.isAvailable(candidate)) continue;
+        if (!executionCandidates.some((entry) => entry.id === candidate.id)) executionCandidates.push(candidate);
+      }
+      if (!executionCandidates.length) throw new Error('没有可执行的模型，请检查凭据与配额');
+      let executionModel = model;
+      let metrics: ModelInvocation | undefined;
+      const fallbackAttempts: string[] = [];
       try {
         synthesisSpan = collaboratorModels.length ? trace.child('synthesis', 'synthesis', { agents: collaboratorModels.length }) : undefined;
         executionSpan = (synthesisSpan ?? trace).child('model', 'execution', { modelId: model.id, role: 'executor' });
-        let result: ModelResponse;
+        let result: ModelResponse | undefined;
         let agentReports: Array<{ modelName: string; content: string }> = [];
         let failedAgentCount = 0;
         const agentMessages = collaboratorModels.map((agentModel, index) => ({
@@ -488,6 +509,7 @@ function registerHandlers(): void {
             const agentId = `${assistantMessageId}-agent-${index + 1}`;
             const agentSpan = trace.child('model', 'collaborator', { agentId, modelId: agentModel.id, role: 'analyst' });
             agentSpans.set(agentId, agentSpan);
+            modelQuota.record(agentModel.id);
             const agentInvocationId = observability.recordInvocationStart(runId, agentModel.id);
             let agentContent = '';
             agentMessages[index].status = 'running';
@@ -526,27 +548,53 @@ function registerHandlers(): void {
           ? buildSynthesisPrompt(executionPrompt, agentReports, failedAgentCount)
           : executionPrompt;
         let chunkIndex = 0;
-        result = await invokeStreamed(model, finalPrompt, 4000, (delta) => {
-          chunkIndex += 1;
-          mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: model.id });
-        }, { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => emitToolEvent(undefined, event) });
-        const metrics = observability.recordInvocationEnd(invocationId, result.inputTokens, result.outputTokens, model.costPer1kTokens, 'success');
-        const executionCost = costOf(result.inputTokens, result.outputTokens, model);
-        totalInputTokens += result.inputTokens;
-        totalOutputTokens += result.outputTokens;
-        totalCost += executionCost;
-        executionSpan.end({ inputTokens: result.inputTokens, outputTokens: result.outputTokens, cost: executionCost });
+        for (let index = 0; index < executionCandidates.length; index += 1) {
+          const candidate = executionCandidates[index];
+          modelQuota.record(candidate.id);
+          const attemptInvocationId = observability.recordInvocationStart(runId, candidate.id);
+          let emittedText = false;
+          let emittedTool = false;
+          try {
+            const attemptResult = await invokeStreamed(candidate, finalPrompt, 4000, (delta) => {
+              emittedText = true;
+              chunkIndex += 1;
+              mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: candidate.id });
+            }, { history: agentHistory, summary: contextAssembly.summary, skipHistoryTrim: true, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => { if (event.status === 'running') emittedTool = true; emitToolEvent(undefined, event); } });
+            metrics = observability.recordInvocationEnd(attemptInvocationId, attemptResult.inputTokens, attemptResult.outputTokens, candidate.costPer1kTokens, 'success');
+            result = attemptResult;
+            executionModel = candidate;
+            const executionCost = costOf(attemptResult.inputTokens, attemptResult.outputTokens, candidate);
+            totalInputTokens += attemptResult.inputTokens;
+            totalOutputTokens += attemptResult.outputTokens;
+            totalCost += executionCost;
+            executionSpan.setAttributes({ fallbackAttempts });
+            executionSpan.end({ inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost });
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            observability.recordInvocationEnd(attemptInvocationId, 0, 0, candidate.costPer1kTokens, 'failure', message);
+            executionModel = candidate;
+            const canFallback = shouldFallback({ index, total: executionCandidates.length, emittedText, emittedTool, error });
+            if (!canFallback) throw error;
+            fallbackAttempts.push(candidate.id);
+            executionSpan.setAttributes({ fallbackAttempts });
+          }
+        }
+        if (!result) throw new Error('模型没有返回结果');
         synthesisSpan?.end({ attributes: { reports: agentReports.length, failedAgents: failedAgentCount } });
         // Static code audit is deterministic and free. It runs only when the
         // answer actually contains code, and its result feeds the same audit log,
         // metrics table and growth profile instead of leaving them empty.
-        const auditSpan = trace.child('audit', 'static-audit', { modelId: model.id });
-        const audit = auditCodeAnswer(result.content, runId, model.id, { auditor: codeAuditor, log: auditLog, metrics: observability });
+        const auditSpan = trace.child('audit', 'static-audit', { modelId: executionModel.id });
+        const audit = auditCodeAnswer(result.content, runId, executionModel.id, { auditor: codeAuditor, log: auditLog, metrics: observability });
         auditSpan.end({ attributes: audit ? { passed: audit.passed, score: audit.score, issues: audit.issueCount, auditModelId: audit.auditModelId } : { skipped: 'no-code' } });
         if (metrics) {
-          recordGrowth({ modelId: model.id, taskType: decision.taskType, success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration, auditApproval: audit?.passed });
+          recordGrowth({ modelId: executionModel.id, taskType: decision.taskType, success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration, auditApproval: audit?.passed });
         }
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(model), modelsUsed: [...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), model.id], planningModelId, decision, metrics, audit, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        if (executionModel.id !== model.id) {
+          mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
+        }
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: [...new Set([...(planningModelId ? [planningModelId] : []), ...collaboratorModels.map((collaborator) => collaborator.id), ...fallbackAttempts, executionModel.id])], fallbackAttempts, planningModelId, decision, metrics, audit, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace('success');
         mainWindow?.webContents.send('session:completed', output);
         return output;
@@ -554,10 +602,9 @@ function registerHandlers(): void {
         const message = error instanceof Error ? error.message : String(error);
         executionSpan?.end({ status: message === '任务已取消' ? 'cancelled' : 'failed', error: message });
         synthesisSpan?.end({ status: 'failed', error: message });
-        const failedMetrics = observability.recordInvocationEnd(invocationId, 0, 0, model.costPer1kTokens, 'failure', message);
         // Failures are learning signals too; user cancellations are not model failures.
-        if (!(error instanceof Error && error.message === '任务已取消')) {
-          recordGrowth({ modelId: model.id, taskType: decision.taskType, success: false, completed: false, actualLatency: failedMetrics?.latency });
+        if (message !== '任务已取消') {
+          recordGrowth({ modelId: executionModel.id, taskType: decision.taskType, success: false, completed: false, actualLatency: metrics?.latency });
         }
         throw error;
       }
@@ -768,6 +815,9 @@ async function bootstrap(): Promise<void> {
   }
   growth = new GrowthEngine({ storagePath: path.join(app.getPath('userData'), 'growth-profiles.json') });
   router = new AgentRouter(registry, growth);
+  const routingPolicyState = loadRoutingPolicy(path.join(app.getPath('userData'), 'routing-rules.json'));
+  routingPolicy = new RoutingPolicyEngine(router, routingPolicyState.policy);
+  for (const diagnostic of routingPolicyState.diagnostics) console.warn('[routing]', diagnostic);
   tty = new TtyManager({ defaultCwd: workspaceRoot });
   projects = new ProjectManager();
   commandExecutor = new CommandExecutor();
@@ -783,6 +833,7 @@ async function bootstrap(): Promise<void> {
     ],
   });
   observability = new ObservabilityEngine(path.join(app.getPath('userData'), 'metrics.db'));
+  modelQuota = new ModelQuota(observability);
   memoryStore = new MemoryStore(path.join(app.getPath('userData'), 'memory.db'));
   traceRecorder = new TraceRecorder(observability, {
     onEvent: (event) => { mainWindow?.webContents.send('session:trace', event); },

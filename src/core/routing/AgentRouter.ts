@@ -6,6 +6,7 @@ export interface RoutingPerformance { getRoutingAdjustment(modelId: string, task
 
 export type TaskType = 'code' | 'reasoning' | 'analysis' | 'review' | 'creative' | 'general';
 export type TaskComplexity = 'low' | 'medium' | 'high';
+export type RoutingStrategy = 'single' | 'plan' | 'parallel' | 'plan+verify';
 
 export interface TaskContext {
   id: string;
@@ -23,6 +24,10 @@ export interface RoutingDecision {
   reason: string;
   confidence: number;
   alternativeModels: string[];
+  /** Models to try after the primary fails before producing output. */
+  fallbackModels?: string[];
+  strategy?: RoutingStrategy;
+  ruleId?: string;
   estimatedCost: number;
   estimatedDuration: number;
 }
