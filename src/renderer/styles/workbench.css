@@ -497,3 +497,9 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .detection-right { color: var(--text-muted); }
 .dialog-footer { border-top-color: var(--line); background: var(--surface); }
 
+
+.composer-project { display: inline-flex; max-width: 180px; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 10px; }
+.composer-project:hover { color: var(--text); background: var(--surface-low); }
+.composer-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-project.is-empty { color: var(--text-faint); }
+

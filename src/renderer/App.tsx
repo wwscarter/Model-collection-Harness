@@ -275,7 +275,18 @@ export default function App() {
     setEditingMessageId(null);
   };
   const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); setCurrentSessionId(id); setView('workspace'); };
-  const newSession = () => { if (editingMessageId) cancelMessageEdit(); const session = starterSession(); setSessions((existing) => [session, ...existing]); setCurrentSessionId(session.id); setView('workspace'); setSessionError(null); void window.amd?.sessions.save({ ...session, updatedAt: new Date() }); };
+  const newSession = () => {
+    if (editingMessageId) cancelMessageEdit();
+    const session = starterSession();
+    setSessions((existing) => [session, ...existing]);
+    setCurrentSessionId(session.id);
+    setView('workspace');
+    setProjectDrawerOpen(false);
+    setOpenFiles([]);
+    setActiveFilePath(undefined);
+    setSessionError(null);
+    void window.amd?.sessions.save({ ...session, updatedAt: new Date() });
+  };
   const enabledModelOptions = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
   const defaultSessionModelId = enabledModelOptions.find((model) => model.isPrimary)?.id ?? enabledModelOptions[0]?.id;
   const saveSessionPreference = (patch: Partial<Session>) => {
@@ -434,7 +445,7 @@ export default function App() {
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}

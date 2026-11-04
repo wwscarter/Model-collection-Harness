@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, Plus, Sparkles, Square, X } from 'lucide-react';
-import type { ModelConfig } from '../types';
+import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, Plus, Sparkles, Square, X } from 'lucide-react';
+import type { ModelConfig, ProjectInfo } from '../types';
 
 interface AgentInputBarProps {
   value: string;
@@ -12,6 +12,7 @@ interface AgentInputBarProps {
   multiModel: boolean;
   pinnedModelId?: string;
   models: ModelConfig[];
+  project?: ProjectInfo;
   onToggleMultiModel: () => void;
   onSelectModel: (id: string) => void;
   onChange: (value: string) => void;
@@ -22,7 +23,7 @@ interface AgentInputBarProps {
   onCancelEdit: () => void;
 }
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -38,7 +39,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
       {editing && <div className="prompt-editing-bar"><span>编辑消息 · 重新发送后将生成新的回复</span><button className="message-icon-button" title="取消编辑" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></button></div>}
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <footer>
-        <div className="dock-left"><button className="attach-button" title="添加项目上下文" aria-label="添加项目上下文" onClick={onOpenContext}><Plus size={18} /></button></div>
+        <div className="dock-left"><button className="attach-button" title="添加项目上下文" aria-label="添加项目上下文" onClick={onOpenContext}><Plus size={18} /></button>{project ? <button className="composer-project" title={project.root} aria-label={'当前项目：' + project.name} onClick={onOpenContext}><Folder size={12} strokeWidth={1.7} /><span>{project.name}</span></button> : <button className="composer-project is-empty" title="关联本地项目" aria-label="关联本地项目" onClick={onOpenContext}><FolderPlus size={12} strokeWidth={1.7} /><span>关联项目</span></button>}</div>
         <div className="dock-right">
           <div className="model-menu-wrap">
             <button className="model-menu-trigger" aria-label="切换模型" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>{multiModel ? <Sparkles size={12} /> : null}<span>{label}</span><ChevronDown size={11} className={menuOpen ? 'is-open' : ''} /></button>
