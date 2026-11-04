@@ -17,15 +17,21 @@ const amdApi = {
   trace: {
     get: (runId: string) => ipcRenderer.invoke('trace:get', runId),
     recent: (sessionId: string, limit?: number) => ipcRenderer.invoke('trace:recent', sessionId, limit),
+    settings: () => ipcRenderer.invoke('trace:settings:get'),
+    setSettings: (options: { maxAgeDays?: number; maxRuns?: number }) => ipcRenderer.invoke('trace:settings:set', options),
+    clear: () => ipcRenderer.invoke('trace:clear'),
   },
   routingRules: {
     get: () => ipcRenderer.invoke('routing:rules:get'),
     set: (text: string) => ipcRenderer.invoke('routing:rules:set', text),
+    history: () => ipcRenderer.invoke('routing:rules:history'),
+    restore: (name: string) => ipcRenderer.invoke('routing:rules:restore', name),
   },
   memory: {
     list: (options?: { scope?: 'global' | 'project' | 'session' }) => ipcRenderer.invoke('memory:list', options),
     add: (input: unknown) => ipcRenderer.invoke('memory:add', input),
     remove: (id: string) => ipcRenderer.invoke('memory:remove', id),
+    approve: (id: string) => ipcRenderer.invoke('memory:approve', id),
     exportAll: () => ipcRenderer.invoke('memory:export'),
     clear: () => ipcRenderer.invoke('memory:clear'),
     settings: () => ipcRenderer.invoke('memory:settings'),

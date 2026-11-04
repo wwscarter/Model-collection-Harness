@@ -67,6 +67,17 @@ describe('long-term memory', () => {
     store.close();
   });
 
+  it('keeps auto-extracted memories pending until approved', () => {
+    const store = new MemoryStore(':memory:');
+    const pending = store.add({ content: '项目使用 pnpm', kind: 'decision', scope: 'global', status: 'pending' });
+    expect(store.list()).toHaveLength(0);
+    expect(store.list({ status: 'all' })).toHaveLength(1);
+    expect(retrieveMemories(store, { query: 'pnpm', sessionId: 's' }).records).toHaveLength(0);
+    expect(store.approve(pending.id)).toBe(true);
+    expect(store.list()).toHaveLength(1);
+    store.close();
+  });
+
   it('honors the retrieval token budget', () => {
     const store = new MemoryStore(':memory:');
     for (let index = 0; index < 5; index += 1) store.add({ content: `项目规则 ${index} ${'x'.repeat(300)}`, kind: 'fact', scope: 'project', projectRoot: '/p' });

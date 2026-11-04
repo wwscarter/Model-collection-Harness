@@ -89,6 +89,7 @@ export class ObservabilityEngine implements TraceStore {
       );
       CREATE INDEX IF NOT EXISTS idx_spans_run ON spans(run_id, started_at);
       CREATE INDEX IF NOT EXISTS idx_spans_parent ON spans(parent_span_id);
+      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
   }
 
@@ -148,6 +149,35 @@ export class ObservabilityEngine implements TraceStore {
     if (!runRow) return undefined;
     const spanRows = this.db.prepare('SELECT * FROM spans WHERE run_id = ? ORDER BY started_at ASC').all(runId) as TraceSpanRow[];
     return { run: toTraceRun(runRow), spans: spanRows.map(toTraceSpan) };
+  }
+
+  getTraceRetention(): { maxAgeDays: number; maxRuns: number } {
+    try {
+      const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('trace_retention') as { value: string } | undefined;
+      const parsed = row ? JSON.parse(row.value) as { maxAgeDays?: unknown; maxRuns?: unknown } : {};
+      return {
+        maxAgeDays: Number.isFinite(parsed.maxAgeDays) ? Math.max(1, Math.min(3650, Number(parsed.maxAgeDays))) : 30,
+        maxRuns: Number.isFinite(parsed.maxRuns) ? Math.max(10, Math.min(100_000, Math.floor(Number(parsed.maxRuns)))) : 1_000,
+      };
+    } catch { return { maxAgeDays: 30, maxRuns: 1_000 }; }
+  }
+
+  setTraceRetention(options: { maxAgeDays?: number; maxRuns?: number }): { maxAgeDays: number; maxRuns: number } {
+    const current = this.getTraceRetention();
+    const next = {
+      maxAgeDays: Number.isFinite(options.maxAgeDays) ? Math.max(1, Math.min(3650, Math.floor(options.maxAgeDays!))) : current.maxAgeDays,
+      maxRuns: Number.isFinite(options.maxRuns) ? Math.max(10, Math.min(100_000, Math.floor(options.maxRuns!))) : current.maxRuns,
+    };
+    this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('trace_retention', JSON.stringify(next));
+    return next;
+  }
+
+  clearTraces(): { runs: number; spans: number } {
+    return this.db.transaction(() => {
+      const spans = this.db.prepare('DELETE FROM spans').run().changes;
+      const runs = this.db.prepare('DELETE FROM runs').run().changes;
+      return { runs, spans };
+    })();
   }
 
   /** Remove old/excess traces; returns the number of runs and spans deleted. */

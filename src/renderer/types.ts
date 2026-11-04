@@ -87,6 +87,7 @@ export interface MemoryRecord {
   tags: string[];
   source: 'user' | 'agent' | 'tool';
   confidence: number;
+  status: 'active' | 'pending';
   createdAt: string | Date;
   updatedAt: string | Date;
   lastUsedAt?: string | Date;
@@ -189,15 +190,21 @@ export interface AmdApi {
   trace: {
     get: (runId: string) => Promise<RunTrace | undefined>;
     recent: (sessionId: string, limit?: number) => Promise<TraceRun[]>;
+    settings: () => Promise<{ maxAgeDays: number; maxRuns: number }>;
+    setSettings: (options: { maxAgeDays?: number; maxRuns?: number }) => Promise<{ maxAgeDays: number; maxRuns: number }>;
+    clear: () => Promise<{ runs: number; spans: number }>;
   };
   routingRules: {
     get: () => Promise<{ path: string; text: string }>;
     set: (text: string) => Promise<{ policy: unknown; diagnostics: string[] }>;
+    history: () => Promise<Array<{ name: string; savedAt: string }>>;
+    restore: (name: string) => Promise<{ text: string; policy: unknown; diagnostics: string[] }>;
   };
   memory: {
     list: (options?: { scope?: MemoryScope }) => Promise<MemoryRecord[]>;
     add: (input: { content: string; kind?: MemoryKind; scope?: MemoryScope; tags?: string[] }) => Promise<MemoryRecord>;
     remove: (id: string) => Promise<{ success: boolean }>;
+    approve: (id: string) => Promise<{ success: boolean }>;
     exportAll: () => Promise<MemoryRecord[]>;
     clear: () => Promise<{ removed: number }>;
     settings: () => Promise<{ autoExtract: boolean }>;

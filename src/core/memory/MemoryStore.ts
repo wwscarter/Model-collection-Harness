@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 export type MemoryScope = 'global' | 'project' | 'session';
 export type MemoryKind = 'preference' | 'fact' | 'decision' | 'todo' | 'artifact';
+export type MemoryStatus = 'active' | 'pending';
 
 export interface MemoryRecord {
   id: string;
@@ -16,6 +17,7 @@ export interface MemoryRecord {
   tags: string[];
   source: 'user' | 'agent' | 'tool';
   confidence: number;
+  status: MemoryStatus;
   createdAt: Date;
   updatedAt: Date;
   lastUsedAt?: Date;
@@ -31,6 +33,7 @@ export interface MemoryInput {
   tags?: string[];
   source?: 'user' | 'agent' | 'tool';
   confidence?: number;
+  status?: MemoryStatus;
   expiresAt?: Date;
 }
 
@@ -39,12 +42,13 @@ export interface MemoryFilter {
   projectRoot?: string;
   sessionId?: string;
   kind?: MemoryKind;
+  status?: MemoryStatus | 'all';
   limit?: number;
 }
 
 interface MemoryRow {
   id: string; scope: string; project_root: string | null; session_id: string | null;
-  kind: string; content: string; tags: string; source: string; confidence: number;
+  kind: string; content: string; tags: string; source: string; confidence: number; status: string;
   created_at: string; updated_at: string; last_used_at: string | null; expires_at: string | null;
 }
 
@@ -69,6 +73,7 @@ export class MemoryStore {
         tags TEXT NOT NULL DEFAULT '[]',
         source TEXT NOT NULL,
         confidence REAL NOT NULL DEFAULT 0.8,
+        status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_used_at TEXT,
@@ -91,6 +96,8 @@ export class MemoryStore {
         INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
       END;
     `);
+    const columns = this.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'status')) this.db.exec("ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
     try { this.db.exec("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')"); } catch { /* FTS rebuild is best effort */ }
   }
 
@@ -113,17 +120,18 @@ export class MemoryStore {
       tags: [...new Set((input.tags ?? []).map((tag) => tag.trim()).filter(Boolean).slice(0, 12))],
       source: input.source ?? 'user',
       confidence: Number.isFinite(input.confidence) ? Math.min(1, Math.max(0, input.confidence!)) : 0.8,
+      status: input.status ?? 'active',
       createdAt: now,
       updatedAt: now,
       expiresAt: input.expiresAt,
     };
     this.db.prepare(
-      `INSERT INTO memories (id, scope, project_root, session_id, kind, content, tags, source, confidence, created_at, updated_at, last_used_at, expires_at)
-       VALUES (@id, @scope, @project_root, @session_id, @kind, @content, @tags, @source, @confidence, @created_at, @updated_at, @last_used_at, @expires_at)`,
+      `INSERT INTO memories (id, scope, project_root, session_id, kind, content, tags, source, confidence, status, created_at, updated_at, last_used_at, expires_at)
+       VALUES (@id, @scope, @project_root, @session_id, @kind, @content, @tags, @source, @confidence, @status, @created_at, @updated_at, @last_used_at, @expires_at)`,
     ).run({
       id: record.id, scope: record.scope, project_root: record.projectRoot ?? null, session_id: record.sessionId ?? null,
       kind: record.kind, content: record.content, tags: JSON.stringify(record.tags), source: record.source,
-      confidence: record.confidence, created_at: record.createdAt.toISOString(), updated_at: record.updatedAt.toISOString(),
+      confidence: record.confidence, status: record.status, created_at: record.createdAt.toISOString(), updated_at: record.updatedAt.toISOString(),
       last_used_at: null, expires_at: record.expiresAt?.toISOString() ?? null,
     });
     return record;
@@ -136,6 +144,8 @@ export class MemoryStore {
     if (filter.projectRoot) { clauses.push('(scope = ? AND project_root = ?)'); params.push('project', filter.projectRoot); }
     if (filter.sessionId) { clauses.push('(scope = ? AND session_id = ?)'); params.push('session', filter.sessionId); }
     if (filter.kind) { clauses.push('kind = ?'); params.push(filter.kind); }
+    if (filter.status && filter.status !== 'all') { clauses.push('status = ?'); params.push(filter.status); }
+    else if (!filter.status) { clauses.push("status = 'active'"); }
     const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
     const limit = Math.min(2_000, Math.max(1, Math.floor(filter.limit ?? 500)));
     const rows = this.db.prepare(`SELECT * FROM memories${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit) as MemoryRow[];
@@ -159,6 +169,7 @@ export class MemoryStore {
         if (filter.projectRoot && record.scope === 'session') return false;
         if (filter.sessionId && record.scope === 'session' && record.sessionId !== filter.sessionId) return false;
         if (filter.kind && record.kind !== filter.kind) return false;
+        if (record.status !== 'active') return false;
         return !record.expiresAt || record.expiresAt.getTime() > Date.now();
       }).slice(0, Math.min(200, Math.max(1, filter.limit ?? 50)));
     } catch {
@@ -175,7 +186,11 @@ export class MemoryStore {
     this.db.prepare('INSERT INTO memory_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('auto_extract', enabled ? '1' : '0');
   }
 
-  exportAll(): MemoryRecord[] { return this.list({ limit: 2_000 }); }
+  approve(id: string): boolean {
+    return this.db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(new Date().toISOString(), id).changes > 0;
+  }
+
+  exportAll(): MemoryRecord[] { return this.list({ limit: 2_000, status: 'all' }); }
 
   clear(): number {
     return this.db.transaction(() => this.db.prepare('DELETE FROM memories').run().changes)();
@@ -199,6 +214,7 @@ function toRecord(row: MemoryRow): MemoryRecord {
     id: row.id, scope: row.scope as MemoryScope, projectRoot: row.project_root ?? undefined,
     sessionId: row.session_id ?? undefined, kind: row.kind as MemoryKind, content: row.content,
     tags: parseTags(row.tags), source: row.source as MemoryRecord['source'], confidence: row.confidence,
+    status: row.status === 'pending' ? 'pending' : 'active',
     createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at),
     lastUsedAt: row.last_used_at ? new Date(row.last_used_at) : undefined,
     expiresAt: row.expires_at ? new Date(row.expires_at) : undefined,

@@ -52,6 +52,7 @@ let registry: ModelRegistry;
 let router: AgentRouter;
 let routingPolicy: RoutingPolicyEngine;
 let routingRulesPath = '';
+let routingHistoryDir = '';
 let modelQuota: ModelQuota;
 let observability: ObservabilityEngine;
 let auditLog: AuditLog;
@@ -307,12 +308,37 @@ function registerHandlers(): void {
   handle('routing:rules:set', (_event, text: unknown) => {
     if (typeof text !== 'string' || text.length > 100_000) throw new Error('路由规则内容无效');
     JSON.parse(text);
+    if (fs.existsSync(routingRulesPath)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(routingRulesPath, path.join(routingHistoryDir, `${stamp}.json`));
+      const snapshots = fs.readdirSync(routingHistoryDir).filter((name) => name.endsWith('.json')).sort().reverse();
+      for (const stale of snapshots.slice(20)) fs.rmSync(path.join(routingHistoryDir, stale), { force: true });
+    }
     const temporary = `${routingRulesPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(temporary, routingRulesPath);
     const state = loadRoutingPolicy(routingRulesPath);
     routingPolicy = new RoutingPolicyEngine(router, state.policy);
     return { policy: state.policy, diagnostics: state.diagnostics };
+  });
+  handle('routing:rules:history', () => fs.readdirSync(routingHistoryDir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .reverse()
+    .slice(0, 20)
+    .map((name) => ({ name, savedAt: fs.statSync(path.join(routingHistoryDir, name)).mtime.toISOString() })));
+  handle('routing:rules:restore', (_event, name: unknown) => {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]+\.json$/.test(name)) throw new Error('历史版本名称无效');
+    const snapshot = path.join(routingHistoryDir, name);
+    if (!fs.existsSync(snapshot)) throw new Error('历史版本不存在');
+    const text = fs.readFileSync(snapshot, 'utf8');
+    JSON.parse(text);
+    const temporary = `${routingRulesPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, routingRulesPath);
+    const state = loadRoutingPolicy(routingRulesPath);
+    routingPolicy = new RoutingPolicyEngine(router, state.policy);
+    return { text, policy: state.policy, diagnostics: state.diagnostics };
   });
   handle('session:execute', async (_event, payload: RunRequest) => {
     if (!payload || typeof payload.prompt !== 'string' || !payload.prompt.trim()) throw new Error('任务描述不能为空');
@@ -342,14 +368,24 @@ function registerHandlers(): void {
   });
   handle('trace:get', (_event, runId: unknown) => typeof runId === 'string' ? traceRecorder.getTrace(runId) : undefined);
   handle('trace:recent', (_event, sessionId: unknown, limit?: number) => typeof sessionId === 'string' ? traceRecorder.listRecent(sessionId, limit) : []);
+  handle('trace:settings:get', () => observability.getTraceRetention());
+  handle('trace:settings:set', (_event, options: unknown) => {
+    if (!options || typeof options !== 'object') throw new Error('Trace 保留设置无效');
+    const value = options as { maxAgeDays?: unknown; maxRuns?: unknown };
+    return observability.setTraceRetention({
+      maxAgeDays: typeof value.maxAgeDays === 'number' ? value.maxAgeDays : undefined,
+      maxRuns: typeof value.maxRuns === 'number' ? value.maxRuns : undefined,
+    });
+  });
+  handle('trace:clear', () => observability.clearTraces());
   handle('memory:list', (_event, options?: { scope?: 'global' | 'project' | 'session' } | null) => {
     const projectRoot = projects.getRoot();
     const scope = options?.scope;
-    const records = scope === 'global' ? memoryStore.list({ scopes: ['global'] })
-      : scope === 'project' ? (projectRoot ? memoryStore.list({ scopes: ['project'], projectRoot }) : [])
+    const records = scope === 'global' ? memoryStore.list({ scopes: ['global'], status: 'all' })
+      : scope === 'project' ? (projectRoot ? memoryStore.list({ scopes: ['project'], projectRoot, status: 'all' }) : [])
         : [
-          ...memoryStore.list({ scopes: ['global'] }),
-          ...(projectRoot ? memoryStore.list({ scopes: ['project'], projectRoot }) : []),
+          ...memoryStore.list({ scopes: ['global'], status: 'all' }),
+          ...(projectRoot ? memoryStore.list({ scopes: ['project'], projectRoot, status: 'all' }) : []),
         ];
     return records.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()).slice(0, 200);
   });
@@ -371,6 +407,7 @@ function registerHandlers(): void {
     });
   });
   handle('memory:remove', (_event, id: unknown) => typeof id === 'string' ? { success: memoryStore.remove(id) } : { success: false });
+  handle('memory:approve', (_event, id: unknown) => typeof id === 'string' ? { success: memoryStore.approve(id) } : { success: false });
   handle('memory:export', () => memoryStore.exportAll());
   handle('memory:clear', () => ({ removed: memoryStore.clear() }));
   handle('memory:settings', () => ({ autoExtract: memoryStore.getAutoExtract() }));
@@ -534,6 +571,8 @@ async function bootstrap(): Promise<void> {
   growth = new GrowthEngine({ storagePath: path.join(app.getPath('userData'), 'growth-profiles.json') });
   router = new AgentRouter(registry, growth);
   routingRulesPath = path.join(app.getPath('userData'), 'routing-rules.json');
+  routingHistoryDir = path.join(app.getPath('userData'), 'routing-rules.history');
+  fs.mkdirSync(routingHistoryDir, { recursive: true });
   const routingPolicyState = loadRoutingPolicy(routingRulesPath);
   routingPolicy = new RoutingPolicyEngine(router, routingPolicyState.policy);
   for (const diagnostic of routingPolicyState.diagnostics) console.warn('[routing]', diagnostic);
@@ -557,7 +596,7 @@ async function bootstrap(): Promise<void> {
   traceRecorder = new TraceRecorder(observability, {
     onEvent: (event) => { mainWindow?.webContents.send('session:trace', event); },
   });
-  try { observability.pruneTraces({ maxAgeDays: 30, maxRuns: 1_000 }); } catch (error) { console.warn('Trace retention failed', error); }
+  try { observability.pruneTraces(observability.getTraceRetention()); } catch (error) { console.warn('Trace retention failed', error); }
   auditLog = new AuditLog(path.join(app.getPath('userData'), 'audit.jsonl'));
   codeAuditor = new CodeAuditor();
   installSessionHardening();

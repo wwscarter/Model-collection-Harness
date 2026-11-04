@@ -579,7 +579,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                   try {
                     const scope = projectRoot ? 'project' : 'global';
                     const saved = memoryStore.add({
-                      content: memory.content, kind: memory.kind, tags: memory.tags, source: 'agent',
+                      content: memory.content, kind: memory.kind, tags: memory.tags, source: 'agent', status: 'pending',
                       scope, projectRoot: scope === 'project' ? projectRoot : undefined,
                     });
                     extractedMemoryIds.push(saved.id);

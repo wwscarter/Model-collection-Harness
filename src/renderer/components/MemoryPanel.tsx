@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BrainCircuit, Plus, Trash2, X } from 'lucide-react';
+import { BrainCircuit, Check, Plus, Trash2, X } from 'lucide-react';
 import type { MemoryKind, MemoryRecord, MemoryScope } from '../types';
 
 interface MemoryPanelProps { onClose: () => void; hasProject: boolean; }
@@ -37,6 +37,10 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
+  };
+  const approve = async (id: string) => {
+    try { await window.amd?.memory?.approve(id); await load(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const remove = async (id: string) => {
     if (!window.confirm('删除这条长期记忆？')) return;
@@ -82,7 +86,7 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
     {error && <div className="memory-error" role="alert">{error}</div>}
     <div className="memory-list">
       {records.length ? records.map((record) => <article key={record.id} className="memory-item">
-        <div className="memory-item-head"><span className={`memory-scope ${record.scope}`}>{record.scope === 'project' ? '项目' : record.scope === 'session' ? '会话' : '全局'}</span><span className="memory-kind">{kindLabels[record.kind] ?? record.kind}</span><span className="memory-date">{new Date(record.updatedAt).toLocaleDateString('zh-CN')}</span><button className="message-icon-button" aria-label="删除记忆" title="删除记忆" onClick={() => void remove(record.id)}><Trash2 size={13} /></button></div>
+        <div className="memory-item-head"><span className={`memory-scope ${record.scope}`}>{record.scope === 'project' ? '项目' : record.scope === 'session' ? '会话' : '全局'}</span><span className="memory-kind">{kindLabels[record.kind] ?? record.kind}</span>{record.status === 'pending' && <span className="memory-pending">待审核</span>}<span className="memory-date">{new Date(record.updatedAt).toLocaleDateString('zh-CN')}</span>{record.status === 'pending' && <button className="message-icon-button" aria-label="通过记忆" title="通过审核" onClick={() => void approve(record.id)}><Check size={13} /></button>}<button className="message-icon-button" aria-label="删除记忆" title="删除记忆" onClick={() => void remove(record.id)}><Trash2 size={13} /></button></div>
         <p>{record.content}</p>
         {!!record.tags.length && <div className="memory-tags">{record.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       </article>) : <div className="memory-empty"><BrainCircuit size={22} /><strong>还没有长期记忆</strong><span>在上面写一条，或让智能体在对话中调用 remember 工具。</span></div>}

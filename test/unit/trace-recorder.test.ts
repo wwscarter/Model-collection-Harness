@@ -99,6 +99,10 @@ describe('TraceStore', () => {
     expect(engine.pruneTraces({ maxAgeDays: 1, maxRuns: 10, now: new Date('2026-11-04T12:00:00.000Z') })).toEqual({ runs: 1, spans: 1 });
     expect(engine.getTrace('old')).toBeUndefined();
     expect(engine.getTrace('new')).toBeDefined();
+    expect(engine.getTraceRetention()).toEqual({ maxAgeDays: 30, maxRuns: 1_000 });
+    expect(engine.setTraceRetention({ maxAgeDays: 7, maxRuns: 200 })).toEqual({ maxAgeDays: 7, maxRuns: 200 });
+    expect(engine.getTraceRetention()).toEqual({ maxAgeDays: 7, maxRuns: 200 });
+    expect(engine.clearTraces()).toEqual({ runs: 1, spans: 0 });
     engine.close();
   });
 });
