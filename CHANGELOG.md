@@ -22,6 +22,8 @@
 - Added live trace events, 30-day/1,000-run trace retention and JSON export.
 - Added FTS5 memory search, memory export/clear and an opt-in automatic memory extractor.
 - Added a routing rules editor, automatic parallel collaborators and an escalate revision strategy.
+- Extracted the session execution pipeline into RunCoordinator with integration tests; main now only handles IPC, cancellation and event forwarding.
+- Added trace retention settings/clear controls, pending review for auto-extracted memories, routing rule history/restore, and a packaged renderer smoke test.
 
 ### Reliability
 

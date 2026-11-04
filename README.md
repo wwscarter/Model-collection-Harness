@@ -111,8 +111,12 @@ npm run pack:dir
 npm run lint
 npm test
 npm run test:coverage
+npm run build
+npm run smoke:renderer
 npm run release:check
 ```
+
+`smoke:renderer` 以隐藏窗口加载构建产物，验证 sandbox preload、CSP、window.amd/trace/memory 与根节点渲染；没有图形环境时需要 Xvfb 或本地桌面会话。
 
 CI 见 `.github/workflows/ci.yml`：Node 22/24 上执行 `lint`、带阈值的全项目覆盖率测试和构建。覆盖率从 `src/**` 全量统计，不再只统计被测试加载过的模块。
 
