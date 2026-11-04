@@ -24,6 +24,7 @@
 - Added a routing rules editor, automatic parallel collaborators and an escalate revision strategy.
 - Extracted the session execution pipeline into RunCoordinator with integration tests; main now only handles IPC, cancellation and event forwarding.
 - Added trace retention settings/clear controls, pending review for auto-extracted memories, routing rule history/restore, and a packaged renderer smoke test.
+- Replaced the JSON-only routing editor with a field-based rule form (JSON remains an advanced mode) and added batch approve/delete for pending memories.
 
 ### Reliability
 
