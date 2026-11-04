@@ -62,9 +62,9 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
             {projects.map((project) => {
               const active = project.id === activeProjectId;
               return <div key={project.id} className={'project-item ' + (active ? 'active' : '')}>
-                <button className="item-main" title={project.root} aria-current={active ? 'true' : undefined} onClick={() => onOpenProject(project.id)}>
+                <button className="item-main" title={project.displayRoot} aria-label={project.name + '，' + project.displayRoot} aria-current={active ? 'true' : undefined} onClick={() => onOpenProject(project.id)}>
                   <span className="project-icon"><Folder size={12} strokeWidth={1.7} /></span>
-                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={project.name}>{project.name}</span></span><span className="item-meta mono">{project.displayRoot}</span></span>
+                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={project.name}>{project.name}</span></span></span>
                 </button>
                 <button className="item-remove" title="从列表移除（不会删除文件）" aria-label={'从列表移除 ' + project.name} onClick={() => onRemoveProject(project.id)}><X size={13} /></button>
               </div>;
