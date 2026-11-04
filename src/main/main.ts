@@ -69,7 +69,7 @@ function recordGrowth(feedback: RoutingFeedback): void {
   try { growth.recordFeedback(feedback); } catch (error) { console.error('Growth feedback failed', error); }
 }
 
-const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'remember', 'recall']);
+const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'process_list', 'remember', 'recall']);
 
 /** Read operations run directly. Mutations and commands use the existing per-call confirmation. */
 async function approveToolCall({ toolName, input, projectRoot }: { toolName: string; input: Record<string, unknown>; projectRoot?: string }): Promise<string | undefined> {

@@ -37,6 +37,19 @@ export function createProjectCommandTools(projectRoot: string, manager: ProjectP
       async execute(_id, params) { return result(manager.status(params.processId, projectRoot)); },
     }),
     defineTool({
+      name: 'process_list', label: '列出项目进程',
+      description: 'List processes started with run_command in this project, including running/idle state and recent output. Use this when a processId was lost between turns.',
+      promptSnippet: 'List managed project processes and their recent logs',
+      parameters: Type.Object({}),
+      async execute() {
+        const processes = manager.list(projectRoot);
+        const lines = processes.length
+          ? processes.map((process) => `- ${process.processId} · ${process.running ? '运行中' : process.status} · ${process.command.slice(0, 180)}${process.urls.length ? ` · ${process.urls[0]}` : ''}`)
+          : ['当前没有由本工具启动的进程。'];
+        return { content: [{ type: 'text' as const, text: lines.join('\n') }], details: { processes } };
+      },
+    }),
+    defineTool({
       name: 'stop_process', label: '停止项目进程',
       description: 'Stop a process previously started with run_command in this project, including its shell children. Returns the final state and output.',
       promptSnippet: 'Stop a managed project server or command',

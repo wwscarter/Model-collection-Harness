@@ -19,6 +19,7 @@ import type { ModelConfig } from '@core/models/ModelConfig';
 import { toPiModel } from './modelMapping';
 import { buildSystemPrompt } from './systemPrompt';
 import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
+import { ToolRuntime } from '@core/tools/ToolRuntime';
 import { SearchProviderRegistry } from '@core/tools/search';
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
@@ -82,6 +83,10 @@ export interface AgentRuntimeOptions {
   runTimeoutMs?: number;
   /** Maximum consecutive turns that execute tools. Default eight. */
   maxToolRounds?: number;
+  /** Maximum tool invocations in one run. Default twenty. */
+  maxToolCalls?: number;
+  /** Maximum model-facing tool output characters in one run. Default 80k. */
+  maxToolResultChars?: number;
   /** Test seam. */
   now?: () => Date;
 }
@@ -234,7 +239,7 @@ export class AgentRuntime {
       ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir] }),
       ...(this.options.extraTools?.({ cwd, projectRoot }) ?? []),
     ];
-    return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls'].includes(tool.name)) : tools;
+    return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'process_list'].includes(tool.name)) : tools;
   }
 
   private seedSession(cwd: string, history: ChatTurn[], piModel: { api: string; provider: string; id: string }, summary?: string): SessionManager {
@@ -275,7 +280,12 @@ export class AgentRuntime {
     const { runtime, mapping, piModel } = await this.resolveModel(request.model);
     const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
-    const toolDefinitions = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
+    const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
+    const toolDefinitions = new ToolRuntime({
+      cwd,
+      maxCalls: this.options.maxToolCalls,
+      maxResultCharsTotal: this.options.maxToolResultChars,
+    }).wrap(rawTools);
     const systemPrompt = buildSystemPrompt({ now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot });
     const resourceLoader = await this.resourceLoader(cwd, settingsManager, systemPrompt, request.projectRoot);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
