@@ -66,7 +66,11 @@ export default function App() {
   const isLoading = runningSessionId !== null;
   const isCurrentRunning = isLoading && runningSessionId === currentSessionId;
   const error = sessionError?.sessionId === currentSessionId ? sessionError.message : null;
-  const modelLabel = (id?: string) => id ? models.find((model) => model.id === id || model.name === id)?.name || id : undefined;
+  const modelLabel = (id?: string) => {
+    if (!id) return undefined;
+    const model = models.find((candidate) => candidate.id === id || candidate.name === id || candidate.modelId === id);
+    return model ? model.modelId || model.name : id;
+  };
   const latestAssistant = currentSession?.messages.slice().reverse().find((message) => message.role === 'assistant');
   const bannerModels = [modelLabel(latestAssistant?.planningModelId), modelLabel(latestAssistant?.modelUsed ?? currentSession?.modelUsed)].filter(Boolean).join(' + ') || '自动调度';
   const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean): SessionMetrics | undefined => {
