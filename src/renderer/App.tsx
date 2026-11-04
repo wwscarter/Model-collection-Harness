@@ -236,8 +236,14 @@ export default function App() {
   const applyProject = (project: ProjectInfo | undefined) => { setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); void refreshProjects(); };
   const openProject = async (id: string) => {
     if (!window.amd) return;
-    try { applyProject(await window.amd.projects.open(id)); }
-    catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
+    try {
+      const project = await window.amd.projects.open(id);
+      applyProject(project);
+      setView('workspace');
+      // Clicking a project is an explicit request for its files; reveal the tree
+      // so the active association is visible even though it is hidden by default.
+      setProjectDrawerOpen(true);
+    } catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
   };
   const removeProject = async (id: string) => {
     try {

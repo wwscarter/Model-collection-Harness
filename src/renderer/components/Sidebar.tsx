@@ -1,7 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Bell, ChevronRight, Folder, Plus, Search, Sparkles, X } from 'lucide-react';
 import type { ProjectRecord } from '../types';
-import { relativeTime } from '../format';
 
 export interface SessionSummary {
   id: string;
@@ -83,7 +82,7 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
               return <div key={session.id} className={'session-item ' + (active ? 'active' : '')}>
                 <button className="item-main" aria-current={active ? 'true' : undefined} onClick={() => onSelectSession(session.id)}>
                   <span className={'session-ring ' + (active || running ? 'on' : '')} />
-                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={session.title || '未命名会话'}>{session.title || '未命名会话'}</span></span><span className="item-meta mono">{relativeTime(session.updatedAt ?? session.createdAt)}</span></span>
+                  <span className="item-copy"><span className="item-title"><span className="item-title-text" title={session.title || '未命名会话'}>{session.title || '未命名会话'}</span></span></span>
                   {running && <span className="status-chip">进行中</span>}
                 </button>
                 <button className="item-remove" title="删除会话" aria-label="删除会话" onClick={() => onDeleteSession(session.id)}><X size={13} /></button>

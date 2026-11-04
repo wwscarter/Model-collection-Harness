@@ -472,3 +472,28 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
   .workspace-panel.is-preview { width: calc(100vw - 52px); }
 }
 
+
+/* Compact session rows without timestamps. */
+.session-item .item-main { min-height: 30px; padding: 5px 8px; }
+.session-item .item-copy { gap: 0; }
+.session-item .item-title { line-height: 19px; }
+.session-item .session-ring { margin-top: 4px; }
+
+/* New-project dialog: no gray blocks, readable in both themes. */
+.new-project-window .dialog-icon { color: var(--text); background: var(--surface-low); border: 1px solid var(--line); box-shadow: none; }
+.dialog-header p { color: var(--text-muted); }
+.field-label { color: var(--text); }
+.field-label small, .field-hint, .field-help { color: var(--text-faint); }
+.field-hint.accent { color: var(--text-secondary); }
+.input:hover { border-color: var(--text-faint); }
+.directory-path { color: var(--text); border-color: var(--line); background: var(--surface-low); }
+.directory-path svg { color: var(--text-muted); }
+.directory-picker { border-color: var(--line); color: var(--text-secondary); }
+.directory-picker:hover { border-color: var(--text-faint); color: var(--text); background: var(--surface-low); }
+.detection-card { border-color: var(--line); background: transparent; }
+.detection-row { color: var(--text-secondary); }
+.detection-row strong { color: var(--text); }
+.detection-left svg, .detection-right svg { color: var(--text-muted); }
+.detection-right { color: var(--text-muted); }
+.dialog-footer { border-top-color: var(--line); background: var(--surface); }
+

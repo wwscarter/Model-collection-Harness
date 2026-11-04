@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, FileCode, Folder, FolderPlus, GitBranch, ShieldCheck, Plus, RefreshCw, X } from 'lucide-react';
+import { Check, FileCode, Folder, FolderPlus, ShieldCheck, Plus, RefreshCw, X } from 'lucide-react';
 import type { ProjectInfo } from '../types';
 import { errorMessage } from '../format';
 
@@ -51,7 +51,7 @@ export function NewProjectDialog({ onClose, onCreated }: NewProjectDialogProps) 
         <div className="field">
           <div className="field-label"><label htmlFor="project-name">项目名称 <em>*</em></label>{inferred && <span className="field-hint accent"><Check size={12} />已自动推断</span>}{picked?.existing && <span className="field-hint">已在项目列表中</span>}</div>
           <div className="input-with-action"><input id="project-name" className={`input ${inferred ? 'inferred' : ''}`} value={name} maxLength={80} placeholder="例如：newai-agent-core" onChange={(event) => { setName(event.target.value); setNameEdited(true); }} />{name && <button className="input-action" title="清除" aria-label="清除名称" onClick={() => { setName(''); setNameEdited(true); }}><X size={13} /></button>}</div>
-          <p className="field-help">显示在工作台左侧「本地项目」列表和顶部状态中，便于快速切换</p>
+          <p className="field-help">显示在工作台左侧「本地项目」列表中，便于快速切换</p>
         </div>
         <div className="field">
           <div className="field-label"><span>绑定本地目录 <em>*</em></span></div>
@@ -60,12 +60,8 @@ export function NewProjectDialog({ onClose, onCreated }: NewProjectDialogProps) 
         </div>
         {picked && <div className="detection-card">
           <div className="detection-row">
-            {picked.git?.branch || picked.git?.detached ? <><span className="branch-chip"><GitBranch size={11} />{picked.git.branch ?? picked.git.head}</span><span>已关联 Git 仓库</span></> : <span className="muted-text">未检测到 Git 仓库</span>}
-            <span className="detection-right"><ShieldCheck size={12} />修改与执行需确认</span>
-          </div>
-          <div className="detection-row divided">
             <span className="detection-left"><FileCode size={13} />{picked.languages.length ? <>检测到 <strong>{picked.languages.join(' / ')}</strong> 项目</> : '未识别到常见项目清单文件'}</span>
-            {picked.markers.length > 0 && <span className="mono muted-text">包含 {picked.markers.slice(0, 2).join(', ')}</span>}
+            <span className="detection-right"><ShieldCheck size={12} />修改与执行需确认</span>
           </div>
         </div>}
         {error && <div className="error-banner" role="alert">{error}</div>}
