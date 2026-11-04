@@ -5,6 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { downloadArtifact } from '@electron/get';
 
+if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD === '1') {
+  console.log('[electron] ELECTRON_SKIP_BINARY_DOWNLOAD=1; skipping binary repair');
+  process.exit(0);
+}
+
 const require = createRequire(import.meta.url);
 const electronPackagePath = require.resolve('electron/package.json');
 const electronRoot = path.dirname(electronPackagePath);

@@ -238,26 +238,39 @@ export class ModelStorage implements ModelStore {
       .prepare("SELECT model_id, api_key, base_url FROM model_credentials WHERE model_id = ?")
       .get(id) as CredentialRow | undefined;
 
+    // A single corrupt credential must not prevent every model (and the app)
+    // from loading. Keep the record visible so the UI can ask for a new key.
+    let apiKey = "";
+    let credentialError: string | undefined;
+    if (credentials) {
+      try {
+        apiKey = decryptAPIKey(credentials.api_key);
+      } catch {
+        credentialError = "API Key 解密失败，请在模型设置中重新输入";
+      }
+    }
+
     return {
       id: row.id,
       provider: row.provider,
       name: row.name,
       modelId: row.model_id,
       providerCategory: row.provider_category ?? (row.provider === "custom" ? "compatible_gateway" : "official"),
-      availableModels: JSON.parse(row.available_models || "[]"),
+      availableModels: parseJson(row.available_models, [row.model_id]),
       temperature: row.temperature,
       enableThinking: row.enable_thinking === 1,
       isPrimary: row.is_primary === 1,
       baseURL: row.base_url ?? credentials?.base_url ?? undefined,
       contextWindow: row.context_window || row.max_tokens,
       intelligenceScore: row.intelligence_score,
-      capabilities: JSON.parse(row.capabilities),
-      costPer1kTokens: JSON.parse(row.cost_per_1k_tokens),
+      capabilities: parseJson(row.capabilities, []),
+      costPer1kTokens: parseJson(row.cost_per_1k_tokens, { input: 0, output: 0 }),
       maxTokens: row.max_tokens,
-      rateLimit: JSON.parse(row.rate_limit || '{"requestsPerMinute":0,"tokensPerDay":0}'),
+      rateLimit: parseJson(row.rate_limit, { requestsPerMinute: 0, tokensPerDay: 0 }),
       enabled: row.enabled === 1,
       priority: row.priority,
-      apiKey: credentials ? decryptAPIKey(credentials.api_key) : "",
+      apiKey,
+      credentialError,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };
@@ -284,5 +297,10 @@ export class ModelStorage implements ModelStore {
   close(): void {
     if (this.db.open) this.db.close();
   }
+}
+
+function parseJson<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 

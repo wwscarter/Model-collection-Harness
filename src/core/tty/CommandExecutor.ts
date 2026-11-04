@@ -44,7 +44,7 @@ interface ExecutionState {
   cancel: () => void;
 }
 
-type SpawnFunction = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe']; windowsHide: boolean }) => ChildProcess;
+type SpawnFunction = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe']; windowsHide: boolean; detached: boolean }) => ChildProcess;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 200_000;
@@ -75,8 +75,9 @@ export class CommandExecutor {
     const normalized = this.normalizeRequest(request);
     if (!normalized.approved) throw new Error('Command execution requires explicit approval');
     const id = randomUUID();
-    const shell = process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
-    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', normalized.command] : ['-c', normalized.command];
+    const windows = process.platform === 'win32';
+    const shell = windows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
+    const shellArgs = windows ? ['/d', '/s', '/c', normalized.command] : ['-c', normalized.command];
     const environment = this.buildEnvironment(normalized.env);
     environment.PWD = normalized.cwd;
     const child = (this.injectedSpawn ?? spawnProcess)(shell, shellArgs, {
@@ -84,6 +85,9 @@ export class CommandExecutor {
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      // A POSIX process group lets cancellation kill shell children too. Windows
+      // is handled with taskkill /T below.
+      detached: !windows,
     });
     const listeners = new Set<(event: CommandExecutionData) => void>();
     let stdout = '';
@@ -94,7 +98,44 @@ export class CommandExecutor {
     let truncated = false;
     const startedAt = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
+
+    let resolveResult!: (result: CommandExecutionResult) => void;
+    let rejectResult!: (error: Error) => void;
+    const promise = new Promise<CommandExecutionResult>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+
+    const finish = (exitCode: number | null, signal?: NodeJS.Signals | string) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (settleTimer) clearTimeout(settleTimer);
+      this.executions.delete(id);
+      const output = stdout + stderr;
+      resolveResult({ id, command: normalized.command, cwd: normalized.cwd, stdout, stderr, output, exitCode, signal: signal ? String(signal) : undefined, timedOut, cancelled, truncated, durationMs: Date.now() - startedAt });
+    };
+
+    const killTree = (signal: NodeJS.Signals) => {
+      if (!child.pid) { try { child.kill(signal); } catch { /* already exited */ } return; }
+      if (windows) {
+        // taskkill /T terminates the whole tree, including npm/node grandchildren.
+        try { spawnProcess('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch { try { child.kill(signal); } catch { /* ignore */ } }
+        return;
+      }
+      try { process.kill(-child.pid, signal); }
+      catch { try { child.kill(signal); } catch { /* already exited */ } }
+    };
+
+    const terminate = () => {
+      if (settled) return;
+      killTree('SIGTERM');
+      // Give the tree a short grace period, then force it. The settle timer also
+      // guarantees the promise resolves even if a grandchild keeps the pipes open.
+      killTimer ??= setTimeout(() => killTree('SIGKILL'), 750);
+      settleTimer ??= setTimeout(() => finish(null, 'SIGKILL'), 3_000);
+    };
 
     const append = (stream: 'stdout' | 'stderr', chunk: Buffer | string) => {
       if (settled || truncated) return;
@@ -110,27 +151,18 @@ export class CommandExecutor {
         truncated = true;
         // Stop a process that keeps producing output; this is a resource limit,
         // not a successful completion.
-        child.kill('SIGTERM');
+        terminate();
       }
     };
     child.stdout?.on('data', (chunk: Buffer | string) => append('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => append('stderr', chunk));
 
-    let resolveResult!: (result: CommandExecutionResult) => void;
-    let rejectResult!: (error: Error) => void;
-    const promise = new Promise<CommandExecutionResult>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
-    const finish = (exitCode: number | null, signal?: NodeJS.Signals | string) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      this.executions.delete(id);
-      const output = stdout + stderr;
-      resolveResult({ id, command: normalized.command, cwd: normalized.cwd, stdout, stderr, output, exitCode, signal: signal ? String(signal) : undefined, timedOut, cancelled, truncated, durationMs: Date.now() - startedAt });
-    };
     child.once('error', (error) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (settleTimer) clearTimeout(settleTimer);
       this.executions.delete(id);
       rejectResult(error instanceof Error ? error : new Error(String(error)));
     });
@@ -138,11 +170,11 @@ export class CommandExecutor {
     const cancel = () => {
       if (settled) return;
       cancelled = true;
-      child.kill('SIGTERM');
+      terminate();
     };
     const state: ExecutionState = { id, child, promise, listeners, cancel };
     this.executions.set(id, state);
-    timer = setTimeout(() => { if (!settled) { timedOut = true; child.kill('SIGTERM'); } }, normalized.timeoutMs);
+    timer = setTimeout(() => { if (!settled) { timedOut = true; terminate(); } }, normalized.timeoutMs);
     return { id, promise };
   }
 
@@ -176,8 +208,10 @@ export class CommandExecutor {
     const cwd = this.realDirectory(cwdInput, 'Working directory');
     const relative = path.relative(projectRoot, cwd);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Working directory must stay inside the project root');
-    const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.floor(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)));
-    const maxOutputBytes = Math.min(MAX_OUTPUT_BYTES, Math.max(1_024, Math.floor(request.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES)));
+    const rawTimeout = request.timeoutMs === undefined || !Number.isFinite(request.timeoutMs) ? DEFAULT_TIMEOUT_MS : request.timeoutMs;
+    const rawOutput = request.maxOutputBytes === undefined || !Number.isFinite(request.maxOutputBytes) ? DEFAULT_MAX_OUTPUT_BYTES : request.maxOutputBytes;
+    const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.floor(rawTimeout)));
+    const maxOutputBytes = Math.min(MAX_OUTPUT_BYTES, Math.max(1_024, Math.floor(rawOutput)));
     return { command, projectRoot, cwd, approved: request.approved === true, timeoutMs, maxOutputBytes, env: request.env };
   }
 

@@ -22,5 +22,10 @@ export class ProjectManager {
     return this.context?.buildContext(relativePaths, maxTokens);
   }
 
+  /** Non-blocking variant used by the session execution path. */
+  async getContextAsync(relativePaths?: string[], maxTokens?: number): Promise<ProjectContextResult | undefined> {
+    return this.context?.buildContextAsync(relativePaths, maxTokens);
+  }
+
   getRoot(): string | undefined { return this.context?.root; }
 }

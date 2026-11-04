@@ -28,7 +28,7 @@ describe('LocalRoutingModel', () => {
   it('feeds the local classification into the router while remaining observable', async () => {
     const registry = {
       getEnabledModels: () => [
-        { id: 'code-model', name: 'Code', provider: 'openai' as const, apiKey: '', modelId: 'code', enabled: true, priority: 0, capabilities: [{ type: 'code' as const, score: 95 }], maxTokens: 1000, rateLimit: { requestsPerMinute: 1, tokensPerDay: 1000 }, costPer1kTokens: { input: 1, output: 1 }, createdAt: new Date(), updatedAt: new Date() },
+        { id: 'code-model', name: 'Code', provider: 'openai' as const, apiKey: 'test-key', modelId: 'code', enabled: true, priority: 0, capabilities: [{ type: 'code' as const, score: 95 }], maxTokens: 1000, rateLimit: { requestsPerMinute: 1, tokensPerDay: 1000 }, costPer1kTokens: { input: 1, output: 1 }, createdAt: new Date(), updatedAt: new Date() },
       ],
     };
     const router = new AgentRouter(registry);

@@ -64,6 +64,7 @@ function toConfig(input: ModelConfigInput): ModelConfig {
     rateLimit: { requestsPerMinute: raw.rateLimit?.requestsPerMinute ?? 60, tokensPerDay: raw.rateLimit?.tokensPerDay ?? 1_000_000 },
     enabled: raw.enabled ?? false,
     priority: raw.priority ?? 0,
+    credentialError: raw.credentialError,
     createdAt: raw.createdAt ? new Date(raw.createdAt) : now,
     updatedAt: raw.updatedAt ? new Date(raw.updatedAt) : now,
   };
@@ -142,6 +143,9 @@ export class ModelRegistry {
     const updated = toConfig({
       ...existing,
       ...updates,
+      // A new (or explicitly cleared) key resolves the credential error; other
+      // edits keep the warning until the user fixes the credential.
+      credentialError: updates.apiKey === undefined ? existing.credentialError : undefined,
       id: existing.id,
       createdAt: existing.createdAt,
       updatedAt: new Date(),

@@ -38,6 +38,11 @@ describe('model collaboration', () => {
     expect(selectPlanningModel(candidates, 'executor')).toBeUndefined();
   });
 
+  it('never picks a planning model that has no credentials', () => {
+    const keyless = { ...model('keyless', 100, 99), provider: 'openai' as const, baseURL: undefined };
+    expect(selectPlanningModel([keyless, model('planner', 90)], 'executor')?.id).toBe('planner');
+  });
+
   it('keeps the original user task while adding a separate planning prompt', () => {
     const userTask = 'Build a small project';
     expect(buildPlanningPrompt(userTask)).toContain(userTask);

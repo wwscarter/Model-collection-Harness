@@ -4,6 +4,7 @@ import { Type } from 'typebox';
 import { createEditToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { SearchProviderRegistry } from './search';
 import { fetchWebPage, type WebFetchOptions } from './webFetch';
+import { isSensitiveFileName, isSensitiveRelativePath } from '@core/security/sensitiveFiles';
 
 /** Details attached to tool results; the renderer shows them on tool cards. */
 export interface WebSearchDetails { provider: string; query: string; results: Array<{ title: string; url: string }>; }
@@ -50,9 +51,6 @@ export function createWebFetchTool(options: Omit<WebFetchOptions, 'signal'> = {}
   });
 }
 
-const SENSITIVE_NAME = /^(\.env(\..*)?|id_rsa|id_ed25519|id_ecdsa|\.npmrc|\.netrc|credentials(\.json)?)$/i;
-const SENSITIVE_EXT = new Set(['.pem', '.key', '.p12', '.pfx', '.crt', '.cer', '.der', '.keystore', '.jks']);
-
 function realOrSelf(target: string): string {
   try { return fs.realpathSync(target); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return target;
@@ -75,10 +73,12 @@ export function resolveAllowedPath(roots: readonly string[], target: string): st
   if (!roots.length) throw new Error('没有可访问的目录');
   const realRoots = roots.map(realOrSelf);
   const real = realOrSelf(path.resolve(realRoots[0], target));
-  const inside = realRoots.some((root) => isWithin(root, real));
-  if (!inside) throw new Error('只能访问当前项目目录（或已安装的技能目录）内的文件');
-  const name = path.basename(real);
-  if (SENSITIVE_NAME.test(name) || SENSITIVE_EXT.has(path.extname(name).toLowerCase())) throw new Error('该文件可能包含密钥，已拒绝访问');
+  const containingRoot = realRoots.find((root) => isWithin(root, real));
+  if (!containingRoot) throw new Error('只能访问当前项目目录（或已安装的技能目录）内的文件');
+  const relative = path.relative(containingRoot, real);
+  // Includes .git/: writing hooks or objects is a persistence primitive, and
+  // .git/config can carry a remote URL with an access token.
+  if (isSensitiveRelativePath(relative)) throw new Error('该文件可能包含密钥或属于版本库元数据，已拒绝访问');
   return real;
 }
 
@@ -108,7 +108,7 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
       operations: {
         exists: (absolute) => { try { return fs.existsSync(resolveAllowedPath(projectRoots, absolute)); } catch { return false; } },
         stat: (absolute) => fs.statSync(resolveAllowedPath(projectRoots, absolute)),
-        readdir: (absolute) => fs.readdirSync(resolveAllowedPath(projectRoots, absolute)).filter((name) => name !== '.git' && !SENSITIVE_NAME.test(name)),
+        readdir: (absolute) => fs.readdirSync(resolveAllowedPath(projectRoots, absolute)).filter((name) => name !== '.git' && !isSensitiveFileName(name)),
       },
     }) as unknown as ToolDefinition);
     tools.push(createWriteToolDefinition(options.projectRoot, {

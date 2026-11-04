@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, X, Zap } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react';
 import type { ModelConfig } from '../types';
 import { errorMessage } from '../format';
 import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults, settingsPayload } from '../settingsForm';
@@ -15,6 +15,9 @@ const initials = (provider: string, name: string) => providerInitials[provider] 
 const unwrap = (result: unknown) => ((result as { model?: ModelConfig }).model ?? result) as ModelConfig;
 const fingerprint = (draft: SettingsDraft) => JSON.stringify([draft.provider, draft.baseURL, draft.apiKey, draft.modelId, draft.temperature, draft.enableThinking]);
 const modelDescription = (id: string) => /reason|thinking|\br1\b/i.test(id) ? '推理与深度思考' : /cod(e|er|ing)/i.test(id) ? '代码生成与开发' : /chat/i.test(id) ? '通用对话与日常任务' : '端点提供的模型';
+const endpointOrigin = (provider: string, baseURL?: string) => {
+  try { return new URL(baseURL?.trim() || providerDefaults[provider] || '').origin; } catch { return ''; }
+};
 
 function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return <label className="field"><span className="field-label"><span>{label}</span>{hint && <small>{hint}</small>}</span>{children}</label>;
@@ -49,7 +52,8 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
   const categoryLabel = categoryLabels[draft.providerCategory];
   const categoryValue = draft.providerCategory === 'official' ? 'official:' + draft.provider : draft.providerCategory;
   const sameProvider = selected?.provider === draft.provider && (selected.providerCategory ?? (selected.provider === 'custom' ? 'compatible_gateway' : 'official')) === draft.providerCategory;
-  const hasSavedKey = sameProvider && selected?.hasApiKey;
+  const sameOrigin = Boolean(selected) && endpointOrigin(selected!.provider, selected!.baseURL) === endpointOrigin(draft.provider, draft.baseURL);
+  const hasSavedKey = sameProvider && sameOrigin && selected?.hasApiKey;
 
   useEffect(() => {
     void window.amd?.routingStatus().then(setRouting).catch(() => undefined);
@@ -138,6 +142,19 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
     change({ modelId: id, availableModels: [...new Set([...draft.availableModels, id])] });
     setModelSource('manual'); setManualModel(''); setManualEntry(false);
   };
+  const removeSelected = async () => {
+    if (!selected || busy) return;
+    if (!window.confirm(`删除模型「${selected.name}」？此操作不可撤销，相关会话仍会保留已有回复。`)) return;
+    setBusy('saving'); setNotice(null);
+    try {
+      await needBridge().models.delete(selected.id);
+      onModelsChanged(models.filter((model) => model.id !== selected.id));
+      onClose();
+    } catch (cause) {
+      setNotice({ tone: 'error', text: '删除失败：' + errorMessage(cause) });
+      setBusy(null);
+    }
+  };
   const save = async () => {
     setNotice(null);
     let payload: Omit<ModelConfig, 'id'>;
@@ -177,7 +194,7 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
                 <span className="endpoint-copy">
                   <span className="endpoint-name"><strong>{model.name}</strong>{result?.success && !result.demo ? <span className="latency mono"><Zap size={10} />{result.latency ?? 0}ms</span> : result && !result.success ? <span className="latency bad">失败</span> : <i className={'state-dot ' + (model.enabled ? 'on' : '')} />}</span>
                   <span className="endpoint-url mono">{model.baseURL || providerDefaults[model.provider] || '自定义端点'}</span>
-                  <span className="endpoint-tags">{model.isPrimary && model.enabled && <span className="tag solid">● 使用中</span>}<span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.availableModels?.length ? <span className="endpoint-model-count">{model.availableModels.length} 个模型</span> : !model.enabled ? <span className="endpoint-model-count">未启用</span> : null}</span>
+                  <span className="endpoint-tags">{model.isPrimary && model.enabled && (model.hasApiKey || model.provider === 'custom') && <span className="tag solid">● 使用中</span>}<span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.credentialError ? <span className="tag solid">凭据需重新输入</span> : !model.hasApiKey && model.provider !== 'custom' ? <span className="tag">未配置 Key · 不参与路由</span> : model.availableModels?.length ? <span className="endpoint-model-count">{model.availableModels.length} 个模型</span> : !model.enabled ? <span className="endpoint-model-count">未启用</span> : null}</span>
                 </span>
               </button>;
             })}
@@ -228,7 +245,7 @@ export function Settings({ models, onClose, onModelsChanged }: SettingsProps) {
             </fieldset>
           </div>
           {notice && <div className={'settings-notice ' + notice.tone} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'success' ? <CircleCheck size={14} /> : <X size={14} />}<span>{notice.text}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice(null)}><X size={12} /></button></div>}
-          <footer className="detail-foot"><span className="foot-note"><ShieldCheck size={14} /><span>{dirty ? '配置有未保存的修改' : '配置已关联至本地环境'}</span></span><div className="foot-actions"><button className="button soft" disabled={Boolean(busy) || !draft.modelId.trim()} onClick={() => void testConnection()}>{busy === 'testing' && <LoaderCircle size={13} className="spinning" />}{busy === 'testing' ? '测试中…' : '连通测试'}</button><button className="button outline" disabled={busy === 'saving'} onClick={onClose}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.name.trim() || !draft.modelId.trim()} onClick={() => void save()}>{busy === 'saving' && <LoaderCircle size={13} className="spinning" />}{busy === 'saving' ? '保存中…' : '保存配置'}</button></div></footer>
+          <footer className="detail-foot"><span className="foot-note"><ShieldCheck size={14} /><span>{dirty ? '配置有未保存的修改' : '配置已关联至本地环境'}</span></span><div className="foot-actions">{selected && <button className="button danger" disabled={Boolean(busy)} title="删除此模型配置" onClick={() => void removeSelected()}><Trash2 size={13} />删除模型</button>}<button className="button soft" disabled={Boolean(busy) || !draft.modelId.trim()} onClick={() => void testConnection()}>{busy === 'testing' && <LoaderCircle size={13} className="spinning" />}{busy === 'testing' ? '测试中…' : '连通测试'}</button><button className="button outline" disabled={busy === 'saving'} onClick={onClose}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.name.trim() || !draft.modelId.trim()} onClick={() => void save()}>{busy === 'saving' && <LoaderCircle size={13} className="spinning" />}{busy === 'saving' ? '保存中…' : '保存配置'}</button></div></footer>
         </main>
       </div>
     </section>

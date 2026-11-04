@@ -17,7 +17,7 @@ import { shouldSubmitPromptKey } from './promptKeyboard';
 import { errorMessage } from './format';
 import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming } from './sessionMetrics';
 
-interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; routeConfidence?: number; metrics?: SessionMetrics; rating?: number; updatedAt?: Date; }
+interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; updatedAt?: Date; }
 
 const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], createdAt: new Date() });
 
@@ -51,6 +51,7 @@ export default function App() {
   const [selectedAgentModelIds, setSelectedAgentModelIds] = useState<string[]>([]);
   const [collaborationOpen, setCollaborationOpen] = useState(false);
   const [collaborationNotice, setCollaborationNotice] = useState<string | null>(null);
+  const [includeProjectContext, setIncludeProjectContext] = useState(true);
   const workspaceContentRef = useRef<HTMLDivElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const promptBeforeEditingRef = useRef('');
@@ -100,7 +101,11 @@ export default function App() {
 
   useEffect(() => {
     const content = workspaceContentRef.current;
-    if (content) content.scrollTop = content.scrollHeight;
+    if (!content) return;
+    // Only follow the stream while the user is already near the bottom; otherwise
+    // reading earlier output is impossible because every chunk steals focus.
+    const distance = content.scrollHeight - content.scrollTop - content.clientHeight;
+    if (distance < 120) content.scrollTop = content.scrollHeight;
   }, [currentSessionId, currentSession?.messages]);
 
   useEffect(() => {
@@ -125,6 +130,7 @@ export default function App() {
       const restored = records.map((record) => ({
         id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record),
         modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, metrics: record.metrics as SessionMetrics | undefined,
+        audit: record.auditResult as Session['audit'], auditResult: record.auditResult as Session['auditResult'],
         routeConfidence: restoreRouteConfidence(record),
         rating: typeof record.rating === 'number' ? record.rating : undefined,
         createdAt: new Date(String(record.createdAt)), updatedAt: new Date(String(record.updatedAt || record.createdAt)),
@@ -242,7 +248,7 @@ export default function App() {
   const newSession = () => { if (editingMessageId) cancelMessageEdit(); const session = starterSession(); setSessions((existing) => [session, ...existing]); setCurrentSessionId(session.id); setSessionError(null); void window.amd?.sessions.save({ ...session, updatedAt: new Date() }); };
   const deleteSession = (id: string) => { if (editingMessageId && currentSessionId === id) cancelMessageEdit(); const remaining = sessions.filter((session) => session.id !== id); setSessions(remaining); if (currentSessionId === id) setCurrentSessionId(remaining[0]?.id || null); void window.amd?.sessions.delete(id); };
   const fillCollaborationExample = () => {
-    const enabledModels = models.filter((model) => model.enabled).slice(0, 2);
+    const enabledModels = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom')).slice(0, 2);
     setCollaborationOpen(true);
     if (enabledModels.length < 2) {
       setCollaborationNotice('先在模型配置中启用至少两款模型，才能运行并行示例。');
@@ -254,18 +260,19 @@ export default function App() {
   };
   const handleModelsChanged = (nextModels: ModelConfig[]) => {
     setModels(nextModels);
-    setSelectedAgentModelIds((current) => current.filter((id) => nextModels.some((model) => model.id === id && model.enabled)));
+    setSelectedAgentModelIds((current) => current.filter((id) => nextModels.some((model) => model.id === id && model.enabled && (model.hasApiKey || model.provider === 'custom'))));
   };
   const execute = async () => {
     // Enter bypasses the disabled send button, so guard here too.
     if (!currentSession || !currentSession.prompt.trim() || isLoading) return;
     if (selectedAgentModelIds.length === 1) { setCollaborationNotice('并行协作至少需要两款已启用模型。'); setCollaborationOpen(true); return; }
     const prompt = currentSession.prompt.trim();
-    const title = prompt.slice(0, 36);
+    // Keep the first title; overwriting it on every follow-up made sessions impossible to find.
+    const title = currentSession.messages.length ? currentSession.title : prompt.slice(0, 36);
     const messageId = crypto.randomUUID();
-    const collaboratorModels = models.filter((model) => selectedAgentModelIds.includes(model.id) && model.enabled);
+    const collaboratorModels = models.filter((model) => selectedAgentModelIds.includes(model.id) && model.enabled && (model.hasApiKey || model.provider === 'custom'));
     const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined, collaboratorModels.map(({ id, name }) => ({ id, name })));
-    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, rating: undefined, updatedAt: new Date() };
+    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, audit: undefined, auditResult: undefined, rating: undefined, updatedAt: new Date() };
     cancelRequestedRef.current = false;
     runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
     setLiveElapsedMs(0);
@@ -286,6 +293,7 @@ export default function App() {
         prompt,
         taskType: 'general',
         stream: true,
+        includeProjectContext,
         collaboratorModelIds: collaboratorModels.map((model) => model.id),
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
         history: historyForModel(messages.slice(0, -2)),
@@ -299,7 +307,7 @@ export default function App() {
         completedMessages = updateAssistantAgent(completedMessages, `${messageId}-assistant`, { agentId: agent.id, status: agent.status, content: agent.content, error: agent.error });
       }
       for (const call of (raw.toolCalls || []) as ToolCallUpdate[]) completedMessages = upsertAssistantTool(completedMessages, `${messageId}-assistant`, call);
-      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: metrics?.routeConfidence, metrics, updatedAt: new Date() };
+      const completedSession: Session = { ...submittedSession, messages: completedMessages, output, modelUsed, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
       await window.amd.sessions.save(completedSession);
     } catch (cause) {
@@ -329,7 +337,7 @@ export default function App() {
     if (!currentSession?.modelUsed || !window.amd) return;
     updateCurrent({ rating, updatedAt: new Date() });
     void window.amd.sessions.save({ ...currentSession, rating, updatedAt: new Date() });
-    try { await window.amd.recordGrowthFeedback({ modelId: currentSession.modelUsed, taskType: 'general', userSatisfaction: rating, completed: true }); } catch { /* feedback should never block the task UI */ }
+    try { await window.amd.recordGrowthFeedback({ modelId: currentSession.modelUsed, taskType: currentSession.taskType ?? 'general', userSatisfaction: rating, completed: true }); } catch { /* feedback should never block the task UI */ }
   };
   // ⌘N / ⌘K (Ctrl on Windows/Linux) as shown in the sidebar; disabled while a dialog is open.
   const newSessionRef = useRef(newSession);
@@ -401,15 +409,17 @@ export default function App() {
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}
         notice={collaborationNotice}
+        includeProjectContext={includeProjectContext}
+        onToggleProjectContext={() => setIncludeProjectContext((value) => !value)}
         collaborationControl={<button className={`collaboration-toggle ${selectedAgentModelIds.length ? 'active' : ''}`} aria-label="选择协作模型" aria-expanded={collaborationOpen} aria-controls="collaboration-models" onClick={() => { setCollaborationOpen((open) => !open); setCollaborationNotice(null); }}><UsersRound size={14} /><span>{selectedAgentModelIds.length ? `协作 · ${selectedAgentModelIds.length}` : '协作'}</span><ChevronDown className={collaborationOpen ? 'open' : ''} size={12} /></button>}
-        collaborationPicker={collaborationOpen && <div className="collaboration-picker" id="collaboration-models" role="group" aria-label="并行分析模型"><div className="collaboration-picker-heading"><strong>并行分析模型</strong><span>选择 2–4 款模型</span></div>{models.filter((model) => model.enabled).map((model) => <label key={model.id} className="collaboration-option"><input type="checkbox" checked={selectedAgentModelIds.includes(model.id)} disabled={!selectedAgentModelIds.includes(model.id) && selectedAgentModelIds.length >= 4} onChange={(event) => { setCollaborationNotice(null); setSelectedAgentModelIds((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id)); }} /><span>{model.name}</span><small>{model.provider}</small></label>)}{models.every((model) => !model.enabled) && <div className="collaboration-empty">在模型设置中启用模型，即可开始协作。</div>}{selectedAgentModelIds.length === 1 && <div className="collaboration-notice">再选择一款模型以启用并行分析。</div>}<div className="collaboration-picker-actions"><button onClick={() => { setCollaborationOpen(false); setShowSettings(true); }}>管理模型</button><button onClick={fillCollaborationExample}>填入协作示例</button></div></div>}
+        collaborationPicker={collaborationOpen && <div className="collaboration-picker" id="collaboration-models" role="group" aria-label="并行分析模型"><div className="collaboration-picker-heading"><strong>并行分析模型</strong><span>选择 2–4 款模型</span></div>{models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom')).map((model) => <label key={model.id} className="collaboration-option"><input type="checkbox" checked={selectedAgentModelIds.includes(model.id)} disabled={!selectedAgentModelIds.includes(model.id) && selectedAgentModelIds.length >= 4} onChange={(event) => { setCollaborationNotice(null); setSelectedAgentModelIds((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id)); }} /><span>{model.name}</span><small>{model.provider}</small></label>)}{models.every((model) => !model.enabled) && <div className="collaboration-empty">在模型设置中启用模型，即可开始协作。</div>}{selectedAgentModelIds.length === 1 && <div className="collaboration-notice">再选择一款模型以启用并行分析。</div>}<div className="collaboration-picker-actions"><button onClick={() => { setCollaborationOpen(false); setShowSettings(true); }}>管理模型</button><button onClick={fillCollaborationExample}>填入协作示例</button></div></div>}
       />}
     </main>
     {projectDrawerOpen && <button className="panel-backdrop inspector-backdrop" aria-label="关闭项目面板" onClick={() => setProjectDrawerOpen(false)} />}
     {projectDrawerOpen && <aside className="right-drawer" aria-label="项目与运行信息">
       <div className="drawer-header"><div><div className="eyebrow">Project Workspace</div><h2>项目文件</h2></div><button className="icon-button" title="关闭右侧面板" aria-label="关闭右侧面板" onClick={() => setProjectDrawerOpen(false)}><X size={16} /></button></div>
       <div className="drawer-scroll"><ProjectPanel project={currentProject} reloadKey={projectReloadKey} onChangeDirectory={() => setShowNewProject(true)} onClear={() => void clearProject()} /></div>
-      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
+      <DetailsPanel model={currentSession?.modelUsed} modelId={currentSession?.modelUsed} modelConfig={currentModel} planningModelName={modelLabel(latestAssistant?.planningModelId)} confidence={currentSession?.routeConfidence} metrics={isCurrentRunning ? { latencyMs: liveElapsedMs, ttftMs: runTimingRef.current?.ttftMs } : currentSession?.metrics} audit={currentSession?.audit} running={isCurrentRunning} error={error} rating={currentSession?.rating} onRate={(rating) => void rateCurrent(rating)} />
     </aside>}
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} />}
     {showDashboard && <Dashboard onClose={() => setShowDashboard(false)} />}

@@ -51,6 +51,35 @@ describe('TtyManager', () => {
     expect(manager.getSession(session.id)?.cols).toBe(90);
     unsubscribe();
     expect(manager.close(session.id)).toBe(true);
-    expect(manager.getSession(session.id)?.status).toBe('closed');
+    expect(manager.getSession(session.id)).toBeUndefined();
+    expect(manager.listSessions()).toEqual([]);
+  });
+
+  it('ignores renderer-supplied shells and strips secrets from the environment', async () => {
+    let receivedShell = '';
+    let receivedEnv: NodeJS.ProcessEnv = {};
+    const factory: TtyProcessFactory = (shell, _args, options) => {
+      receivedShell = shell;
+      receivedEnv = options.env;
+      return { pid: 7, write: () => undefined, resize: () => undefined, kill: () => undefined, onData: () => undefined, onExit: () => undefined };
+    };
+    manager = new TtyManager({ ptyFactory: factory, defaultShell: '/bin/fake-shell' });
+    const original = process.env.AMD_ENCRYPTION_KEY;
+    process.env.AMD_ENCRYPTION_KEY = 'must-not-leak';
+    try {
+      await manager.createSession({ shell: '/bin/evil', env: { AMD_ENCRYPTION_KEY: 'also-secret', PATH: '/custom/bin', LANG: 'zh_CN.UTF-8' } });
+    } finally {
+      if (original === undefined) delete process.env.AMD_ENCRYPTION_KEY; else process.env.AMD_ENCRYPTION_KEY = original;
+    }
+    expect(receivedShell).toBe('/bin/fake-shell');
+    expect(receivedEnv.AMD_ENCRYPTION_KEY).toBeUndefined();
+    expect(receivedEnv.PATH).toBe('/custom/bin');
+    expect(receivedEnv.LANG).toBe('zh_CN.UTF-8');
+    expect(receivedEnv.TERM).toBe('xterm-256color');
+  });
+
+  it('rejects a terminal working directory that does not exist', async () => {
+    manager = new TtyManager({ ptyFactory: () => ({ pid: 1, write: () => undefined, resize: () => undefined, kill: () => undefined, onData: () => undefined, onExit: () => undefined }) });
+    await expect(manager.createSession({ cwd: '/definitely/not/a/real/directory' })).rejects.toThrow('工作目录');
   });
 });

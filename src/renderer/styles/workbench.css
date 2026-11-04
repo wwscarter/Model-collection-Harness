@@ -156,3 +156,6 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .item-main { max-width: 100%; }
 .item-copy { overflow: hidden; }
 .item-title-text { display: block; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-tab.context-toggle { padding: 2px 6px; border: 1px solid transparent; border-radius: 5px; }
+.composer-tab.context-toggle.active { color: #047857; background: #e8f7ef; border-color: #c9ebda; }
+.composer-tab.context-toggle.active svg { color: #059669; }

@@ -1,4 +1,4 @@
-import type { ModelConfig, ModelProvider } from '../models/ModelConfig';
+import { credentialOrigin, type ModelConfig, type ModelProvider } from '../models/ModelConfig';
 import { createProvider, resolveOpenAIEndpoint } from './ModelProvider';
 
 /** Draft values are sent to the main process; saved credentials never return to the renderer. */
@@ -24,10 +24,14 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
   if (saved && saved.provider !== input.provider) throw new Error('供应商已更改，请显式填写新供应商的配置，不可复用其他供应商的凭据');
   const provider = input.provider as ModelProvider;
   const baseURL = input.baseURL !== undefined ? input.baseURL.trim() || undefined : saved?.baseURL;
+  // A saved key may only be reused for the same scheme+host+port. Editing a
+  // compatible gateway's URL must not silently send the old key to a new host.
+  const canReuseKey = Boolean(saved && saved.provider === provider && credentialOrigin(provider, saved.baseURL) === credentialOrigin(provider, baseURL));
   if (provider === 'custom' && !baseURL) throw new Error('请填写自定义端点的 API 地址');
   if (baseURL) {
     const url = new URL(baseURL);
     if (!['https:', 'http:'].includes(url.protocol)) throw new Error('API 地址须使用 http 或 https');
+    if (url.username || url.password) throw new Error('API 地址不能包含用户名或密码');
   }
   const temperature = input.temperature ?? saved?.temperature ?? 0.6;
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 1.5) throw new Error('采样温度须为 0–1.5');
@@ -39,8 +43,8 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
     name: saved?.name ?? '未保存的模型',
     provider,
     baseURL,
-    // An empty edit field preserves the existing secret, just like saving a draft.
-    apiKey: input.apiKey?.trim() || saved?.apiKey || '',
+    // An empty edit field preserves the existing secret only while the origin is unchanged.
+    apiKey: input.apiKey?.trim() || (canReuseKey ? saved?.apiKey : '') || '',
     modelId: input.modelId?.trim() || saved?.modelId || '',
     temperature,
     enableThinking: input.enableThinking ?? saved?.enableThinking ?? true,

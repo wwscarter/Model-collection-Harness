@@ -71,10 +71,12 @@ export class SessionStorage {
   delete(id: string): boolean { return this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id).changes > 0; }
   close(): void { if (this.db.open) this.db.close(); }
   private fromRow(row: SessionRow): SessionRecord {
-    const messages = this.normalizeMessages(row.messages ? JSON.parse(row.messages) as unknown : undefined) ?? this.legacyMessages(row.user_message, row.prompt, row.output, row.title);
+    // One damaged JSON column must not break the whole session list. Degrade to
+    // the legacy text fields and let the user keep working.
+    const messages = this.normalizeMessages(parseJson<unknown>(row.messages, undefined)) ?? this.legacyMessages(row.user_message, row.prompt, row.output, row.title);
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant')?.content;
-    return { id: row.id, title: row.title, prompt: row.prompt, userMessage: lastUserMessage, output: lastAssistantMessage ?? row.output, messages, modelUsed: row.model_used ?? undefined, metrics: row.metrics ? JSON.parse(row.metrics) : undefined, auditResult: row.audit_result ? JSON.parse(row.audit_result) : undefined, rating: row.rating ?? undefined, createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at) };
+    return { id: row.id, title: row.title, prompt: row.prompt, userMessage: lastUserMessage, output: lastAssistantMessage ?? row.output, messages, modelUsed: row.model_used ?? undefined, metrics: parseJson<unknown>(row.metrics, undefined), auditResult: parseJson<unknown>(row.audit_result, undefined), rating: row.rating ?? undefined, createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at) };
   }
 
   private normalizeMessages(value: unknown): SessionMessageRecord[] | undefined {
@@ -137,4 +139,9 @@ export class SessionStorage {
     if (output) messages.push({ id: 'legacy-assistant', role: 'assistant', content: output });
     return messages;
   }
+}
+
+function parseJson<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
 }

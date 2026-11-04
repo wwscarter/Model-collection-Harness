@@ -526,3 +526,11 @@ select.input { padding-right: 28px; }
   .dashboard-header { align-items: flex-start; flex-direction: column; }
   .dashboard-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-right: 12px; padding-left: 12px; }
 }
+.sandbox-project-root { overflow: hidden; padding: 5px 8px; border: 1px dashed var(--line); border-radius: 5px; color: var(--text-secondary); font: 11px var(--code-font); text-overflow: ellipsis; white-space: nowrap; }
+.fatal-error { display: grid; min-height: 100vh; place-items: center; padding: 32px; background: var(--bg, #f8fafc); color: var(--text, #0f172a); }
+.fatal-error > div { max-width: 560px; padding: 28px; border: 1px solid var(--line, #e2e8f0); border-radius: 14px; background: #fff; box-shadow: 0 18px 50px rgba(15, 23, 42, .08); }
+.fatal-error h1 { margin: 6px 0 10px; font-size: 22px; }
+.fatal-error p { margin: 0 0 14px; color: #475569; line-height: 1.7; }
+.fatal-error pre { overflow: auto; max-height: 220px; margin: 0 0 18px; padding: 12px; border-radius: 8px; background: #f1f5f9; font: 12px/1.6 var(--code-font, monospace); white-space: pre-wrap; }
+.button.danger { border: 1px solid #fecaca; color: #b91c1c; background: #fef2f2; }
+.button.danger:hover:not(:disabled) { background: #fee2e2; }

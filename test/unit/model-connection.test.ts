@@ -24,10 +24,18 @@ describe('draft model discovery', () => {
     const registry = registryWith();
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ data: [{ id: 'a' }, { id: 'b' }, { id: 'a' }, { id: '' }] }));
     vi.stubGlobal('fetch', fetchMock);
-    const result = await fetchModelIdentifiers({ id: 'saved-model', provider: 'custom', baseURL: 'https://draft.example/v1/chat/completions?tenant=alpha', apiKey: '' }, registry);
-    expect(fetchMock).toHaveBeenCalledWith('https://draft.example/v1/models?tenant=alpha', expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ authorization: 'Bearer saved-secret' }) }));
+    const result = await fetchModelIdentifiers({ id: 'saved-model', provider: 'custom', baseURL: 'https://saved.example/v1/chat/completions?tenant=alpha', apiKey: '' }, registry);
+    expect(fetchMock).toHaveBeenCalledWith('https://saved.example/v1/models?tenant=alpha', expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ authorization: 'Bearer saved-secret' }) }));
     expect(result).toEqual({ models: ['a', 'b'] });
     expect(registry.getModel('saved-model')).toMatchObject({ baseURL: 'https://saved.example/v1', apiKey: 'saved-secret', modelId: 'saved-model-id' });
+  });
+
+  it('does not send a saved credential to a different origin', async () => {
+    const registry = registryWith();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ data: [{ id: 'next' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchModelIdentifiers({ id: 'saved-model', provider: 'custom', baseURL: 'https://draft.example/v1' }, registry);
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty('authorization');
   });
 
   it('uses a replacement draft credential and permits credential-free local endpoints', async () => {
@@ -93,12 +101,20 @@ describe('draft connection test', () => {
     const registry = registryWith(model({ provider: 'deepseek' }));
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ choices: [{ message: { content: 'connected' } }] }));
     vi.stubGlobal('fetch', fetchMock);
-    const result = await testModelConnection({ id: 'saved-model', provider: 'deepseek', baseURL: 'https://draft.example/v1', modelId: 'draft-model-id', temperature: 0.9, enableThinking: true }, registry);
+    const result = await testModelConnection({ id: 'saved-model', provider: 'deepseek', baseURL: 'https://saved.example/v1', modelId: 'draft-model-id', temperature: 0.9, enableThinking: true }, registry);
     expect(result).toMatchObject({ success: true, demo: false });
-    expect(fetchMock.mock.calls[0][0]).toBe('https://draft.example/v1/chat/completions');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://saved.example/v1/chat/completions');
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ authorization: 'Bearer saved-secret' });
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ model: 'draft-model-id', temperature: 0.9, thinking: { type: 'enabled' } });
     expect(registry.getModel('saved-model')).toMatchObject({ modelId: 'saved-model-id', temperature: 0.4, enableThinking: false });
+  });
+
+  it('requires a new key when the draft endpoint changes origin', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await testModelConnection({ id: 'saved-model', provider: 'deepseek', baseURL: 'https://draft.example/v1', modelId: 'draft-model-id' }, registryWith(model({ provider: 'deepseek' })));
+    expect(result).toMatchObject({ success: false, demo: true });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not pass a demo provider off as a live connection', async () => {
@@ -114,6 +130,7 @@ describe('draft connection test', () => {
     const registry = registryWith();
     expect(await testModelConnection({ id: 'saved-model', provider: 'custom' }, registry)).toMatchObject({ success: false, error: expect.stringContaining('503') });
     expect(await testModelConnection({ provider: 'custom', baseURL: 'file:///tmp/models', modelId: 'invalid' }, registry)).toMatchObject({ success: false, error: expect.stringContaining('http') });
+    expect(await testModelConnection({ provider: 'custom', baseURL: 'https://user:pass@example.com/v1', modelId: 'invalid' }, registry)).toMatchObject({ success: false, error: expect.stringContaining('用户名') });
     expect(await testModelConnection({ id: 'saved-model', provider: 'custom', temperature: 2 }, registry)).toMatchObject({ success: false, error: expect.stringContaining('0–1.5') });
   });
 

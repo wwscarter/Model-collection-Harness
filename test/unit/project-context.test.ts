@@ -40,11 +40,60 @@ describe('ProjectContext', () => {
     expect(result.truncated).toBe(true);
   });
 
+  it('reads at most the configured per-file budget', async () => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, 'huge.txt'), 'x'.repeat(2_000_000));
+    const context = new ProjectContext(root, { maxFileBytes: 1024 });
+    const file = context.readTextFile('huge.txt');
+    expect(file.content).toHaveLength(1024);
+    expect(file.truncated).toBe(true);
+    expect(file.size).toBe(2_000_000);
+    const asyncFile = await context.buildContextAsync(['huge.txt'], 8000);
+    expect(asyncFile.files[0]?.content).toHaveLength(1024);
+    expect(asyncFile.files[0]?.truncated).toBe(true);
+  });
+
   it('rejects traversal and binary files', () => {
     const root = fixture();
     const context = new ProjectContext(root);
     expect(() => context.readTextFile('../outside.txt')).toThrow(/inside/);
     expect(() => context.readTextFile('binary.bin')).toThrow(/Binary/);
+  });
+
+  it('never puts credential files in the project snapshot', async () => {
+    const root = fixture();
+    const secrets: Record<string, string> = {
+      '.npmrc': '//registry.npmjs.org/:_authToken=npm_SECRET',
+      '.netrc': 'machine example login user password netrc_SECRET',
+      credentials: 'aws_secret_access_key=SECRET',
+      'credentials.json': '{"token":"SECRET"}',
+      '.env.test': 'TOKEN=SECRET',
+      '.env.production.local': 'TOKEN=SECRET',
+      'service-account-prod.json': '{"private_key":"SECRET"}',
+      'cert.p12': 'binary',
+      'src/app.ts': 'export const ok = true;\n',
+    };
+    for (const [name, content] of Object.entries(secrets)) {
+      fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      fs.writeFileSync(path.join(root, name), content);
+    }
+    fs.mkdirSync(path.join(root, '.aws'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.aws', 'credentials'), 'aws_secret_access_key=SECRET');
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.git', 'config'), '[remote "origin"]\n\turl = https://x-access-token:SECRET@github.com/a/b.git\n');
+
+    const context = new ProjectContext(root);
+    const sync = context.buildContext();
+    const asyncResult = await context.buildContextAsync();
+    for (const result of [sync, asyncResult]) {
+      const paths = result.files.map((file) => file.path);
+      expect(paths).toContain('src/app.ts');
+      for (const name of ['.npmrc', '.netrc', 'credentials', 'credentials.json', '.env.test', '.env.production.local', 'service-account-prod.json', 'cert.p12', '.aws/credentials', '.git/config']) {
+        expect(paths, name).not.toContain(name);
+      }
+      expect(result.text).not.toContain('SECRET');
+    }
+    expect(() => context.readTextFile('.npmrc')).toThrow(/excluded/);
   });
 });
 

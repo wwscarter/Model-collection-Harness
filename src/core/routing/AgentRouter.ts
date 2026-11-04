@@ -1,4 +1,4 @@
-import type { ModelConfig, ModelCapabilityType } from '@core/models/ModelConfig';
+import { hasUsableCredentials, type ModelConfig, type ModelCapabilityType } from '@core/models/ModelConfig';
 import { modelRegistry } from '@core/models/ModelRegistry';
 import { LocalRoutingModel } from './LocalRoutingModel';
 export interface RoutingRegistry { getEnabledModels(): ModelConfig[]; }
@@ -42,8 +42,11 @@ export class AgentRouter {
   getLocalModelStatus(): ReturnType<LocalRoutingModel['getStatus']> { return this.localModel.getStatus(); }
 
   async routeTask(context: TaskContext): Promise<RoutingDecision> {
-    const enabled = this.registry.getEnabledModels().filter((model) => model.enabled);
-    if (!enabled.length) throw new Error('No enabled models are configured');
+    const enabled = this.registry.getEnabledModels().filter((model) => model.enabled && hasUsableCredentials(model));
+    if (!enabled.length) {
+      const anyEnabled = this.registry.getEnabledModels().some((model) => model.enabled);
+      throw new Error(anyEnabled ? '已启用的模型都没有可用的 API Key，请先在模型设置中配置凭据' : 'No enabled models are configured');
+    }
     const localClassification = await this.localModel.classify(context);
     const taskType = context.type === 'general' ? localClassification.taskType : context.type;
     const complexity = context.complexity ?? localClassification.complexity;
@@ -56,7 +59,7 @@ export class AgentRouter {
         const base = complexity === 'high'
           ? score(m) * 0.8 + (m.intelligenceScore ?? score(m)) * 0.2
           : score(m) * 0.8 + (100 - m.costPer1kTokens.input) * 0.2;
-        return base * (this.performance?.getRoutingAdjustment(m.id, context.type) ?? 1);
+        return base * (this.performance?.getRoutingAdjustment(m.id, taskType) ?? 1);
       };
       return complexityBonus(b) - complexityBonus(a) || a.priority - b.priority || a.costPer1kTokens.input - b.costPer1kTokens.input;
     });

@@ -8,6 +8,7 @@ interface DetailsPanelProps {
   modelConfig?: ModelConfig;
   planningModelName?: string;
   metrics?: SessionMetrics;
+  audit?: { passed: boolean; score: number; issueCount: number };
   modelId?: string;
   confidence?: number;
   running?: boolean;
@@ -19,7 +20,7 @@ interface DetailsPanelProps {
 const integer = (value?: number) => value === undefined || !Number.isFinite(value) ? '—' : Math.round(value).toLocaleString('en-US');
 const duration = (value?: number) => value === undefined || !Number.isFinite(value) ? '—' : value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(1)} s`;
 
-export function DetailsPanel({ model, modelConfig, planningModelName, metrics, modelId, confidence, running, error, rating, onRate }: DetailsPanelProps) {
+export function DetailsPanel({ model, modelConfig, planningModelName, metrics, audit, modelId, confidence, running, error, rating, onRate }: DetailsPanelProps) {
   const currentModel = modelConfig?.name || model;
   const confidencePercent = confidence === undefined || !Number.isFinite(confidence) ? undefined : Math.round(Math.min(1, Math.max(0, confidence)) * 1000) / 10;
   const status = running ? '实时计算中' : error ? '执行失败' : metrics ? '任务已完成' : '等待任务';
@@ -54,6 +55,8 @@ export function DetailsPanel({ model, modelConfig, planningModelName, metrics, m
     </dl>
 
     <div className="inspector-first-token"><span><Clock3 size={11} />首字延迟</span><strong>{metrics?.ttftMs === undefined && running ? '等待首字' : duration(metrics?.ttftMs)}</strong></div>
+
+    {audit && <div className="inspector-first-token"><span><Activity size={11} />代码审计</span><strong title={`${audit.issueCount} 个问题`}>{audit.passed ? '通过' : '需复核'} · {audit.score}</strong></div>}
 
     <div className="inspector-feedback" aria-label="任务反馈">
       <span>{rating ? '感谢你的反馈' : '这次结果有帮助吗？'}</span>

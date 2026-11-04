@@ -1,4 +1,4 @@
-import type { ModelConfig } from '../models/ModelConfig';
+import { hasUsableCredentials, type ModelConfig } from '../models/ModelConfig';
 
 const agentPerspectives = ['独立方案与实现路径', '风险、限制与失败恢复', '测试方案、验收标准与遗漏点', '替代方案与取舍比较'];
 
@@ -9,7 +9,7 @@ const agentPerspectives = ['独立方案与实现路径', '风险、限制与失
  */
 export function selectPlanningModel(models: ModelConfig[], executionModelId: string): ModelConfig | undefined {
   return models
-    .filter((model) => model.enabled && model.id !== executionModelId)
+    .filter((model) => model.enabled && hasUsableCredentials(model) && model.id !== executionModelId)
     .filter((model) => (model.capabilities.find((capability) => capability.type === 'reasoning')?.score ?? 0) > 0)
     .sort((a, b) => {
       const score = (model: ModelConfig) =>

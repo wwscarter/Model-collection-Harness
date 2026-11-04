@@ -9,7 +9,7 @@ import path from 'node:path';
 import { AuditLog } from '../../src/core/audit/AuditLog';
 
 function model(id: string, score: number, priority = 0, intelligenceScore = 70) {
-  return { id, provider: 'openai' as const, name: id, apiKey: '', modelId: id, costPer1kTokens: { input: 1, output: 2 }, capabilities: [{ type: 'code' as const, score }], intelligenceScore, maxTokens: 1000, rateLimit: { requestsPerMinute: 60, tokensPerDay: 10000 }, enabled: true, priority, createdAt: new Date(), updatedAt: new Date() };
+  return { id, provider: 'openai' as const, name: id, apiKey: 'test-key', modelId: id, costPer1kTokens: { input: 1, output: 2 }, capabilities: [{ type: 'code' as const, score }], intelligenceScore, maxTokens: 1000, rateLimit: { requestsPerMinute: 60, tokensPerDay: 10000 }, enabled: true, priority, createdAt: new Date(), updatedAt: new Date() };
 }
 
 describe('runtime pipeline', () => {

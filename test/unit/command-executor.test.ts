@@ -46,4 +46,30 @@ describe('CommandExecutor', () => {
     const result = await handle.promise;
     expect(result.cancelled).toBe(true);
   });
+
+  it.runIf(process.platform !== 'win32')('terminates the whole process group and settles after cancellation', async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'amd-sandbox-'));
+    executor = new CommandExecutor();
+    const script = path.join(root, 'spawn-child.cjs');
+    fs.writeFileSync(script, `const { spawn } = require('node:child_process');\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });\nprocess.stdout.write(String(child.pid));\nsetInterval(() => {}, 1000);\n`);
+    const handle = executor.start({ command: `${process.execPath} ${JSON.stringify(script)}`, projectRoot: root, approved: true });
+    const grandchildPid = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('grandchild pid was not reported')), 5_000);
+      const unsubscribe = executor!.onData(handle.id, (event) => {
+        const match = event.data.match(/^\d+$/);
+        if (!match) return;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(Number(event.data));
+      });
+    });
+    expect(executor.cancel(handle.id)).toBe(true);
+    const result = await Promise.race([
+      handle.promise,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('cancellation did not settle')), 4_000)),
+    ]);
+    expect(result.cancelled).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(() => process.kill(grandchildPid, 0)).toThrow();
+  }, 10_000);
 });

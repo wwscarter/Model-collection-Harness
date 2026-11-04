@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — 2026-11-04
+
+### Security
+
+- Unified the credential-file policy used by project context and file tools. `.env*`, `.npmrc`, `.netrc`, `credentials`, `.aws/credentials`, `.docker/config.json`, `.kube/config`, service-account JSON and key stores are never included in a snapshot; `.git/` and these files are also refused by read/write/edit.
+- Project snapshots are wrapped in `<project_context untrusted="true">` and routed independently from the user prompt. The composer has an explicit “上下文 开/关” toggle.
+- Fixed the `web_fetch` SSRF bypass for hexadecimal IPv4-mapped IPv6 (`::ffff:7f00:1`), NAT64 and 6to4 forms.
+- Enabled Electron sandbox, a production CSP, navigation/window/permission blocking and IPC sender validation. The preload is emitted as CommonJS `preload.cjs` so it works with `sandbox: true`.
+- Terminal sessions no longer accept renderer-supplied shell, cwd or env; only an allow-listed environment is inherited. Command execution now requires a main-process native confirmation and runs in a killable process group.
+- Saved API keys are bound to the endpoint origin; changing the host requires a new key.
+
+### Reliability
+
+- Removed the no-key demo path: presets are not auto-enabled, keyless models are excluded from routing/planning/collaboration, and direct execution fails loudly.
+- A corrupt credential or unavailable safeStorage no longer aborts startup. Models are marked with a credential error, startup failures show a dialog and write `startup-error.log`, and `AMD_ENCRYPTION_KEY` is supported as a recovery key.
+- Project context is built with asynchronous I/O, and routing uses the user prompt instead of the snapshot.
+- Planning requests time out after 45 seconds and fall back to execution without a plan.
+- Command cancellation and timeouts terminate the whole process group (SIGTERM, then SIGKILL) and always settle the promise.
+- Added a single-instance lock, a renderer error boundary, tolerant session JSON loading and terminal-session cleanup.
+
+### Quality
+
+- `npm test` is green (193 tests); Vitest now has 20s timeouts, whole-project coverage and CI on Node 22/24.
+- Growth feedback records failures and the router’s actual `taskType`; static audits now write to the hash-chained log and metrics, so the dashboard KPI is real.
+- Removed the fake “5.5 高” model label; the composer reports “自动路由”.
+
 ## 0.0.2 — 2026-11-03
 
 - Added project `write` / `edit` tools and managed `run_command` / `process_status` / `stop_process` tools. The execution model can create a page, start a persistent local server and verify it with an HTTP request.

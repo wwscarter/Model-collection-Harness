@@ -83,6 +83,26 @@ describe("ModelStorage", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("keeps loading when one credential cannot be decrypted", () => {
+    configureEncryptionKeyProvider(() => testKey);
+    const storage = new ModelStorage(":memory:");
+    storage.saveModel(sampleModel());
+    (storage as unknown as { db: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown } } }).db
+      .prepare("UPDATE model_credentials SET api_key = ? WHERE model_id = ?")
+      .run("00:00:00", "test-model");
+
+    const loaded = storage.loadModel("test-model");
+    expect(loaded?.apiKey).toBe("");
+    expect(loaded?.credentialError).toContain("解密失败");
+    // The registry (and therefore app bootstrap) must survive the damage.
+    const registry = new ModelRegistry(storage, { initializePresets: false, persist: true });
+    expect(registry.getModel("test-model")?.credentialError).toBeTruthy();
+    registry.updateModel("test-model", { apiKey: "sk-replaced" });
+    expect(registry.getModel("test-model")?.credentialError).toBeUndefined();
+    expect(registry.getModel("test-model")?.apiKey).toBe("sk-replaced");
+    storage.close();
+  });
+
   it("persists a custom endpoint and model metadata without an API key", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "amd-custom-model-"));
     const dbPath = path.join(tempDir, "models.db");

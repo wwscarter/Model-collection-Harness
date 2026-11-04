@@ -41,6 +41,19 @@ describe('explicit primary routing', () => {
     expect(decision.alternativeModels).toEqual(['ordinary']);
   });
 
+  it('never routes to an enabled model without credentials', async () => {
+    const keyless = model('keyless', 100, { provider: 'openai', baseURL: undefined, apiKey: '' });
+    const usable = model('usable', 60, { provider: 'custom', apiKey: '', baseURL: 'http://127.0.0.1:11434/v1' });
+    const router = new AgentRouter({ getEnabledModels: () => [keyless, usable] });
+    const decision = await router.routeTask(task);
+    expect(decision.modelId).toBe('usable');
+  });
+
+  it('explains when every enabled model is missing a key', async () => {
+    const router = new AgentRouter({ getEnabledModels: () => [model('keyless', 100, { provider: 'openai', apiKey: '' })] });
+    await expect(router.routeTask(task)).rejects.toThrow('API Key');
+  });
+
   it('uses existing priority tie breaks when no primary is selected', async () => {
     const router = new AgentRouter({ getEnabledModels: () => [
       model('lower-priority', 85, { priority: 4 }),

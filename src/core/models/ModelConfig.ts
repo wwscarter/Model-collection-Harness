@@ -34,6 +34,8 @@ export interface ModelConfig {
   name: string;
   /** Decrypted only in memory. ModelStorage never writes this value as plain text. */
   apiKey: string;
+  /** Set when a stored credential cannot be decrypted; the model stays visible but unusable. */
+  credentialError?: string;
   baseURL?: string;
   modelId: string;
   providerCategory?: ProviderCategory;
@@ -121,6 +123,21 @@ export const PRESET_MODELS: ReadonlyArray<
   },
 ];
 
+const DEFAULT_PROVIDER_ORIGINS: Record<ModelProvider, string> = {
+  openai: 'https://api.openai.com', anthropic: 'https://api.anthropic.com',
+  google: 'https://generativelanguage.googleapis.com', deepseek: 'https://api.deepseek.com', custom: '',
+};
+
+/** The origin a stored key is allowed to be sent to. */
+export function credentialOrigin(provider: ModelProvider, baseURL?: string): string {
+  try { return new URL(baseURL?.trim() || DEFAULT_PROVIDER_ORIGINS[provider]).origin; } catch { return ''; }
+}
+
+/** True when a model can make a real request. Keyless custom/local endpoints are allowed. */
+export function hasUsableCredentials(model: Pick<ModelConfig, 'provider' | 'apiKey' | 'baseURL'>): boolean {
+  return Boolean(model.apiKey?.trim()) || model.provider === 'custom';
+}
+
 export function cloneModelConfig(config: ModelConfig): ModelConfig {
   return {
     ...config,
@@ -162,6 +179,12 @@ export function validateModelConfig(config: ModelConfig): void {
   }
   if (config.provider === "custom" && !config.baseURL?.trim()) {
     throw new Error("A custom provider API address is required");
+  }
+  if (config.baseURL?.trim()) {
+    let endpoint: URL;
+    try { endpoint = new URL(config.baseURL.trim()); } catch { throw new Error("API 地址格式无效"); }
+    if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") throw new Error("API 地址必须使用 http 或 https");
+    if (endpoint.username || endpoint.password) throw new Error("API 地址不能包含用户名或密码");
   }
   if (!Number.isFinite(config.maxTokens) || config.maxTokens <= 0) {
     throw new Error("maxTokens must be a positive number");

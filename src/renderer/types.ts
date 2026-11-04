@@ -15,6 +15,7 @@ export interface ModelConfig {
   intelligenceScore?: number;
   apiKey?: string;
   hasApiKey?: boolean;
+  credentialError?: string;
   enabled: boolean;
   priority: number;
   capabilities: ModelCapability[];
@@ -39,6 +40,7 @@ export interface ExecutionResult {
   modelUsed?: string;
   metrics?: SessionMetrics;
   auditResult?: { passed?: boolean; score?: number; issueCount?: number };
+  audit?: { passed: boolean; score: number; issueCount: number; auditModelId?: string };
   project?: { root: string; files: string[]; tokenCount: number; truncated: boolean; skippedFiles: number };
 }
 
@@ -129,7 +131,7 @@ export interface AmdApi {
   recordGrowthFeedback: (feedback: unknown) => Promise<unknown>;
   tty: { list: () => Promise<unknown[]>; create: (options?: unknown) => Promise<unknown>; write: (id: string, data: string) => Promise<void>; resize: (id: string, cols: number, rows: number) => Promise<void>; close: (id: string) => Promise<boolean>; };
   execution: {
-    run: (request: { command: string; projectRoot: string; cwd?: string; approved?: boolean; timeoutMs?: number; maxOutputBytes?: number; env?: Record<string, string | undefined> }) => Promise<CommandExecutionResult>;
+    run: (request: { command: string; cwd?: string; timeoutMs?: number; maxOutputBytes?: number }) => Promise<CommandExecutionResult>;
     cancel: (id: string) => Promise<boolean>;
   };
   off?: (channel: string, listener: (payload: unknown) => void) => void;

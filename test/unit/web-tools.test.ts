@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BingSearchProvider, decodeBingUrl, parseBingResults, SearchProviderRegistry } from '../../src/core/tools/search';
-import { assertPublicUrl, fetchWebPage, htmlToText, isPrivateAddress } from '../../src/core/tools/webFetch';
+import { assertPublicUrl, fetchWebPage, htmlToText, isFakeIpAddress, isPrivateAddress } from '../../src/core/tools/webFetch';
 
 const bingHtml = `<ol id="b_results">
 <li class="b_algo" data-id iid=SERP.1><div class="b_tpcn"><a class="tilk" href="https://zh.wikipedia.org/wiki/x">icon</a></div><h2><a target="_blank" href="https://zh.wikipedia.org/wiki/%E4%B8%8A%E6%B5%B7" h="ID=SERP,1">上海市 - <strong>维基百科</strong></a></h2><div class="b_caption"><p class="b_lineclamp2">2026年3月16日&ensp;&#0183;&ensp;上海是中国的直辖市 &amp; 经济中心</p></div></li>
@@ -80,6 +80,26 @@ describe('web_fetch guards', () => {
   it('classifies private addresses', () => {
     for (const address of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1']) expect(isPrivateAddress(address)).toBe(true);
     for (const address of ['8.8.8.8', '1.1.1.1', '2606:4700::1111']) expect(isPrivateAddress(address)).toBe(false);
+  });
+
+  it('blocks hexadecimal IPv4-mapped, NAT64 and 6to4 forms', () => {
+    for (const address of ['::ffff:7f00:1', '::ffff:a00:1', '::ffff:c0a8:101', '64:ff9b::7f00:1', '64:ff9b::a00:1', '2002:7f00:1::1', '2002:c0a8:101::1', '::127.0.0.1']) {
+      expect(isPrivateAddress(address), address).toBe(true);
+    }
+    for (const address of ['::ffff:808:808']) expect(isPrivateAddress(address), address).toBe(true);
+    expect(isPrivateAddress('64:ff9b::808:808')).toBe(false);
+  });
+
+  it('detects fake-IP answers in mapped form', () => {
+    expect(isFakeIpAddress('198.18.0.11')).toBe(true);
+    expect(isFakeIpAddress('::ffff:c612:b')).toBe(true);
+    expect(isFakeIpAddress('::ffff:8.8.8.8')).toBe(false);
+  });
+
+  it('rejects mapped IPv6 literals through assertPublicUrl', async () => {
+    await expect(assertPublicUrl('http://[::ffff:7f00:1]:3000/', async () => [])).rejects.toThrow('内网');
+    await expect(assertPublicUrl('http://[::ffff:a00:1]/', async () => [])).rejects.toThrow('内网');
+    await expect(assertPublicUrl('http://[64:ff9b::a00:1]/', async () => [])).rejects.toThrow('内网');
   });
 
   it('rejects local, private and non-http URLs', async () => {
