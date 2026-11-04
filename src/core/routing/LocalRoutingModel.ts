@@ -65,7 +65,7 @@ export class LocalRoutingModel {
           return {
             taskType: parsed.taskType,
             complexity: parsed.complexity,
-            confidence: clamp(Number(parsed.confidence) || 0.5, 0, 1),
+            confidence: typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence) ? clamp(parsed.confidence, 0, 1) : 0.5,
             rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'local model classification',
             backend: 'local-model',
           };

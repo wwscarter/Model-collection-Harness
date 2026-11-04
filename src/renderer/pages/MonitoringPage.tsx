@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ChevronRight, Clock3, Coins, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { DashboardSnapshot, RunTrace, TraceRun } from '../types';
 import { TraceTimeline } from '../components/TraceTimeline';
@@ -20,43 +20,72 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
   const [trace, setTrace] = useState<RunTrace>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [traceError, setTraceError] = useState<string>();
+  const [traceReload, setTraceReload] = useState(0);
+  const loadRequest = useRef(0);
+  const liveTraceRef = useRef(liveTrace);
+  liveTraceRef.current = liveTrace;
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const request = ++loadRequest.current;
     setLoading(true); setError(undefined);
     try {
+      if (!window.amd?.getDashboard || !window.amd.trace?.list) throw new Error('监测接口尚未连接');
       const [dashboard, recent] = await Promise.all([
-        window.amd?.getDashboard({ range }),
-        window.amd?.trace?.list(50),
+        window.amd.getDashboard({ range }),
+        window.amd.trace.list(50),
       ]);
-      if (dashboard) setSnapshot(dashboard);
-      const next = (recent ?? []) as TraceRun[];
+      if (request !== loadRequest.current) return;
+      setSnapshot(dashboard);
+      const from = new Date(dashboard.range.from).getTime();
+      const to = new Date(dashboard.range.to).getTime();
+      const inRange = (run: TraceRun) => {
+        const started = new Date(run.startedAt).getTime();
+        return (!Number.isFinite(from) || started >= from) && (!Number.isFinite(to) || started <= to);
+      };
+      const live = liveTraceRef.current?.run;
+      const next = recent.filter(inRange);
+      if (live && inRange(live)) {
+        const index = next.findIndex((run) => run.id === live.id);
+        if (index >= 0) next[index] = live;
+        else next.unshift(live);
+      }
       setRuns(next);
       setSelectedId((current) => current && next.some((run) => run.id === current) ? current : next[0]?.id);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, [range]);
+    } catch (cause) { if (request === loadRequest.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { if (request === loadRequest.current) setLoading(false); }
+  }, [range]);
+  useEffect(() => {
+    void load();
+    return () => { loadRequest.current += 1; };
+  }, [load, liveTrace?.run.id, liveTrace?.run.status]);
   useEffect(() => {
     if (liveTrace) setSelectedId(liveTrace.run.id);
   }, [liveTrace?.run.id]);
+  const selectedLiveTrace = liveTrace?.run.id === selectedId ? liveTrace : undefined;
   useEffect(() => {
+    setTraceError(undefined);
     if (!selectedId) { setTrace(undefined); return; }
-    if (liveTrace?.run.id === selectedId) { setTrace(liveTrace); return; }
+    if (selectedLiveTrace) { setTrace(selectedLiveTrace); return; }
+    setTrace(undefined);
     let active = true;
-    void window.amd?.trace?.get(selectedId).then((value) => { if (active) setTrace(value); }).catch(() => { if (active) setTrace(undefined); });
+    void window.amd?.trace?.get(selectedId).then((value) => { if (active) setTrace(value); }).catch((cause) => {
+      if (active) setTraceError(cause instanceof Error ? cause.message : String(cause));
+    });
     return () => { active = false; };
-  }, [selectedId, liveTrace]);
+  }, [selectedId, selectedLiveTrace, traceReload]);
+  const selectedTrace = trace?.run.id === selectedId ? trace : undefined;
 
   const totals = useMemo(() => {
     const totalTokens = runs.reduce((sum, run) => sum + run.totalInputTokens + run.totalOutputTokens, 0);
     const failures = runs.filter((run) => run.status === 'failed').length;
     return { totalTokens, failures };
   }, [runs]);
-  const selectedRun = trace?.run ?? runs.find((run) => run.id === selectedId);
+  const selectedRun = selectedTrace?.run ?? runs.find((run) => run.id === selectedId);
   const summary = snapshot?.summary;
   const models = (snapshot?.modelUsage ?? []).slice(0, 5);
 
-  return <section className="monitoring-page" aria-label="运行监测">
+  return <section className="monitoring-page" aria-label="运行监测" aria-busy={loading}>
     <header className="monitoring-header">
       <div><h1>运行监测</h1><p>只保留判断运行质量所需的指标；调用链、成本与失败原因集中在右侧。</p></div>
       <div className="monitoring-actions"><div className="monitoring-range" role="group" aria-label="统计范围">{([['24h', '24 小时'], ['7d', '7 天'], ['30d', '30 天']] as Array<[Range, string]>).map(([value, label]) => <button key={value} className={range === value ? 'active' : ''} onClick={() => setRange(value)}>{label}</button>)}</div><button className="icon-button" title="刷新" aria-label="刷新运行监测" onClick={() => void load()}><RefreshCw size={15} className={loading ? 'spinning' : ''} /></button></div>
@@ -66,8 +95,8 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
 
     <div className="monitoring-metrics" aria-label="关键指标">
       <div><span><Activity size={13} />运行轮次</span><strong>{integer(summary?.totalTasks)}</strong><small>{summary?.totalInvocations ?? 0} 次模型调用</small></div>
-      <div><span><ChevronRight size={13} />成功率</span><strong>{summary?.successRate === undefined ? '—' : Math.round(summary.successRate * 100) + '%'}</strong><small>{totals.failures} 个失败运行</small></div>
-      <div><span><Clock3 size={13} />平均耗时</span><strong>{duration(summary?.avgLatency)}</strong><small>最近 {runs.length} 轮 · {integer(totals.totalTokens)} tok</small></div>
+      <div><span><ChevronRight size={13} />调用成功率</span><strong>{summary?.successRate === undefined ? '—' : Math.round(summary.successRate * 100) + '%'}</strong><small>最近 {runs.length} 轮中 {totals.failures} 个失败</small></div>
+      <div><span><Clock3 size={13} />平均调用耗时</span><strong>{duration(summary?.avgLatency)}</strong><small>最近 {runs.length} 轮 · {integer(totals.totalTokens)} tok</small></div>
       <div><span><Coins size={13} />预估成本</span><strong>{money(summary?.totalCost)}</strong><small>{models.length ? models[0].modelId : '暂无模型数据'}</small></div>
     </div>
 
@@ -89,18 +118,18 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
 
       <section className="monitoring-trace" aria-label="调用链详情">
         <header><div><strong>{selectedRun ? '本轮调用链' : '调用链'}</strong><span>{selectedRun ? selectedRun.id : '选择左侧运行查看详情'}</span></div>{selectedRun && <span className={'monitoring-trace-status ' + selectedRun.status}>{statusLabel[selectedRun.status] ?? selectedRun.status}</span>}</header>
-        {trace ? <>
+        {selectedTrace ? <>
           <div className="monitoring-trace-meta">
-            <span><small>耗时</small><strong>{duration(trace.run.durationMs)}</strong></span>
-            <span><small>Token</small><strong>{integer(trace.run.totalInputTokens + trace.run.totalOutputTokens)}</strong></span>
-            <span><small>成本</small><strong>{money(trace.run.totalCost)}</strong></span>
-            <span><small>Span</small><strong>{trace.spans.length}</strong></span>
-            <span><small>模型调用</small><strong>{trace.spans.filter((span) => span.kind === 'model').length}</strong></span>
-            <span><small>工具</small><strong>{trace.spans.filter((span) => span.kind === 'tool').length}</strong></span>
+            <span><small>耗时</small><strong>{duration(selectedTrace.run.durationMs)}</strong></span>
+            <span><small>Token</small><strong>{integer(selectedTrace.run.totalInputTokens + selectedTrace.run.totalOutputTokens)}</strong></span>
+            <span><small>成本</small><strong>{money(selectedTrace.run.totalCost)}</strong></span>
+            <span><small>Span</small><strong>{selectedTrace.spans.length}</strong></span>
+            <span><small>模型调用</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'model').length}</strong></span>
+            <span><small>工具</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'tool').length}</strong></span>
           </div>
-          {trace.run.errorMessage && <div className="monitoring-trace-error">{trace.run.errorMessage}</div>}
-          <TraceTimeline trace={trace} defaultOpen />
-        </> : <div className="monitoring-empty"><ChevronRight size={20} /><span>选择一条运行记录，展开完整调用链。</span></div>}
+          {selectedTrace.run.errorMessage && <div className="monitoring-trace-error">{selectedTrace.run.errorMessage}</div>}
+          <TraceTimeline trace={selectedTrace} defaultOpen />
+        </> : traceError ? <div className="monitoring-empty" role="alert"><span>{traceError}</span><button className="button outline" onClick={() => setTraceReload((value) => value + 1)}>重试</button></div> : <div className="monitoring-empty"><ChevronRight size={20} /><span>{selectedId ? '正在读取调用链…' : '选择一条运行记录，展开完整调用链。'}</span></div>}
       </section>
     </div>
   </section>;

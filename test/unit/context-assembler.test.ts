@@ -64,4 +64,20 @@ describe('ContextAssembler', () => {
     });
     expect(result.summary).not.toContain('STALE-SUMMARY-MARKER');
   });
+
+  it.each([1, 2])('fits a short history of %s oversized messages into the budget', (count) => {
+    const history = Array.from({ length: count }, (_, index) => turn(index, index % 2 ? 'assistant' : 'user', 30_000));
+    const original = history.map((item) => item.content);
+    const result = assembleContext({ history, contextWindow: 8_192, maxOutputTokens: 1_000, reserveTokens: 1_000 });
+    expect(result.estimatedTokens).toBeLessThanOrEqual(6_192);
+    expect(result.history).toHaveLength(count);
+    expect(result.history.some((item) => item.content.includes('truncated to fit context budget'))).toBe(true);
+    expect(history.map((item) => item.content)).toEqual(original);
+  });
+
+  it('does not invent a minimum history budget when the current task fills the window', () => {
+    const result = assembleContext({ history: [turn(0), turn(1)], contextWindow: 8_192, maxOutputTokens: 1_000, maxInputTokens: 0 });
+    expect(result.history).toEqual([]);
+    expect(result.estimatedTokens).toBe(0);
+  });
 });

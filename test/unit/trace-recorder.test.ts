@@ -8,6 +8,44 @@ function clock() {
 }
 
 describe('TraceRecorder', () => {
+  it('uses the same default completion status for the run and its unfinished spans', () => {
+    const store = new InMemoryTraceStore();
+    const recorder = new TraceRecorder(store, { now: clock() });
+    recorder.startRun({ runId: 'default-success', sessionId: 's' }).child('tool', 'read');
+    recorder.finishRun('default-success');
+    expect(recorder.getTrace('default-success')?.run.status).toBe('success');
+    expect(recorder.getTrace('default-success')?.spans.every((span) => span.status === 'success')).toBe(true);
+    recorder.startRun({ runId: 'default-failure', sessionId: 's' }).child('model', 'executor');
+    recorder.finishRun('default-failure', { error: 'network unavailable' });
+    expect(recorder.getTrace('default-failure')?.run.status).toBe('failed');
+    expect(recorder.getTrace('default-failure')?.spans.every((span) => span.status === 'failed' && span.errorMessage === 'network unavailable')).toBe(true);
+  });
+
+  it('retains routed metadata and final totals on the exported trace', () => {
+    const recorder = new TraceRecorder(new InMemoryTraceStore(), { now: clock() });
+    const root = recorder.startRun({ runId: 'metadata', sessionId: 's', taskType: 'general' });
+    const route = root.child('route', 'route');
+    route.end({ attributes: { modelId: 'first', taskType: 'code', complexity: 'high' } });
+    route.setAttributes({ modelId: 'final' });
+    root.child('model', 'executor', { modelId: 'final' }).end();
+    recorder.finishRun('metadata', { inputTokens: 21, outputTokens: 8, cost: 0.123 });
+    const trace = recorder.getTrace('metadata')!;
+    expect(trace.run).toMatchObject({ taskType: 'code', complexity: 'high', totalInputTokens: 21, totalOutputTokens: 8, totalCost: 0.123 });
+    expect(trace.spans.find((span) => span.kind === 'run')).toMatchObject({ status: 'success', inputTokens: 21, outputTokens: 8, cost: 0.123 });
+    expect(trace.spans.filter((span) => span.kind === 'model' || span.kind === 'route').every((span) => span.modelId === 'final')).toBe(true);
+  });
+
+  it('settles a run once and rejects late children after releasing its active state', () => {
+    const events: string[] = [];
+    const recorder = new TraceRecorder(new InMemoryTraceStore(), { now: clock(), onEvent: (event) => events.push(event.type) });
+    const root = recorder.startRun({ runId: 'finished', sessionId: 's' });
+    recorder.finishRun('finished');
+    recorder.finishRun('finished', { status: 'failed' });
+    expect(events.filter((event) => event === 'run_end')).toHaveLength(1);
+    expect(recorder.getTrace('finished')?.run.status).toBe('success');
+    expect(() => root.child('tool', 'late')).toThrow('Trace run not found');
+  });
+
   it('records a nested run tree with timings and totals', () => {
     const store = new InMemoryTraceStore();
     const recorder = new TraceRecorder(store, { now: clock() });
@@ -69,6 +107,38 @@ describe('TraceRecorder', () => {
 });
 
 describe('TraceStore', () => {
+  it('keeps active traces intact when pruning or clearing completed history', () => {
+    const engine = new ObservabilityEngine();
+    const recorder = new TraceRecorder(engine, { now: clock() });
+    const active = recorder.startRun({ runId: 'active', sessionId: 's' });
+    active.child('tool', 'read');
+    recorder.startRun({ runId: 'done', sessionId: 's' });
+    recorder.finishRun('done');
+    try {
+      expect(engine.pruneTraces({ maxAgeDays: 1, now: new Date('2026-12-01') }).runs).toBe(1);
+      expect(engine.getTrace('active')?.spans).toHaveLength(2);
+      expect(engine.clearTraces()).toEqual({ runs: 0, spans: 0 });
+      recorder.finishRun('active');
+      expect(engine.clearTraces()).toEqual({ runs: 1, spans: 2 });
+    } finally { engine.close(); }
+  });
+
+  it('settles interrupted runs on restart while preserving completed spans', () => {
+    const engine = new ObservabilityEngine();
+    const recorder = new TraceRecorder(engine, { now: clock() });
+    const root = recorder.startRun({ runId: 'interrupted', sessionId: 's' });
+    root.child('route', 'route').end();
+    root.child('model', 'executor');
+    try {
+      expect(engine.recoverInterruptedRuns(new Date('2026-11-04T00:01:00.000Z'))).toBe(1);
+      const trace = engine.getTrace('interrupted')!;
+      expect(trace.run).toMatchObject({ status: 'cancelled', endedAt: '2026-11-04T00:01:00.000Z' });
+      expect(trace.spans.find((span) => span.kind === 'route')?.status).toBe('success');
+      expect(trace.spans.find((span) => span.kind === 'model')?.status).toBe('cancelled');
+      expect(engine.recoverInterruptedRuns()).toBe(0);
+    } finally { engine.close(); }
+  });
+
   it('persists and reads runs and spans through the metrics database', () => {
     const engine = new ObservabilityEngine();
     engine.saveTraceRun({

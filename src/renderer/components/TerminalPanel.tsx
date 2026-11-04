@@ -28,16 +28,16 @@ export function TerminalPanel({ onClose }: TerminalPanelProps) {
           const event = payload as { sessionId?: string; data?: string };
           if (event.sessionId === session.id && event.data) setOutput((current) => `${current}${event.data}`.slice(-30000));
         });
-      } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      } catch (cause) { if (active) setError(cause instanceof Error ? cause.message : String(cause)); }
     })();
     void window.amd?.project.current().then((project) => setProjectRoot(project?.root ?? null)).catch(() => setProjectRoot(null));
-    return () => { active = false; unsubscribe?.(); if (sessionRef.current && window.amd?.tty) void window.amd.tty.close(sessionRef.current); };
+    return () => { active = false; unsubscribe?.(); if (sessionRef.current && window.amd?.tty) void window.amd.tty.close(sessionRef.current).catch(() => undefined); };
   }, []);
 
   useEffect(() => { outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight }); }, [output]);
   const send = async () => { if (!command || !sessionId || !window.amd?.tty) return; await window.amd.tty.write(sessionId, `${command}\n`); setCommand(''); };
   const runSafeCommand = async () => {
-    if (!safeCommand.trim() || !window.amd?.execution) return;
+    if (safeRunning || !safeCommand.trim() || !window.amd?.execution) return;
     if (!projectRoot) { setSafeResult('请先在左侧选择项目；安全执行只允许在项目目录内运行。'); return; }
     setSafeRunning(true); setSafeResult(null);
     try {

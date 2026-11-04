@@ -20,7 +20,11 @@ export function RuntimeSettings({ onOpenRouting }: RuntimeSettingsProps) {
   }, []);
   const choose = async (next: ApprovalMode) => {
     setBusy(true); setNotice(undefined);
-    try { const saved = await window.amd?.preferences?.set({ approvalMode: next }); if (saved) setMode(saved.approvalMode); setNotice('权限模式已保存。'); }
+    try {
+      if (!window.amd?.preferences) throw new Error('运行设置接口尚未连接');
+      const saved = await window.amd.preferences.set({ approvalMode: next });
+      setMode(saved.approvalMode); setNotice('权限模式已保存。');
+    }
     catch (cause) { setNotice(errorMessage(cause)); }
     finally { setBusy(false); }
   };

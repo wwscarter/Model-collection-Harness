@@ -440,9 +440,10 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 @media (max-width: 900px) { .topbar-title { max-width: 30%; } }
 
 
-.workspace-code-line { display: block; min-height: 22px; }
-.workspace-code-line .token { color: var(--text-secondary); }
-.workspace-code-line .token.keyword, .workspace-code-line .token.important { color: var(--text); font-weight: 600; }
+.workspace-code-content { display: block; min-height: 22px; font: inherit; }
+.workspace-code-content .token { color: var(--text-secondary); }
+.workspace-code-content .token.keyword, .workspace-code-content .token.important { color: var(--text); font-weight: 600; }
+.workspace-preview-notice { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: 10px; }
 
 
 .user-message-footer { border-top: 0; }

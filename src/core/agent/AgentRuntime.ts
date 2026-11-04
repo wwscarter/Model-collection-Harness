@@ -359,7 +359,7 @@ export class AgentRuntime {
       }
       return {
         content: content.trim() ? content : finalText,
-        inputTokens: stats.tokens.input,
+        inputTokens: stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite,
         outputTokens: stats.tokens.output,
         toolCalls,
         stopReason: toolLimitReached ? 'tool_limit' : last?.stopReason ?? 'stop',

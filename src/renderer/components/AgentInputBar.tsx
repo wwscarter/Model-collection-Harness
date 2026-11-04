@@ -13,6 +13,7 @@ interface AgentInputBarProps {
   pinnedModelId?: string;
   models: ModelConfig[];
   project?: ProjectInfo;
+  activeFilePath?: string;
   projects: ProjectRecord[];
   onSelectProject: (id: string) => void;
   gitBusy: boolean;
@@ -29,13 +30,13 @@ interface AgentInputBarProps {
 }
 
 const QUICK_COMMANDS = [
-  { label: '解释当前文件', prompt: '请解释当前打开文件的实现、关键流程和潜在风险。' },
+  { label: '解释当前文件', prompt: '请解释当前打开文件的实现、关键流程和潜在风险。', requiresFile: true },
   { label: '审查当前改动', prompt: '请审查当前工作区未提交的改动，指出问题并给出修复建议。' },
   { label: '运行测试并修复', prompt: '请运行项目测试，定位失败原因并修复。' },
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, projects, onSelectProject, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -71,7 +72,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
       </div>
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <footer>
-        <div className="dock-left quick-menu-wrap"><button className="attach-button quick-menu-trigger" title="快捷指令" aria-label="快捷指令" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><Plus size={18} /></button>{quickOpen && <div className="quick-menu" role="menu" aria-label="快捷指令">{QUICK_COMMANDS.map((command) => <button key={command.label} className="quick-menu-item" role="menuitem" onClick={() => insertCommand(command.prompt)}>{command.label}</button>)}</div>}<button className="composer-permission" title="执行权限设置" aria-label={'执行权限：' + permissionLabel} onClick={onOpenSettings}><ShieldCheck size={12} strokeWidth={1.7} /><span>{permissionLabel}</span></button></div>
+        <div className="dock-left quick-menu-wrap"><button className="attach-button quick-menu-trigger" title="快捷指令" aria-label="快捷指令" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><Plus size={18} /></button>{quickOpen && <div className="quick-menu" role="menu" aria-label="快捷指令">{QUICK_COMMANDS.map((command) => <button key={command.label} className="quick-menu-item" role="menuitem" disabled={command.requiresFile && !activeFilePath} title={command.requiresFile && !activeFilePath ? '请先从工作区打开一个文件' : undefined} onClick={() => insertCommand(command.requiresFile ? `请解释项目文件「${activeFilePath}」的实现、关键流程和潜在风险。` : command.prompt)}>{command.label}</button>)}</div>}<button className="composer-permission" title="执行权限设置" aria-label={'执行权限：' + permissionLabel} onClick={onOpenSettings}><ShieldCheck size={12} strokeWidth={1.7} /><span>{permissionLabel}</span></button></div>
         <div className="dock-right">
           <div className="model-menu-wrap">
             <button className="model-menu-trigger" aria-label="切换模型" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>{multiModel ? <Sparkles size={12} /> : null}<span>{label}</span><ChevronDown size={11} className={menuOpen ? 'is-open' : ''} /></button>

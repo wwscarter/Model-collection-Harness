@@ -1,6 +1,18 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
 const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:trace', 'tty:data', 'execution:data']);
+type Listener = (payload: unknown) => void;
+type IpcListener = (_event: IpcRendererEvent, payload: unknown) => void;
+const subscriptions = new Map<string, Map<Listener, Set<IpcListener>>>();
+
+function unsubscribe(channel: string, listener: Listener, handler: IpcListener): void {
+  ipcRenderer.removeListener(channel, handler);
+  const channelListeners = subscriptions.get(channel);
+  const handlers = channelListeners?.get(listener);
+  handlers?.delete(handler);
+  if (!handlers?.size) channelListeners?.delete(listener);
+  if (!channelListeners?.size) subscriptions.delete(channel);
+}
 
 const amdApi = {
   listModels: () => ipcRenderer.invoke('model:list'),
@@ -99,12 +111,17 @@ const amdApi = {
   on: (channel: string, listener: (payload: unknown) => void) => {
     if (!allowedChannels.has(channel)) return () => undefined;
     const handler = (_event: IpcRendererEvent, payload: unknown) => listener(payload);
+    const channelListeners = subscriptions.get(channel) ?? new Map<Listener, Set<IpcListener>>();
+    const handlers = channelListeners.get(listener) ?? new Set<IpcListener>();
+    handlers.add(handler);
+    channelListeners.set(listener, handlers);
+    subscriptions.set(channel, channelListeners);
     ipcRenderer.on(channel, handler);
-    return () => ipcRenderer.removeListener(channel, handler);
+    return () => unsubscribe(channel, listener, handler);
   },
   off: (channel: string, listener: (payload: unknown) => void) => {
     if (!allowedChannels.has(channel)) return;
-    ipcRenderer.removeListener(channel, listener as never);
+    for (const handler of subscriptions.get(channel)?.get(listener) ?? []) unsubscribe(channel, listener, handler);
   },
 };
 

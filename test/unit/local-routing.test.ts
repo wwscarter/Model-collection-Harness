@@ -37,4 +37,9 @@ describe('LocalRoutingModel', () => {
     expect(decision.reason).toContain('code');
     expect(router.getLocalModelStatus().backend).toBe('heuristic');
   });
+
+  it('preserves a valid zero confidence from a local completion adapter', async () => {
+    const model = new LocalRoutingModel({ complete: async () => JSON.stringify({ taskType: 'analysis', complexity: 'medium', confidence: 0 }) });
+    expect((await model.classify({ type: 'general', description: 'inspect' })).confidence).toBe(0);
+  });
 });

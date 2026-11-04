@@ -40,6 +40,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
   const [manualModel, setManualModel] = useState('');
   const [routing, setRouting] = useState<{ backend: string; available: boolean }>();
   const drafts = useRef<Record<string, SettingsDraft>>({});
+  const initialSelectionPending = useRef(!firstModel);
   const dialogRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const manualRef = useRef<HTMLInputElement>(null);
@@ -56,6 +57,14 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
   const sameProvider = selected?.provider === draft.provider && (selected.providerCategory ?? (selected.provider === 'custom' ? 'compatible_gateway' : 'official')) === draft.providerCategory;
   const sameOrigin = Boolean(selected) && endpointOrigin(selected!.provider, selected!.baseURL) === endpointOrigin(draft.provider, draft.baseURL);
   const hasSavedKey = sameProvider && sameOrigin && selected?.hasApiKey;
+
+  useEffect(() => {
+    if (initialSelectionPending.current && firstModel) {
+      initialSelectionPending.current = false;
+      setSelectedId(firstModel.id);
+      setDraft(createSettingsDraft(firstModel));
+    }
+  }, [firstModel]);
 
   useEffect(() => {
     void window.amd?.routingStatus().then(setRouting).catch(() => undefined);
@@ -83,9 +92,10 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
     const needle = query.trim().toLowerCase();
     return needle ? models.filter((model) => [model.name, model.modelId, model.baseURL, model.provider, categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]].some((value) => value?.toLowerCase().includes(needle))) : models;
   }, [models, query]);
-  const change = (updates: Partial<SettingsDraft>) => { setDraft((value) => ({ ...value, ...updates })); setNotice(null); };
+  const change = (updates: Partial<SettingsDraft>) => { initialSelectionPending.current = false; setDraft((value) => ({ ...value, ...updates })); setNotice(null); };
   const switchEndpoint = (model?: ModelConfig) => {
     if (busy) return;
+    initialSelectionPending.current = false;
     drafts.current[selectedKey] = draft;
     const key = model?.id ?? 'new';
     setSelectedId(model?.id ?? null);

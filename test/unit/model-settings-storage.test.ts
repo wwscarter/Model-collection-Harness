@@ -112,6 +112,66 @@ describe('model settings persistence', () => {
       temperature: 0, enableThinking: false, availableModels: ['legacy-reasoner', 'legacy-chat'],
     });
   });
+
+  it('retains temporarily unreadable credentials when saving ordinary model metadata', () => {
+    configureEncryptionKeyProvider(() => testKey);
+    const file = databasePath();
+    const original = sampleModel({ isPrimary: true });
+    const storage = openStore(file);
+    storage.saveModel(original);
+    configureEncryptionKeyProvider(() => { throw new Error('Credential store temporarily unavailable'); });
+    const registry = new ModelRegistry(storage, { initializePresets: false, persist: true });
+
+    expect(registry.getModel(original.id)).toMatchObject({ apiKey: '', credentialError: expect.any(String) });
+    expect(registry.updateModel(original.id, { name: 'Renamed service', enabled: false, isPrimary: false })).toMatchObject({
+      name: 'Renamed service', enabled: false, isPrimary: false, apiKey: '', credentialError: expect.any(String),
+    });
+    expect(storage.loadModel(original.id)!.credentialError).toBeTruthy();
+    storage.close();
+
+    configureEncryptionKeyProvider(() => testKey);
+    const reopened = openStore(file);
+    expect(reopened.loadModel(original.id)).toMatchObject({
+      name: 'Renamed service', enabled: false, isPrimary: false, apiKey: original.apiKey, baseURL: original.baseURL,
+    });
+    expect(reopened.loadModel(original.id)!.credentialError).toBeUndefined();
+  });
+
+  it('retains unreadable credentials when a primary selection indirectly updates the old primary', () => {
+    configureEncryptionKeyProvider(() => testKey);
+    const storage = openStore(':memory:');
+    const previous = sampleModel({ id: 'previous', isPrimary: true });
+    storage.saveModel(previous);
+    storage.saveModel(sampleModel({ id: 'chosen', apiKey: '', enabled: false }));
+    configureEncryptionKeyProvider(() => { throw new Error('Credential store temporarily unavailable'); });
+    const registry = new ModelRegistry(storage, { initializePresets: false, persist: true });
+
+    registry.setPrimaryModel('chosen');
+
+    expect(registry.getModel('previous')).toMatchObject({ isPrimary: false, credentialError: expect.any(String) });
+    configureEncryptionKeyProvider(() => testKey);
+    expect(storage.loadModel('previous')).toMatchObject({ isPrimary: false, apiKey: previous.apiKey, baseURL: previous.baseURL });
+    expect(storage.loadModel('chosen')).toMatchObject({ isPrimary: true, enabled: true, apiKey: '' });
+  });
+
+  it.each(['', 'sk-replacement-settings-secret'])('persists an explicit key edit to %j after a failed decrypt', (apiKey) => {
+    configureEncryptionKeyProvider(() => testKey);
+    const file = databasePath();
+    const storage = openStore(file);
+    storage.saveModel(sampleModel());
+    configureEncryptionKeyProvider(() => { throw new Error('Credential store temporarily unavailable'); });
+    const registry = new ModelRegistry(storage, { initializePresets: false, persist: true });
+    expect(registry.getModel('local-model')!.credentialError).toBeTruthy();
+
+    if (apiKey) configureEncryptionKeyProvider(() => testKey);
+    expect(registry.updateModel('local-model', { apiKey })!.credentialError).toBeUndefined();
+    storage.close();
+
+    configureEncryptionKeyProvider(() => testKey);
+    const reopened = openStore(file);
+    expect(reopened.loadModel('local-model')).toMatchObject({ apiKey });
+    expect(reopened.loadModel('local-model')!.credentialError).toBeUndefined();
+  });
 });
 
 describe('model settings registry', () => {
@@ -210,5 +270,12 @@ describe('model settings registry', () => {
     expect(() => registry.registerModel(sampleModel({ id: 'invalid', temperature }))).toThrow(/temperature/);
     expect(registry.getModel('local-model')!.temperature).toBe(0.6);
     expect(registry.getModel('invalid')).toBeUndefined();
+  });
+
+  it.each([-1, 0.5, Infinity, NaN])('rejects invalid request limits %s without replacing valid configuration', (requestsPerMinute) => {
+    const registry = new ModelRegistry(undefined, { initializePresets: false, persist: false });
+    registry.registerModel(sampleModel());
+    expect(() => registry.updateModel('local-model', { rateLimit: { requestsPerMinute, tokensPerDay: 1000 } })).toThrow('rateLimit');
+    expect(registry.getModel('local-model')!.rateLimit.requestsPerMinute).toBe(60);
   });
 });

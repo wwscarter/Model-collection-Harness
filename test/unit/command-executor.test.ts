@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { ChildProcess } from 'node:child_process';
 import { CommandExecutor } from '../../src/core/tty/CommandExecutor';
 
 describe('CommandExecutor', () => {
@@ -36,6 +39,34 @@ describe('CommandExecutor', () => {
     const result = await executor.run({ command: `${process.execPath} -e "process.stdout.write('x'.repeat(10000));"`, projectRoot: root, approved: true, maxOutputBytes: 1024 });
     expect(result.truncated).toBe(true);
     expect(Buffer.byteLength(result.output)).toBeLessThanOrEqual(1024);
+  });
+
+  it('preserves split UTF-8 characters and interleaved output order', async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'amd-command-output-'));
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdout, stderr, kill: () => true }) as unknown as ChildProcess;
+    executor = new CommandExecutor({ spawn: () => child });
+    const pending = executor.run({ command: 'build project', projectRoot: root, approved: true });
+    const bytes = Buffer.from('中文');
+    stdout.write(bytes.subarray(0, 1));
+    stdout.write(bytes.subarray(1));
+    stderr.write('警告');
+    stdout.write('完成');
+    child.emit('close', 0);
+    const result = await pending;
+    expect(result.stdout).toBe('中文完成');
+    expect(result.stderr).toBe('警告');
+    expect(result.output).toBe('中文警告完成');
+  });
+
+  it('keeps a multibyte output cutoff within the byte budget', async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'amd-command-output-'));
+    executor = new CommandExecutor();
+    const result = await executor.run({ command: `${process.execPath} -e "process.stdout.write('中'.repeat(1000));"`, projectRoot: root, approved: true, maxOutputBytes: 1024 });
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.output)).toBeLessThanOrEqual(1024);
+    expect(result.output).not.toContain('�');
   });
 
   it('supports cancellation of a running process', async () => {

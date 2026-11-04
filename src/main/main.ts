@@ -14,7 +14,7 @@ import { inspectProject } from '@core/project/ProjectInspector';
 import { ModelRegistry } from '@core/models/ModelRegistry';
 import { credentialOrigin, hasUsableCredentials, type ModelConfig, type ModelConfigInput } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
-import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
+import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine, validateRoutingPolicy } from '@core/routing/RoutingPolicy';
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { shouldFallback } from '@core/routing/Fallback';
 import { buildExecutionPlan, chooseRevisionModel } from '@core/agent/RunOrchestrator';
@@ -32,6 +32,7 @@ import type { RunStatus } from '@core/trace/types';
 import { GrowthEngine, type RoutingFeedback } from '@core/growth/GrowthEngine';
 import { TtyManager } from '@core/tty/TtyManager';
 import { ProjectManager } from '@core/project/ProjectManager';
+import { createRunProjectContext } from '@core/project/RunProjectContext';
 import type { ProjectContextResult } from '@core/project/ProjectContext';
 import { assembleContext, type ContextToolDigest, type ContextTurn } from '@core/context/ContextAssembler';
 import { summarizeContext } from '@core/context/SummaryService';
@@ -101,11 +102,16 @@ function loadApprovalMode(file: string): ApprovalMode {
   } catch { return 'ask'; }
 }
 
-function savePreferences(): void {
+function savePreferences(nextApprovalMode: ApprovalMode): void {
+  const temporary = `${preferencesPath}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(path.dirname(preferencesPath), { recursive: true });
-    fs.writeFileSync(preferencesPath, JSON.stringify({ approvalMode }, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-  } catch (error) { console.error('Failed to save preferences', error); }
+    fs.writeFileSync(temporary, JSON.stringify({ approvalMode: nextApprovalMode }, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, preferencesPath);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch { /* preserve the original error */ }
+    throw new Error(`设置保存失败：${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** Read operations run directly. Mutations follow the user-selected approval mode. */
@@ -258,7 +264,7 @@ async function confirmCommand(command: string, cwd: string): Promise<boolean> {
   return response === 1;
 }
 
-function createRunDependencies(controller: AbortController): RunDependencies {
+function createRunDependencies(controller: AbortController, projectContext: RunDependencies['projectContext']): RunDependencies {
   return {
     models: registry,
     routing: routingPolicy,
@@ -270,13 +276,32 @@ function createRunDependencies(controller: AbortController): RunDependencies {
     auditLog,
     memory: memoryStore,
     summaries: sessionStorage,
-    projectContext: {
-      getRoot: () => projects.getRoot(),
-      getContextAsync: (paths?: string[], maxTokens?: number) => projects.getContextAsync(paths, maxTokens),
-    },
+    projectContext,
     invokeStreamed: (model, prompt, maxTokens, onDelta, options) => invokeStreamed(model, prompt, maxTokens, onDelta, options),
     controller,
   };
+}
+
+function saveRoutingRules(text: string) {
+  const policy = validateRoutingPolicy(JSON.parse(text));
+  if (fs.existsSync(routingRulesPath)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.copyFileSync(routingRulesPath, path.join(routingHistoryDir, `${stamp}-${randomUUID()}.json`));
+  }
+  const temporary = `${routingRulesPath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, routingRulesPath);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch { /* preserve the original error */ }
+    throw error;
+  }
+  routingPolicy = new RoutingPolicyEngine(router, policy);
+  try {
+    const snapshots = fs.readdirSync(routingHistoryDir).filter((name) => name.endsWith('.json')).sort().reverse();
+    for (const stale of snapshots.slice(20)) fs.rmSync(path.join(routingHistoryDir, stale), { force: true });
+  } catch (error) { console.warn('Routing history cleanup failed', error); }
+  return { policy, diagnostics: [] as string[] };
 }
 
 function registerHandlers(): void {
@@ -286,7 +311,11 @@ function registerHandlers(): void {
     if (!session || typeof session !== 'object' || typeof session.id !== 'string' || !session.id) throw new Error('会话数据无效');
     return sessionStorage.save({ ...session, createdAt: session.createdAt ? new Date(session.createdAt) : new Date(), updatedAt: session.updatedAt ? new Date(session.updatedAt) : new Date() });
   });
-  handle('session:delete', (_event, id: unknown) => typeof id === 'string' ? ({ success: sessionStorage.delete(id) }) : { success: false });
+  handle('session:delete', (_event, id: unknown) => {
+    if (typeof id !== 'string') return { success: false };
+    runningTasks.get(id)?.abort();
+    return { success: sessionStorage.delete(id) };
+  });
   handle('model:list', () => registry.getAllModels().map(publicModel));
   handle('model:list-enabled', () => registry.getEnabledModels().map(publicModel));
   handle('model:register', (_event, input: ModelConfigInput) => {
@@ -335,19 +364,7 @@ function registerHandlers(): void {
   }));
   handle('routing:rules:set', (_event, text: unknown) => {
     if (typeof text !== 'string' || text.length > 100_000) throw new Error('路由规则内容无效');
-    JSON.parse(text);
-    if (fs.existsSync(routingRulesPath)) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      fs.copyFileSync(routingRulesPath, path.join(routingHistoryDir, `${stamp}.json`));
-      const snapshots = fs.readdirSync(routingHistoryDir).filter((name) => name.endsWith('.json')).sort().reverse();
-      for (const stale of snapshots.slice(20)) fs.rmSync(path.join(routingHistoryDir, stale), { force: true });
-    }
-    const temporary = `${routingRulesPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(temporary, routingRulesPath);
-    const state = loadRoutingPolicy(routingRulesPath);
-    routingPolicy = new RoutingPolicyEngine(router, state.policy);
-    return { policy: state.policy, diagnostics: state.diagnostics };
+    return saveRoutingRules(text);
   });
   handle('routing:rules:history', () => fs.readdirSync(routingHistoryDir)
     .filter((name) => name.endsWith('.json'))
@@ -360,24 +377,24 @@ function registerHandlers(): void {
     const snapshot = path.join(routingHistoryDir, name);
     if (!fs.existsSync(snapshot)) throw new Error('历史版本不存在');
     const text = fs.readFileSync(snapshot, 'utf8');
-    JSON.parse(text);
-    const temporary = `${routingRulesPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, text, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(temporary, routingRulesPath);
-    const state = loadRoutingPolicy(routingRulesPath);
-    routingPolicy = new RoutingPolicyEngine(router, state.policy);
-    return { text, policy: state.policy, diagnostics: state.diagnostics };
+    return { text, ...saveRoutingRules(text) };
   });
   handle('session:execute', async (_event, payload: RunRequest) => {
     if (!payload || typeof payload.prompt !== 'string' || !payload.prompt.trim()) throw new Error('任务描述不能为空');
     if (payload.prompt.length > 200_000) throw new Error('任务描述过长');
+    if (payload.sessionId !== undefined && typeof payload.sessionId !== 'string') throw new Error('会话 ID 无效');
+    if (payload.taskId !== undefined && typeof payload.taskId !== 'string') throw new Error('任务 ID 无效');
     const sessionId = payload.sessionId || payload.taskId || randomUUID();
     const request: RunRequest = { ...payload, sessionId };
+    const projectContext = createRunProjectContext(
+      payload.projectId === undefined ? sessionStorage.get(sessionId)?.projectId : payload.projectId,
+      projectStorage,
+    );
     const controller = new AbortController();
     runningTasks.get(sessionId)?.abort();
     runningTasks.set(sessionId, controller);
     try {
-      return await executeRun(request, createRunDependencies(controller), (channel, value) => mainWindow?.webContents.send(channel, value));
+      return await executeRun(request, createRunDependencies(controller, projectContext), (channel, value) => mainWindow?.webContents.send(channel, value));
     } finally {
       if (runningTasks.get(sessionId) === controller) runningTasks.delete(sessionId);
     }
@@ -401,10 +418,12 @@ function registerHandlers(): void {
   handle('trace:settings:set', (_event, options: unknown) => {
     if (!options || typeof options !== 'object') throw new Error('Trace 保留设置无效');
     const value = options as { maxAgeDays?: unknown; maxRuns?: unknown };
-    return observability.setTraceRetention({
+    const retention = observability.setTraceRetention({
       maxAgeDays: typeof value.maxAgeDays === 'number' ? value.maxAgeDays : undefined,
       maxRuns: typeof value.maxRuns === 'number' ? value.maxRuns : undefined,
     });
+    observability.pruneTraces(retention);
+    return retention;
   });
   handle('trace:clear', () => observability.clearTraces());
   handle('preferences:get', () => ({ approvalMode }));
@@ -412,8 +431,8 @@ function registerHandlers(): void {
     if (!input || typeof input !== 'object') throw new Error('设置无效');
     const value = input as { approvalMode?: unknown };
     if (value.approvalMode !== 'ask' && value.approvalMode !== 'auto' && value.approvalMode !== 'full') throw new Error('权限模式无效');
+    savePreferences(value.approvalMode);
     approvalMode = value.approvalMode;
-    savePreferences();
     return { approvalMode };
   });
   handle('memory:list', (_event, options?: { scope?: 'global' | 'project' | 'session' } | null) => {
@@ -603,10 +622,11 @@ function createWindow(): void {
       spellcheck: false,
     }
   });
-  nativeTheme.on('updated', () => { mainWindow?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF'); });
+  const updateTheme = () => { mainWindow?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF'); };
+  nativeTheme.on('updated', updateTheme);
   if (process.env.ELECTRON_RENDERER_URL) mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   else mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => { nativeTheme.removeListener('updated', updateTheme); mainWindow = null; });
 }
 
 async function bootstrap(): Promise<void> {
@@ -653,10 +673,17 @@ async function bootstrap(): Promise<void> {
     ],
   });
   observability = new ObservabilityEngine(path.join(app.getPath('userData'), 'metrics.db'));
+  observability.recoverInterruptedRuns();
   modelQuota = new ModelQuota(observability);
   memoryStore = new MemoryStore(path.join(app.getPath('userData'), 'memory.db'));
   traceRecorder = new TraceRecorder(observability, {
-    onEvent: (event) => { mainWindow?.webContents.send('session:trace', event); },
+    onEvent: (event) => {
+      mainWindow?.webContents.send('session:trace', event);
+      if (event.type === 'run_end') {
+        try { observability.pruneTraces(observability.getTraceRetention()); }
+        catch (error) { console.warn('Trace retention failed', error); }
+      }
+    },
   });
   try { observability.pruneTraces(observability.getTraceRetention()); } catch (error) { console.warn('Trace retention failed', error); }
   auditLog = new AuditLog(path.join(app.getPath('userData'), 'audit.jsonl'));

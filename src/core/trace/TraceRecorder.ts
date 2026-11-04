@@ -56,6 +56,7 @@ export class TraceSpanHandle {
   }
 
   setAttributes(attributes: Record<string, unknown>): void {
+    if (typeof attributes.modelId === 'string') this.span.modelId = attributes.modelId;
     this.span.attributes = safeAttributes({ ...(this.span.attributes ?? {}), ...attributes });
     this.recorder.persistSpan(this.span);
   }
@@ -69,7 +70,6 @@ export class TraceRecorder {
   private readonly runs = new Map<string, TraceRunRecord>();
   private readonly handles = new Map<string, TraceSpanHandle>();
   private readonly rootByRun = new Map<string, TraceSpanHandle>();
-  private readonly finished = new Set<string>();
   private readonly now: () => Date;
   private readonly onEvent?: (event: TraceEvent) => void;
 
@@ -79,6 +79,7 @@ export class TraceRecorder {
   }
 
   startRun(input: { runId: string; sessionId: string; taskType?: string; complexity?: string }): TraceSpanHandle {
+    if (this.runs.has(input.runId)) throw new Error(`Trace run already active: ${input.runId}`);
     const started = this.now();
     const run: TraceRunRecord = {
       id: input.runId,
@@ -113,17 +114,25 @@ export class TraceRecorder {
       inputTokens: 0,
       outputTokens: 0,
       cost: 0,
+      modelId: typeof attributes?.modelId === 'string' ? attributes.modelId : undefined,
       attributes: safeAttributes(attributes),
     };
     this.store.saveTraceSpan(span);
-    const handle = new TraceSpanHandle(this, span);
+    const handle = new TraceSpanHandle(this, span, kind === 'run');
     this.handles.set(span.id, handle);
     this.emit({ type: 'span_start', runId, span });
     return handle;
   }
 
   persistSpan(span: TraceSpanRecord): void {
+    if (typeof span.attributes?.modelId === 'string') span.modelId = span.attributes.modelId;
     this.store.saveTraceSpan(span);
+    const run = this.runs.get(span.runId);
+    if (run && span.kind === 'route') {
+      if (typeof span.attributes?.taskType === 'string') run.taskType = span.attributes.taskType;
+      if (typeof span.attributes?.complexity === 'string') run.complexity = span.attributes.complexity;
+      this.store.saveTraceRun(run);
+    }
   }
 
   endSpan(span: TraceSpanRecord, result: TraceSpanEnd, root = false): void {
@@ -137,7 +146,7 @@ export class TraceRecorder {
     span.cost = result.cost ?? span.cost;
     span.errorMessage = result.error;
     if (result.attributes) span.attributes = safeAttributes({ ...(span.attributes ?? {}), ...result.attributes });
-    this.store.saveTraceSpan(span);
+    this.persistSpan(span);
     this.handles.delete(span.id);
     this.emit({ type: 'span_end', runId: span.runId, span });
     if (!root) return;
@@ -150,21 +159,20 @@ export class TraceRecorder {
   }
 
   finishRun(runId: string, result: TraceRunEnd = {}): void {
-    if (this.finished.has(runId)) return;
-    this.finished.add(runId);
     const run = this.runs.get(runId);
     if (!run) return;
+    const status = result.status ?? (result.error ? 'failed' : 'success');
+    const root = this.rootByRun.get(runId);
 
     // Close any span left running by an aborted/failed path before closing the root.
     for (const span of [...this.handles.values()].reverse()) {
-      if (span.runId === runId) span.end({ status: result.status === 'success' ? 'success' : (result.status ?? 'cancelled') });
+      if (span.runId === runId && span.id !== root?.id) span.end({ status, error: result.error });
     }
-    const root = this.rootByRun.get(runId);
-    root?.end({ status: result.status === 'success' ? 'success' : (result.status ?? 'cancelled'), error: result.error });
+    root?.end({ status, error: result.error, inputTokens: result.inputTokens, outputTokens: result.outputTokens, cost: result.cost });
     this.rootByRun.delete(runId);
 
     const ended = this.now();
-    run.status = result.status ?? (result.error ? 'failed' : 'success');
+    run.status = status;
     run.endedAt = ended.toISOString();
     run.durationMs = Math.max(0, ended.getTime() - new Date(run.startedAt).getTime());
     run.errorMessage = result.error;
@@ -172,6 +180,7 @@ export class TraceRecorder {
     if (result.outputTokens !== undefined) run.totalOutputTokens = result.outputTokens;
     if (result.cost !== undefined) run.totalCost = result.cost;
     this.store.saveTraceRun(run);
+    this.runs.delete(runId);
     this.emit({ type: 'run_end', runId, run });
   }
 

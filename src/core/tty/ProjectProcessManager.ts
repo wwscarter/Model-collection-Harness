@@ -163,8 +163,10 @@ export class ProjectProcessManager {
     const info: ProjectProcessSnapshot = { id, processId: id, pid: child.pid, command, cwd, background, status: 'running', running: true, stdout: '', stderr: '', output: '', urls: [], exitCode: null, timedOut: false, cancelled: false, truncated: false, durationMs: 0 };
     const state: ProcessState = { info, child, startedAt: Date.now(), completion, finish, stopRequested: false, urlTail: '' };
     this.processes.set(id, state);
-    child.stdout?.on('data', (chunk: Buffer) => this.append(state, 'stdout', chunk));
-    child.stderr?.on('data', (chunk: Buffer) => this.append(state, 'stderr', chunk));
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => this.append(state, 'stdout', chunk));
+    child.stderr?.on('data', (chunk: string) => this.append(state, 'stderr', chunk));
     child.once('error', (error) => { info.error = error.message; this.finish(state, null); });
     child.once('exit', () => {
       // A command such as `server &` must not leave an untracked child behind
@@ -177,8 +179,7 @@ export class ProjectProcessManager {
     return state;
   }
 
-  private append(state: ProcessState, stream: 'stdout' | 'stderr', chunk: Buffer): void {
-    const text = chunk.toString('utf8');
+  private append(state: ProcessState, stream: 'stdout' | 'stderr', text: string): void {
     const combined = state.info.output + text;
     if (Buffer.byteLength(combined, 'utf8') > MAX_OUTPUT_BYTES) state.info.truncated = true;
     state.info.output = tail(combined, MAX_OUTPUT_BYTES);

@@ -54,6 +54,14 @@ describe('explicit primary routing', () => {
     await expect(router.routeTask(task)).rejects.toThrow('API Key');
   });
 
+  it('does not treat an unreadable custom credential as an intentionally keyless endpoint', async () => {
+    const router = new AgentRouter({ getEnabledModels: () => [
+      model('unreadable', 100, { credentialError: 'Credential store temporarily unavailable', isPrimary: true }),
+      model('keyless-local', 80),
+    ] });
+    expect((await router.routeTask(task)).modelId).toBe('keyless-local');
+  });
+
   it('uses existing priority tie breaks when no primary is selected', async () => {
     const router = new AgentRouter({ getEnabledModels: () => [
       model('lower-priority', 85, { priority: 4 }),

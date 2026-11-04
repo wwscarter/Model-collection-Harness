@@ -54,7 +54,7 @@ function CodeBlock({ language, code, generating }: { language: string; code: str
   </section>;
 }
 
-export function OutputView({ content, loading, emptyState }: { content: string; loading: boolean; emptyState: boolean }) {
+export const OutputView = React.memo(function OutputView({ content, loading, emptyState }: { content: string; loading: boolean; emptyState: boolean }) {
   const blocks = useMemo(() => splitOutputBlocks(content), [content]);
   if (loading && !content) return <div className="output-pending"><i className="live-dot pulse" />正在规划并执行任务…</div>;
   if (!content && !emptyState) return null;
@@ -62,4 +62,4 @@ export function OutputView({ content, loading, emptyState }: { content: string; 
   return <div className="output-content rich-output" aria-busy={loading}>{blocks.map((block) => block.type === 'code'
     ? <CodeBlock key={block.id} language={block.language} code={block.content} generating={loading && !block.complete} />
     : <ResponseText key={block.id} content={block.content} />)}{loading && <span className="streaming-cursor" aria-label="正在生成">▍</span>}</div>;
-}
+});

@@ -3,7 +3,7 @@ import { isRetryableProviderError, shouldFallback } from '../../src/core/routing
 
 describe('fallback policy', () => {
   it('retries transient provider errors', () => {
-    for (const message of ['HTTP 429 rate limit', '503 upstream unavailable', 'request timeout', 'fetch failed']) {
+    for (const message of ['HTTP 429 rate limit', '503 upstream unavailable', 'request timeout', 'fetch failed', 'Provider overloaded', 'Service temporarily unavailable']) {
       expect(isRetryableProviderError(new Error(message)), message).toBe(true);
     }
     for (const message of ['401 invalid api key', 'content policy violation', '用户拒绝了这次工具调用']) {

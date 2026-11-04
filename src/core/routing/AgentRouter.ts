@@ -37,6 +37,10 @@ const capabilityForTask: Record<TaskType, ModelCapabilityType> = {
   code: 'code', reasoning: 'reasoning', analysis: 'reasoning', review: 'code', creative: 'creative', general: 'reasoning'
 };
 
+export function estimateModelCost(model: ModelConfig, estimatedTokens = 2000): number {
+  return (estimatedTokens * 0.7 * model.costPer1kTokens.input + estimatedTokens * 0.3 * model.costPer1kTokens.output) / 1000;
+}
+
 /** Honor an explicit primary model; otherwise prefer capability, priority, and cost. */
 export class AgentRouter {
   constructor(
@@ -47,10 +51,10 @@ export class AgentRouter {
 
   getLocalModelStatus(): ReturnType<LocalRoutingModel['getStatus']> { return this.localModel.getStatus(); }
 
-  async routeTask(context: TaskContext): Promise<RoutingDecision> {
-    const enabled = this.registry.getEnabledModels().filter((model) => model.enabled && hasUsableCredentials(model));
+  async routeTask(context: TaskContext, candidates = this.registry.getEnabledModels()): Promise<RoutingDecision> {
+    const enabled = candidates.filter((model) => model.enabled && hasUsableCredentials(model));
     if (!enabled.length) {
-      const anyEnabled = this.registry.getEnabledModels().some((model) => model.enabled);
+      const anyEnabled = candidates.some((model) => model.enabled);
       throw new Error(anyEnabled ? '已启用的模型都没有可用的 API Key，请先在模型设置中配置凭据' : 'No enabled models are configured');
     }
     const localClassification = await this.localModel.classify(context);
@@ -71,7 +75,7 @@ export class AgentRouter {
     });
     const selected = ranked[0];
     const estimatedTokens = context.estimatedTokens ?? 2000;
-    const estimatedCost = (estimatedTokens * 0.7 * selected.costPer1kTokens.input + estimatedTokens * 0.3 * selected.costPer1kTokens.output) / 1000;
+    const estimatedCost = estimateModelCost(selected, estimatedTokens);
     const budgetNote = context.budget !== undefined && estimatedCost > context.budget ? ' Estimated cost exceeds the task budget.' : '';
     return {
       modelId: selected.id,

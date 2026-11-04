@@ -93,10 +93,11 @@ export class SessionStorage {
     if (!columns.some((column) => column.name === 'project_root')) this.db.exec('ALTER TABLE sessions ADD COLUMN project_root TEXT');
   }
   save(session: SessionRecord): SessionRecord {
-    const messages = this.normalizeMessages(session.messages) ?? this.legacyMessages(session.userMessage, session.prompt, session.output, session.title);
+    const normalized = this.normalizeMessages(session.messages);
+    const messages = normalized ?? this.legacyMessages(session.userMessage, session.prompt, session.output, session.title);
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant')?.content;
-    const record: SessionRecord = { ...session, messages, userMessage: lastUserMessage, output: lastAssistantMessage ?? session.output ?? '' };
+    const record: SessionRecord = { ...session, messages, userMessage: lastUserMessage, output: lastAssistantMessage ?? (normalized ? '' : session.output ?? '') };
     this.db.prepare(`INSERT INTO sessions (id,title,prompt,user_message,output,messages,model_used,multi_model,model_id,project_id,project_root,last_run_id,metrics,audit_result,rating,created_at,updated_at) VALUES (@id,@title,@prompt,@user_message,@output,@messages,@model_used,@multi_model,@model_id,@project_id,@project_root,@last_run_id,@metrics,@audit_result,@rating,@created_at,@updated_at) ON CONFLICT(id) DO UPDATE SET title=excluded.title,prompt=excluded.prompt,user_message=excluded.user_message,output=excluded.output,messages=excluded.messages,model_used=excluded.model_used,multi_model=excluded.multi_model,model_id=excluded.model_id,project_id=excluded.project_id,project_root=excluded.project_root,last_run_id=excluded.last_run_id,metrics=excluded.metrics,audit_result=excluded.audit_result,rating=excluded.rating,updated_at=excluded.updated_at`).run({ id: record.id, title: record.title, prompt: record.prompt, user_message: record.userMessage ?? '', output: record.output ?? '', messages: JSON.stringify(messages), model_used: record.modelUsed ?? null, multi_model: record.multiModel === false ? 0 : 1, model_id: record.modelId ?? null, project_id: record.projectId ?? null, project_root: record.projectRoot ?? null, last_run_id: record.runId ?? null, metrics: record.metrics === undefined ? null : JSON.stringify(record.metrics), audit_result: record.auditResult === undefined ? null : JSON.stringify(record.auditResult), rating: record.rating ?? null, created_at: record.createdAt.toISOString(), updated_at: record.updatedAt.toISOString() });
     return { ...record, createdAt: new Date(record.createdAt), updatedAt: new Date(record.updatedAt) };
   }
@@ -122,7 +123,11 @@ export class SessionStorage {
   private fromRow(row: SessionRow): SessionRecord {
     // One damaged JSON column must not break the whole session list. Degrade to
     // the legacy text fields and let the user keep working.
-    const messages = this.normalizeMessages(parseJson<unknown>(row.messages, undefined)) ?? this.legacyMessages(row.user_message, row.prompt, row.output, row.title);
+    const normalized = this.normalizeMessages(parseJson<unknown>(row.messages, undefined));
+    // Empty histories are intentional for drafts. Legacy rows have submitted
+    // input/output in their separate columns and still need reconstruction.
+    const messages = normalized && (normalized.length || (!row.user_message && !row.output))
+      ? normalized : this.legacyMessages(row.user_message, row.prompt, row.output, row.title);
     const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
     const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant')?.content;
     return { id: row.id, title: row.title, prompt: row.prompt, userMessage: lastUserMessage, output: lastAssistantMessage ?? row.output, messages, modelUsed: row.model_used ?? undefined, multiModel: row.multi_model === 0 ? false : true, modelId: row.model_id ?? undefined, projectId: row.project_id ?? undefined, projectRoot: row.project_root ?? undefined, runId: row.last_run_id ?? undefined, summary: row.summary ?? undefined, summaryCoversTo: row.summary_covers_to ?? undefined, summaryHash: row.summary_hash ?? undefined, summaryTokens: row.summary_tokens ?? undefined, summaryUpdatedAt: row.summary_updated_at ? new Date(row.summary_updated_at) : undefined, metrics: parseJson<unknown>(row.metrics, undefined), auditResult: parseJson<unknown>(row.audit_result, undefined), rating: row.rating ?? undefined, createdAt: new Date(row.created_at), updatedAt: new Date(row.updated_at) };
@@ -145,7 +150,7 @@ export class SessionStorage {
         ...(Array.isArray(message.tools) ? { tools: this.normalizeTools(message.tools) } : {}),
       }];
     });
-    return messages.length ? messages : undefined;
+    return messages.length || value.length === 0 ? messages : undefined;
   }
 
   private normalizeAgents(value: unknown[]): SessionAgentRecord[] {

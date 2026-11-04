@@ -92,6 +92,7 @@ export class CommandExecutor {
     const listeners = new Set<(event: CommandExecutionData) => void>();
     let stdout = '';
     let stderr = '';
+    let output = '';
     let totalBytes = 0;
     let timedOut = false;
     let cancelled = false;
@@ -113,7 +114,6 @@ export class CommandExecutor {
       if (killTimer) clearTimeout(killTimer);
       if (settleTimer) clearTimeout(settleTimer);
       this.executions.delete(id);
-      const output = stdout + stderr;
       resolveResult({ id, command: normalized.command, cwd: normalized.cwd, stdout, stderr, output, exitCode, signal: signal ? String(signal) : undefined, timedOut, cancelled, truncated, durationMs: Date.now() - startedAt });
     };
 
@@ -142,10 +142,11 @@ export class CommandExecutor {
       const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
       const remaining = normalized.maxOutputBytes - totalBytes;
       const bytes = Buffer.byteLength(text, 'utf8');
-      const accepted = bytes <= remaining ? text : Buffer.from(text, 'utf8').subarray(0, Math.max(0, remaining)).toString('utf8');
+      const accepted = bytes <= remaining ? text : new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, Math.max(0, remaining)), { stream: true });
       totalBytes += Buffer.byteLength(accepted, 'utf8');
       if (stream === 'stdout') stdout += accepted;
       else stderr += accepted;
+      output += accepted;
       if (accepted) listeners.forEach((listener) => listener({ stream, data: accepted }));
       if (bytes > remaining) {
         truncated = true;
@@ -154,8 +155,10 @@ export class CommandExecutor {
         terminate();
       }
     };
-    child.stdout?.on('data', (chunk: Buffer | string) => append('stdout', chunk));
-    child.stderr?.on('data', (chunk: Buffer | string) => append('stderr', chunk));
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => append('stdout', chunk));
+    child.stderr?.on('data', (chunk: string) => append('stderr', chunk));
 
     child.once('error', (error) => {
       if (settled) return;

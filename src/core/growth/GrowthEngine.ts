@@ -50,16 +50,17 @@ export class GrowthEngine {
 
   constructor(options: GrowthEngineOptions = {}) {
     this.storagePath = options.storagePath;
-    this.alpha = Math.min(1, Math.max(0.001, options.learningRate ?? 0.1));
+    this.alpha = Math.min(1, Math.max(0.001, Number.isFinite(options.learningRate) ? options.learningRate! : 0.1));
     this.load();
   }
 
   recordFeedback(feedback: RoutingFeedback): ModelPerformanceProfile {
-    if (!feedback.modelId.trim()) throw new Error('modelId is required for feedback');
-    if (!feedback.taskType.trim()) throw new Error('taskType is required for feedback');
+    if (typeof feedback.modelId !== 'string' || !feedback.modelId.trim()) throw new Error('modelId is required for feedback');
+    if (typeof feedback.taskType !== 'string' || !feedback.taskType.trim()) throw new Error('taskType is required for feedback');
     const key = this.key(feedback.modelId, feedback.taskType);
     const old = this.profiles.get(key);
-    const quality = this.qualityFromFeedback(feedback);
+    const quality = this.qualityFromFeedback(feedback, old?.avgQualityScore);
+    const completed = feedback.completed ?? feedback.success;
     const sampleCount = (old?.sampleCount ?? 0) + 1;
     const profile: ModelPerformanceProfile = old
       ? {
@@ -69,7 +70,7 @@ export class GrowthEngine {
           avgCost: this.ema(old.avgCost, this.nonNegative(feedback.actualCost, old.avgCost)),
           avgLatency: this.ema(old.avgLatency, this.nonNegative(feedback.actualLatency, old.avgLatency)),
           avgQualityScore: this.ema(old.avgQualityScore, quality),
-          taskCompletionRate: this.ema(old.taskCompletionRate, feedback.completed === undefined ? (feedback.success ? 1 : 0) : feedback.completed ? 1 : 0),
+          taskCompletionRate: this.ema(old.taskCompletionRate, completed === undefined ? old.taskCompletionRate : completed ? 1 : 0),
           lastUpdated: this.timestamp(feedback.timestamp),
         }
       : {
@@ -80,7 +81,7 @@ export class GrowthEngine {
           avgCost: this.nonNegative(feedback.actualCost, 0),
           avgLatency: this.nonNegative(feedback.actualLatency, 0),
           avgQualityScore: quality,
-          taskCompletionRate: feedback.completed === undefined ? (feedback.success ? 1 : 0) : feedback.completed ? 1 : 0,
+          taskCompletionRate: completed === undefined ? 0.5 : completed ? 1 : 0,
           lastUpdated: this.timestamp(feedback.timestamp),
         };
     this.profiles.set(key, profile);
@@ -122,21 +123,29 @@ export class GrowthEngine {
   private ema(previous: number, next: number): number { return previous * (1 - this.alpha) + next * this.alpha; }
   private nonNegative(value: number | undefined, fallback: number): number { return value !== undefined && Number.isFinite(value) && value >= 0 ? value : fallback; }
   private timestamp(value: Date | string | undefined): Date { const date = value ? new Date(value) : new Date(); return Number.isNaN(date.getTime()) ? new Date() : date; }
-  private qualityFromFeedback(feedback: RoutingFeedback): number {
+  private qualityFromFeedback(feedback: RoutingFeedback, fallback = 50): number {
     const values: number[] = [];
     if (feedback.qualityScore !== undefined && Number.isFinite(feedback.qualityScore)) values.push(Math.min(100, Math.max(0, feedback.qualityScore)));
     if (feedback.auditApproval !== undefined) values.push(feedback.auditApproval ? 100 : 0);
     if (feedback.userSatisfaction !== undefined && Number.isFinite(feedback.userSatisfaction)) values.push(Math.min(100, Math.max(0, feedback.userSatisfaction * 20)));
-    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : feedback.success === false ? 0 : 50;
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : feedback.success === false ? 0 : fallback;
   }
 
   private load(): void {
     if (!this.storagePath || !fs.existsSync(this.storagePath)) return;
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.storagePath, 'utf8')) as SerializedProfile[];
-      for (const item of parsed) {
-        if (!item?.modelId || !item?.taskType) continue;
-        this.profiles.set(this.key(item.modelId, item.taskType), { ...item, lastUpdated: new Date(item.lastUpdated) });
+      const parsed: unknown = JSON.parse(fs.readFileSync(this.storagePath, 'utf8'));
+      if (!Array.isArray(parsed)) return;
+      for (const value of parsed) {
+        if (!value || typeof value !== 'object') continue;
+        const item = value as SerializedProfile;
+        const lastUpdated = new Date(item.lastUpdated);
+        if (typeof item.modelId !== 'string' || !item.modelId.trim() || typeof item.taskType !== 'string' || !item.taskType.trim()
+          || !Number.isInteger(item.sampleCount) || item.sampleCount < 0 || !Number.isFinite(lastUpdated.getTime())
+          || ![item.successRate, item.taskCompletionRate].every((rate) => Number.isFinite(rate) && rate >= 0 && rate <= 1)
+          || ![item.avgCost, item.avgLatency].every((value) => Number.isFinite(value) && value >= 0)
+          || !Number.isFinite(item.avgQualityScore) || item.avgQualityScore < 0 || item.avgQualityScore > 100) continue;
+        this.profiles.set(this.key(item.modelId, item.taskType), { ...item, lastUpdated });
       }
     } catch {
       // Corrupt learning data should never prevent the agent from starting.

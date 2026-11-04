@@ -1,4 +1,5 @@
 import { BROWSER_USER_AGENT, decodeEntities, stripTags, type FetchLike, type SearchOptions, type SearchProvider, type SearchResult } from './SearchProvider';
+import { awaitWithSignal } from '../awaitWithSignal';
 
 const RESULT_BLOCK = /<li class="b_algo"[\s\S]*?(?=<li class="b_algo"|<\/ol>|$)/g;
 const TITLE_LINK = /<h2[^>]*>\s*<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/;
@@ -62,13 +63,13 @@ export class BingSearchProvider implements SearchProvider {
       try {
         signal.throwIfAborted();
         const url = `https://${host}/search?q=${encodeURIComponent(query)}&count=${count}&form=QBLH`;
-        const response = await this.fetchImpl(url, {
+        const response = await awaitWithSignal(this.fetchImpl(url, {
           headers: { 'user-agent': BROWSER_USER_AGENT, 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8', accept: 'text/html,application/xhtml+xml' },
           signal,
           redirect: 'follow',
-        });
+        }), signal);
         if (!response.ok) throw new Error(`Bing 返回 HTTP ${response.status}`);
-        const results = parseBingResults(await response.text(), count);
+        const results = parseBingResults(await awaitWithSignal(response.text(), signal), count);
         if (results.length) return results;
         lastError = new Error('Bing 没有返回可解析的结果');
       } catch (error) {

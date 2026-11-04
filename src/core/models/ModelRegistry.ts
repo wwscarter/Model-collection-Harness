@@ -25,7 +25,7 @@ function toConfig(input: ModelConfigInput): ModelConfig {
   // The renderer's first-run form intentionally sends a small payload. Fill in
   // safe defaults here so IPC callers do not need to duplicate model metadata.
   const raw = input as Partial<ModelConfig> & { capabilities?: unknown };
-  if (!raw.provider || !raw.name || !raw.modelId) {
+  if (typeof raw.provider !== "string" || typeof raw.name !== "string" || typeof raw.modelId !== "string" || !raw.provider || !raw.name || !raw.modelId) {
     throw new Error("Provider, model name, and model id are required");
   }
   const capabilities: ModelCapability[] = Array.isArray(raw.capabilities)
@@ -36,11 +36,12 @@ function toConfig(input: ModelConfigInput): ModelConfig {
             : "reasoning";
           return { type, score: 50 };
         }
+        if (!capability || typeof capability !== "object") throw new Error("Invalid model capability");
         const value = capability as { type?: string; score?: number };
         const type = value.type === "code" || value.type === "creative" || value.type === "vision" || value.type === "longcontext"
           ? value.type
           : "reasoning";
-        return { type, score: Number.isFinite(value.score) ? Number(value.score) : 50 };
+        return { type, score: value.score ?? 50 };
       })
     : [];
   const config: ModelConfig = {
@@ -57,7 +58,7 @@ function toConfig(input: ModelConfigInput): ModelConfig {
     isPrimary: raw.isPrimary ?? false,
     contextWindow: raw.contextWindow ?? raw.maxTokens ?? 4096,
     intelligenceScore:
-      raw.intelligenceScore ?? raw.capabilities?.find((capability) => capability.type === "reasoning")?.score ?? 70,
+      raw.intelligenceScore ?? capabilities.find((capability) => capability.type === "reasoning")?.score ?? 70,
     costPer1kTokens: { input: raw.costPer1kTokens?.input ?? 0, output: raw.costPer1kTokens?.output ?? 0 },
     capabilities,
     maxTokens: raw.maxTokens ?? 4096,

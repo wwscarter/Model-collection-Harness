@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BrainCircuit, Check, Plus, Trash2, X } from 'lucide-react';
-import type { MemoryKind, MemoryRecord, MemoryScope } from '../types';
+import type { AmdApi, MemoryKind, MemoryRecord, MemoryScope } from '../types';
 
 interface MemoryPanelProps { onClose: () => void; hasProject: boolean; }
 
@@ -16,52 +16,65 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const loadRequest = useRef(0);
+  const mutationPending = useRef(false);
 
   const load = useCallback(async () => {
+    const request = ++loadRequest.current;
     try {
-      const list = await window.amd?.memory?.list();
-      setRecords(list ?? []);
-      setSelectedIds((current) => current.filter((id) => (list ?? []).some((record) => record.id === id)));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      if (!window.amd?.memory) throw new Error('记忆接口尚未连接');
+      const list = await window.amd.memory.list();
+      if (request !== loadRequest.current) return;
+      setRecords(list);
+      setSelectedIds((current) => current.filter((id) => list.some((record) => record.id === id)));
+    } catch (cause) { if (request === loadRequest.current) setError(cause instanceof Error ? cause.message : String(cause)); }
   }, []);
   useEffect(() => {
+    let active = true;
     void load();
-    void window.amd?.memory?.settings().then((settings) => setAutoExtract(Boolean(settings.autoExtract))).catch(() => undefined);
+    void window.amd?.memory?.settings().then((settings) => { if (active) setAutoExtract(Boolean(settings.autoExtract)); }).catch(() => undefined).finally(() => { if (active) setSettingsReady(true); });
+    return () => { active = false; loadRequest.current += 1; };
   }, [load]);
   useEffect(() => { if (!hasProject && scope === 'project') setScope('global'); }, [hasProject, scope]);
 
-  const add = async () => {
-    if (!content.trim() || busy) return;
+  const mutate = async (action: (memory: AmdApi['memory']) => Promise<unknown>) => {
+    if (mutationPending.current) return;
+    mutationPending.current = true; loadRequest.current += 1;
     setBusy(true); setError(null);
     try {
-      await window.amd?.memory?.add({ content: content.trim(), kind, scope, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) });
-      setContent(''); setTags('');
+      if (!window.amd?.memory) throw new Error('记忆接口尚未连接');
+      await action(window.amd.memory);
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setBusy(false); }
+    finally { mutationPending.current = false; setBusy(false); }
+  };
+  const add = async () => {
+    if (!content.trim()) return;
+    await mutate(async (memory) => {
+      await memory.add({ content: content.trim(), kind, scope, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) });
+      setContent(''); setTags('');
+    });
   };
   const approve = async (id: string) => {
-    try { await window.amd?.memory?.approve(id); setSelectedIds((current) => current.filter((item) => item !== id)); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    await mutate((memory) => memory.approve(id));
   };
   const toggleSelect = (id: string) => setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const pendingIds = records.filter((record) => record.status === 'pending').map((record) => record.id);
   const allPendingSelected = pendingIds.length > 0 && pendingIds.every((id) => selectedIds.includes(id));
-  const selectAllPending = () => setSelectedIds(allPendingSelected ? [] : [...new Set([...selectedIds, ...pendingIds])]);
+  const selectAllPending = () => setSelectedIds(allPendingSelected ? selectedIds.filter((id) => !pendingIds.includes(id)) : [...new Set([...selectedIds, ...pendingIds])]);
+  const selectedPending = selectedIds.filter((id) => pendingIds.includes(id));
   const approveSelected = async () => {
-    if (!selectedIds.length) return;
-    try { await window.amd?.memory?.approveMany(selectedIds); setSelectedIds([]); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    if (!selectedPending.length) return;
+    await mutate((memory) => memory.approveMany(selectedPending));
   };
   const removeSelected = async () => {
     if (!selectedIds.length || !window.confirm(`删除选中的 ${selectedIds.length} 条记忆？`)) return;
-    try { await window.amd?.memory?.removeMany(selectedIds); setSelectedIds([]); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    await mutate((memory) => memory.removeMany(selectedIds));
   };
   const remove = async (id: string) => {
     if (!window.confirm('删除这条长期记忆？')) return;
-    try { await window.amd?.memory?.remove(id); setSelectedIds((current) => current.filter((item) => item !== id)); setRecords((current) => current.filter((record) => record.id !== id)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    await mutate((memory) => memory.remove(id));
   };
   const exportAll = async () => {
     try {
@@ -77,18 +90,16 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
   };
   const toggleAutoExtract = async () => {
     const next = !autoExtract;
-    setAutoExtract(next);
-    try { await window.amd?.memory?.setAutoExtract(next); }
-    catch (cause) { setAutoExtract(!next); setError(cause instanceof Error ? cause.message : String(cause)); }
+    await mutate(async (memory) => { await memory.setAutoExtract(next); setAutoExtract(next); });
   };
   const clearAll = async () => {
     if (!records.length || !window.confirm('清空全部长期记忆？此操作不可撤销。')) return;
-    try { await window.amd?.memory?.clear(); setRecords([]); setSelectedIds([]); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    await mutate((memory) => memory.clear());
   };
 
-  return <div className="modal-overlay memory-overlay"><section className="modal-window memory-window" role="dialog" aria-modal="true" aria-labelledby="memory-title">
-    <header className="memory-header"><div><div className="eyebrow">LONG-TERM MEMORY</div><h2 id="memory-title">长期记忆</h2><p>跨会话保留偏好、项目事实和决策；记忆会作为数据注入，不会自动变成指令。</p></div><div className="memory-header-actions"><button className="button outline small" disabled={!records.length} onClick={() => void exportAll()}>导出</button><button className="button danger small" disabled={!records.length} onClick={() => void clearAll()}>清空</button><button className="close-button" onClick={onClose} aria-label="关闭长期记忆">×</button></div></header>
+  return <div className="modal-overlay memory-overlay"><section className="modal-window memory-window" role="dialog" aria-modal="true" aria-labelledby="memory-title" aria-busy={busy}>
+    <header className="memory-header"><div><div className="eyebrow">LONG-TERM MEMORY</div><h2 id="memory-title">长期记忆</h2><p>跨会话保留偏好、项目事实和决策；记忆会作为数据注入，不会自动变成指令。</p></div><div className="memory-header-actions"><button className="button outline small" disabled={!records.length || busy} onClick={() => void exportAll()}>导出</button><button className="button danger small" disabled={!records.length || busy} onClick={() => void clearAll()}>清空</button><button className="close-button" disabled={busy} onClick={onClose} aria-label="关闭长期记忆">×</button></div></header>
+    <fieldset className="memory-fields" disabled={busy}>
     <div className="memory-add">
       <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="例如：这个项目统一使用 pnpm；提交前先运行 npm test" aria-label="记忆内容" rows={2} />
       <div className="memory-add-row">
@@ -98,8 +109,8 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
         <button className="button primary" disabled={busy || !content.trim()} onClick={() => void add()}><Plus size={14} />保存记忆</button>
       </div>
     </div>
-    <label className="memory-auto"><input type="checkbox" checked={autoExtract} onChange={() => void toggleAutoExtract()} /><span><strong>完成后自动提取记忆</strong><small>默认关闭。开启后会额外调用一个低成本模型，从完成的对话中提取最多 3 条长期记忆；提取结果会先进入待审核。</small></span></label>
-    <div className="memory-batch"><label><input type="checkbox" checked={allPendingSelected} disabled={!pendingIds.length} onChange={selectAllPending} />全选待审核（{pendingIds.length}）</label><span>已选 {selectedIds.length}</span><button disabled={!selectedIds.length} onClick={() => void approveSelected()}>通过选中</button><button disabled={!selectedIds.length} onClick={() => void removeSelected()}>删除选中</button></div>
+    <label className="memory-auto"><input type="checkbox" checked={autoExtract} disabled={!settingsReady} onChange={() => void toggleAutoExtract()} /><span><strong>完成后自动提取记忆</strong><small>默认关闭。开启后会额外调用一个低成本模型，从完成的对话中提取最多 3 条长期记忆；提取结果会先进入待审核。</small></span></label>
+    <div className="memory-batch"><label><input type="checkbox" checked={allPendingSelected} disabled={!pendingIds.length} onChange={selectAllPending} />全选待审核（{pendingIds.length}）</label><span>已选 {selectedIds.length}</span><button disabled={!selectedPending.length} onClick={() => void approveSelected()}>通过选中</button><button disabled={!selectedIds.length} onClick={() => void removeSelected()}>删除选中</button></div>
     {error && <div className="memory-error" role="alert">{error}</div>}
     <div className="memory-list">
       {records.length ? records.map((record) => <article key={record.id} className="memory-item">
@@ -108,5 +119,6 @@ export function MemoryPanel({ onClose, hasProject }: MemoryPanelProps) {
         {!!record.tags.length && <div className="memory-tags">{record.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       </article>) : <div className="memory-empty"><BrainCircuit size={22} /><strong>还没有长期记忆</strong><span>在上面写一条，或让智能体在对话中调用 remember 工具。</span></div>}
     </div>
+    </fieldset>
   </section></div>;
 }

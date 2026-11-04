@@ -9,6 +9,8 @@ app.whenReady().then(async () => {
   const empty = () => [];
   for (const channel of ['model:list', 'session:list', 'projects:list']) ipcMain.handle(channel, empty);
   ipcMain.handle('project:current', () => undefined);
+  ipcMain.handle('project:clear', () => ({ success: true }));
+  ipcMain.handle('preferences:get', () => ({ approvalMode: 'ask' }));
   ipcMain.handle('routing:status', () => ({ backend: 'heuristic', available: false }));
   ipcMain.handle('trace:get', () => undefined);
   ipcMain.handle('trace:recent', empty);

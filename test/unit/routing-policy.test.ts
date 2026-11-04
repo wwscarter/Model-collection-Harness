@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import { AgentRouter } from '../../src/core/routing/AgentRouter';
-import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine, type RoutingPolicy } from '../../src/core/routing/RoutingPolicy';
+import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, parseRoutingPolicy, validateRoutingPolicy, RoutingPolicyEngine, type RoutingPolicy } from '../../src/core/routing/RoutingPolicy';
 import { ModelQuota } from '../../src/core/routing/ModelQuota';
 
 function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
@@ -52,6 +52,31 @@ describe('RoutingPolicyEngine', () => {
     expect(decision.ruleId).toBeUndefined();
   });
 
+  it('ranks every available model after the highest-ranked models reach their quotas', async () => {
+    const models = [model('weak', { capabilities: [{ type: 'code', score: 10 }] }), model('best-available', { capabilities: [{ type: 'code', score: 85 }] }),
+      ...[100, 99, 98].map((score) => model(`limited-${score}`, { capabilities: [{ type: 'code', score }] }))];
+    const decision = await new RoutingPolicyEngine(routerFor(models)).routeTask(
+      { id: 't', type: 'code', description: 'fix', complexity: 'high' }, models, { isAvailable: (id) => !id.startsWith('limited-') },
+    );
+    expect(decision.modelId).toBe('best-available');
+    expect(decision.alternativeModels).toEqual(['weak']);
+  });
+
+  it('uses the next matching rule when a higher-priority rule is unavailable and updates the estimate', async () => {
+    const models = [model('best', { capabilities: [{ type: 'code', score: 95 }] }),
+      model('chosen', { capabilities: [{ type: 'code', score: 50 }], costPer1kTokens: { input: 0.1, output: 0.2 } }), model('limited')];
+    const policy: RoutingPolicy = { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'unavailable', enabled: true, priority: 10, when: {}, then: { primaryModelId: 'limited', strategy: 'parallel' } },
+      { id: 'available', enabled: true, priority: 5, when: {}, then: { primaryModelId: 'chosen', strategy: 'plan' } },
+    ] };
+    const decision = await new RoutingPolicyEngine(routerFor(models), policy).routeTask(
+      { id: 't', type: 'code', description: 'fix', complexity: 'medium', estimatedTokens: 1000 }, models, { isAvailable: (id) => id !== 'limited' },
+    );
+    expect(decision).toMatchObject({ modelId: 'chosen', ruleId: 'available', strategy: 'plan' });
+    expect(decision.estimatedCost).toBeCloseTo(0.13);
+    expect(decision.fallbackModels).toEqual(['best']);
+  });
+
   it('exposes parallel collaborators and accepts the escalate strategy', async () => {
     const models = [model('primary'), model('analyst'), model('strong')];
     const policy: RoutingPolicy = {
@@ -81,9 +106,57 @@ describe('RoutingPolicyEngine', () => {
     expect(loaded.diagnostics.length).toBeGreaterThan(0);
     fs.rmSync(directory, { recursive: true, force: true });
   });
+
+  it('does not turn an unrecognized task condition into a rule matching every task', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-routing-'));
+    const file = path.join(directory, 'rules.json');
+    try {
+      fs.writeFileSync(file, JSON.stringify({ version: 1, rules: [{ id: 'typo', when: { taskTypes: ['coding'] }, then: { primaryModelId: 'm' } }] }));
+      expect(loadRoutingPolicy(file)).toMatchObject({ policy: { rules: [] }, diagnostics: [expect.stringContaining('无效')] });
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+});
+
+describe('routing policy save validation', () => {
+  it('accepts supported rules and fills legacy defaults without touching the filesystem', () => {
+    expect(validateRoutingPolicy({ rules: [{ id: 'code', when: { taskTypes: ['code'] }, then: { primaryModelId: 'm' } }] })).toMatchObject({
+      version: 1, defaults: { strategy: 'single' }, rules: [{ id: 'code', then: { primaryModelId: 'm', strategy: 'single' } }],
+    });
+  });
+
+  it.each([
+    null,
+    {},
+    { rules: [], defaults: { strategy: 'unsupported' } },
+    { rules: [{ id: 'rule', enabled: 'yes', then: { strategy: 'single' } }] },
+    { rules: [{ id: 'rule', when: { taskTypes: ['coding'] }, then: { strategy: 'single' } }] },
+    { rules: [{ id: 'rule', when: { taskType: ['code'] }, then: { strategy: 'single' } }] },
+    { rules: [{ id: 'rule', then: { strategy: 'single', fallbackModelIds: ['a', 'b', 'c', 'd'] } }] },
+    { rules: [{ id: 'rule', then: { primaryModelId: '' } }] },
+    { rules: [{ id: 'same', then: { strategy: 'single' } }, { id: 'same', then: { strategy: 'plan' } }] },
+  ])('rejects unsupported or lossy settings before saving: %j', (value) => {
+    expect(() => validateRoutingPolicy(value)).toThrow();
+  });
+
+  it('keeps startup recovery tolerant when one existing rule is invalid', () => {
+    expect(parseRoutingPolicy({ rules: [{ id: 'valid', then: { strategy: 'single' } }, { id: 'invalid', then: {} }] })).toMatchObject({
+      policy: { rules: [{ id: 'valid' }] }, diagnostics: [expect.any(String)],
+    });
+  });
 });
 
 describe('ModelQuota', () => {
+  it('reserves the last request atomically and uses indexed single-model token usage when available', () => {
+    const getModelMetrics = vi.fn(() => []);
+    const getModelTokenUsage = vi.fn(() => 0);
+    const quota = new ModelQuota({ getModelMetrics, getModelTokenUsage });
+    const limited = model('m', { rateLimit: { requestsPerMinute: 1, tokensPerDay: 1000 } });
+    quota.reserve(limited);
+    expect(() => quota.reserve(limited)).toThrow('配额');
+    expect(getModelTokenUsage).toHaveBeenCalledWith('m', { from: expect.any(Date), to: expect.any(Date) });
+    expect(getModelMetrics).not.toHaveBeenCalled();
+  });
+
   it('enforces requests per minute and daily tokens', () => {
     let now = Date.parse('2026-11-04T08:00:00.000Z');
     const metrics = { getModelMetrics: () => [{ modelId: 'm', totalTokens: 950 }] } as never;

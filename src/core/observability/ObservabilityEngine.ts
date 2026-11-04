@@ -42,6 +42,7 @@ export class ObservabilityEngine implements TraceStore {
       );
       CREATE INDEX IF NOT EXISTS idx_invocations_task ON invocations(task_id);
       CREATE INDEX IF NOT EXISTS idx_invocations_model ON invocations(model_id);
+      CREATE INDEX IF NOT EXISTS idx_invocations_model_start ON invocations(model_id, start_time);
       CREATE INDEX IF NOT EXISTS idx_invocations_start ON invocations(start_time);
       CREATE TABLE IF NOT EXISTS audit_results (
         id TEXT PRIMARY KEY,
@@ -69,6 +70,7 @@ export class ObservabilityEngine implements TraceStore {
         error_message TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
 
       CREATE TABLE IF NOT EXISTS spans (
         id TEXT PRIMARY KEY,
@@ -174,9 +176,29 @@ export class ObservabilityEngine implements TraceStore {
 
   clearTraces(): { runs: number; spans: number } {
     return this.db.transaction(() => {
-      const spans = this.db.prepare('DELETE FROM spans').run().changes;
-      const runs = this.db.prepare('DELETE FROM runs').run().changes;
+      const spans = this.db.prepare(
+        "DELETE FROM spans WHERE run_id NOT IN (SELECT id FROM runs WHERE status = 'running')",
+      ).run().changes;
+      const runs = this.db.prepare("DELETE FROM runs WHERE status <> 'running'").run().changes;
       return { runs, spans };
+    })();
+  }
+
+  /** No task survives an application restart; settle its persisted trace once at startup. */
+  recoverInterruptedRuns(now = new Date()): number {
+    const endedAt = now.toISOString();
+    const error = '应用在任务完成前退出';
+    return this.db.transaction(() => {
+      this.db.prepare(
+        `UPDATE spans SET status = 'cancelled', ended_at = ?,
+         duration_ms = MAX(0, CAST(ROUND((julianday(?) - julianday(started_at)) * 86400000) AS INTEGER)),
+         error_message = ? WHERE status = 'running' AND run_id IN (SELECT id FROM runs WHERE status = 'running')`,
+      ).run(endedAt, endedAt, error);
+      return this.db.prepare(
+        `UPDATE runs SET status = 'cancelled', ended_at = ?,
+         duration_ms = MAX(0, CAST(ROUND((julianday(?) - julianday(started_at)) * 86400000) AS INTEGER)),
+         error_message = ? WHERE status = 'running'`,
+      ).run(endedAt, endedAt, error).changes;
     })();
   }
 
@@ -185,15 +207,11 @@ export class ObservabilityEngine implements TraceStore {
     const maxAgeDays = Number.isFinite(options.maxAgeDays) ? Math.max(0, options.maxAgeDays!) : 30;
     const maxRuns = Number.isFinite(options.maxRuns) ? Math.max(1, Math.floor(options.maxRuns!)) : 1_000;
     const cutoff = new Date((options.now ?? new Date()).getTime() - maxAgeDays * 86_400_000).toISOString();
-    const ids = this.db.prepare(
-      `SELECT id FROM runs WHERE started_at < ? OR id NOT IN (SELECT id FROM runs ORDER BY started_at DESC LIMIT ?)`,
-    ).all(cutoff, maxRuns) as Array<{ id: string }>;
-    if (!ids.length) return { runs: 0, spans: 0 };
-    const placeholders = ids.map(() => '?').join(',');
-    const values = ids.map((row) => row.id);
+    const staleRuns = `SELECT id FROM runs WHERE status <> 'running' AND
+      (started_at < ? OR id NOT IN (SELECT id FROM runs WHERE status <> 'running' ORDER BY started_at DESC, id DESC LIMIT ?))`;
     return this.db.transaction(() => {
-      const spans = this.db.prepare(`DELETE FROM spans WHERE run_id IN (${placeholders})`).run(...values).changes;
-      const runs = this.db.prepare(`DELETE FROM runs WHERE id IN (${placeholders})`).run(...values).changes;
+      const spans = this.db.prepare(`DELETE FROM spans WHERE run_id IN (${staleRuns})`).run(cutoff, maxRuns).changes;
+      const runs = this.db.prepare(`DELETE FROM runs WHERE id IN (${staleRuns})`).run(cutoff, maxRuns).changes;
       return { runs, spans };
     })();
   }
@@ -233,51 +251,53 @@ export class ObservabilityEngine implements TraceStore {
   }
 
   getSummary(range: MetricsTimeRange = {}): MetricsSummary {
-    const rows = this.rows({ range });
-    const audits = this.auditRows(range);
-    const successful = rows.filter(row => row.status === 'success').length;
-    const completed = rows.filter(row => row.latency !== null);
+    const { where, params } = this.rangeQuery(range);
+    const totals = this.db.prepare(`SELECT COUNT(*) AS totalInvocations, COUNT(DISTINCT task_id) AS totalTasks,
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS totalTokens, COALESCE(SUM(total_cost), 0) AS totalCost,
+      COALESCE(AVG(CASE WHEN status = 'success' THEN 1.0 ELSE 0.0 END), 0) AS successRate,
+      COALESCE(AVG(latency), 0) AS avgLatency FROM invocations${where}`).get(...params) as Omit<MetricsSummary, 'auditCount' | 'auditPassRate'>;
+    const auditRange = this.rangeQuery(range, 'created_at');
+    const audits = this.db.prepare(`SELECT COUNT(*) AS auditCount, COALESCE(AVG(approved), 0) AS auditPassRate
+      FROM audit_results${auditRange.where}`).get(...auditRange.params) as Pick<MetricsSummary, 'auditCount' | 'auditPassRate'>;
     return {
-      totalInvocations: rows.length,
-      totalTasks: new Set(rows.map(row => row.task_id)).size,
-      totalTokens: rows.reduce((sum, row) => sum + row.input_tokens + row.output_tokens, 0),
-      totalCost: rows.reduce((sum, row) => sum + row.total_cost, 0),
-      successRate: rows.length ? successful / rows.length : 0,
-      avgLatency: completed.length ? completed.reduce((sum, row) => sum + Number(row.latency ?? 0), 0) / completed.length : 0,
-      auditCount: audits.length,
-      auditPassRate: audits.length ? audits.filter(row => row.approved === 1).length / audits.length : 0,
+      ...totals, ...audits,
     };
   }
 
+  getModelTokenUsage(modelId: string, range: MetricsTimeRange = {}): number {
+    const { where, params } = this.rangeQuery(range);
+    const row = this.db.prepare(`SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total
+      FROM invocations${where}${where ? ' AND' : ' WHERE'} model_id = ?`).get(...params, modelId) as { total: number };
+    return row.total;
+  }
+
   getModelMetrics(range: MetricsTimeRange = {}): ModelMetrics[] {
-    const rows = this.rows({ range });
-    const total = rows.length;
-    const grouped = new Map<string, InvocationRow[]>();
-    for (const row of rows) grouped.set(row.model_id, [...(grouped.get(row.model_id) ?? []), row]);
-    return [...grouped.entries()].map(([modelId, values]) => {
-      const successful = values.filter(row => row.status === 'success').length;
-      const completed = values.filter(row => row.latency !== null);
-      return { modelId, invocations: values.length, successfulInvocations: successful, successRate: values.length ? successful / values.length : 0, inputTokens: values.reduce((sum, row) => sum + row.input_tokens, 0), outputTokens: values.reduce((sum, row) => sum + row.output_tokens, 0), totalTokens: values.reduce((sum, row) => sum + row.input_tokens + row.output_tokens, 0), totalCost: values.reduce((sum, row) => sum + row.total_cost, 0), avgLatency: completed.length ? completed.reduce((sum, row) => sum + Number(row.latency ?? 0), 0) / completed.length : 0, share: total ? values.length / total : 0 };
-    }).sort((a, b) => b.invocations - a.invocations || a.modelId.localeCompare(b.modelId));
+    const { where, params } = this.rangeQuery(range);
+    const rows = this.db.prepare(`SELECT model_id AS modelId, COUNT(*) AS invocations,
+      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successfulInvocations,
+      AVG(CASE WHEN status = 'success' THEN 1.0 ELSE 0.0 END) AS successRate,
+      SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+      SUM(input_tokens + output_tokens) AS totalTokens, SUM(total_cost) AS totalCost,
+      COALESCE(AVG(latency), 0) AS avgLatency FROM invocations${where}
+      GROUP BY model_id ORDER BY invocations DESC, model_id ASC`).all(...params) as Omit<ModelMetrics, 'share'>[];
+    const total = rows.reduce((sum, row) => sum + row.invocations, 0);
+    return rows.map((row) => ({ ...row, share: total ? row.invocations / total : 0 }));
   }
 
   getCostTrend(range: MetricsTimeRange = {}, bucket: 'hour' | 'day' = 'day'): CostTrendPoint[] {
-    const grouped = new Map<string, CostTrendPoint>();
-    for (const row of this.rows({ range })) {
-      const date = new Date(row.start_time);
-      const key = bucket === 'hour' ? `${date.toISOString().slice(0, 13)}:00:00.000Z` : date.toISOString().slice(0, 10);
-      const current = grouped.get(key) ?? { bucket: key, invocations: 0, totalTokens: 0, totalCost: 0 };
-      current.invocations += 1;
-      current.totalTokens += row.input_tokens + row.output_tokens;
-      current.totalCost += row.total_cost;
-      grouped.set(key, current);
-    }
-    return [...grouped.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+    const { where, params } = this.rangeQuery(range);
+    const expression = bucket === 'hour' ? "substr(start_time, 1, 13) || ':00:00.000Z'" : 'substr(start_time, 1, 10)';
+    return this.db.prepare(`SELECT ${expression} AS bucket, COUNT(*) AS invocations,
+      SUM(input_tokens + output_tokens) AS totalTokens, SUM(total_cost) AS totalCost
+      FROM invocations${where} GROUP BY bucket ORDER BY bucket ASC`).all(...params) as CostTrendPoint[];
   }
 
   getReport(range: MetricsTimeRange = {}, recentLimit = 20): ObservabilityReport {
     const normalized = { from: this.asDate(range.from), to: this.asDate(range.to) };
-    return { generatedAt: new Date(), range: normalized, summary: this.getSummary(normalized), models: this.getModelMetrics(normalized), costTrend: this.getCostTrend(normalized), recent: this.getInvocations(normalized).sort((a, b) => b.startTime.getTime() - a.startTime.getTime()).slice(0, Math.max(1, recentLimit)) };
+    const { where, params } = this.rangeQuery(normalized);
+    const limit = Number.isFinite(recentLimit) ? Math.max(1, Math.floor(recentLimit)) : 20;
+    const recent = this.db.prepare(`SELECT * FROM invocations${where} ORDER BY start_time DESC LIMIT ?`).all(...params, limit) as InvocationRow[];
+    return { generatedAt: new Date(), range: normalized, summary: this.getSummary(normalized), models: this.getModelMetrics(normalized), costTrend: this.getCostTrend(normalized), recent: recent.map((row) => this.toInvocation(row)) };
   }
 
   getDashboardSnapshot(options: MetricsTimeRange = {}): DashboardSnapshot {
@@ -298,7 +318,14 @@ export class ObservabilityEngine implements TraceStore {
     return `${lines.join('\n')}\n`;
   }
 
-  close(): void { this.db.close(); }
+  close(): void { if (this.db.open) this.db.close(); }
+
+  private rangeQuery(range: MetricsTimeRange = {}, column = 'start_time'): { where: string; params: unknown[] } {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    this.addRangeClauses(clauses, params, range, column);
+    return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
+  }
 
   private rows(options: { taskId?: string; range?: MetricsTimeRange } = {}): InvocationRow[] {
     const clauses: string[] = [];

@@ -176,6 +176,18 @@ describe('AgentRuntime (Pi SDK)', () => {
     expect(requests[0].body.messages[0].content).toContain('没有可用的联网工具');
   });
 
+  it('includes cached prompt tokens in reported input usage', async () => {
+    requests.length = 0;
+    replies = [() => sse([{
+      choices: [{ index: 0, delta: { content: 'cached reply' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 50, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 40 } },
+    }])];
+    const { runtime: agent } = runtime();
+    const result = await agent.run({ model: model({ provider: 'custom' }), prompt: 'hello', enableTools: false });
+    expect(result.inputTokens).toBe(50);
+    expect(result.outputTokens).toBe(5);
+  });
+
   it('lets the tool gate block a call and reports the block to the model', async () => {
     requests.length = 0;
     replies = [toolCall('web_fetch', { url: 'https://example.com' }), text('无法读取')];

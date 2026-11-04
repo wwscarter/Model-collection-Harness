@@ -20,7 +20,7 @@ export function createMemoryTools(store: MemoryStore, context: { projectRoot?: s
       ttlDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
     }),
     async execute(_toolCallId, params) {
-      const scope: MemoryScope = params.scope === 'global' ? 'global' : (context.projectRoot ? 'project' : 'global');
+      const scope: MemoryScope = params.scope ?? (context.projectRoot ? 'project' : 'global');
       if (scope === 'project' && !context.projectRoot) throw new Error('未选择项目，无法写入项目记忆');
       const record = store.add({
         content: params.content,

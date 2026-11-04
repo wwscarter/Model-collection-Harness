@@ -74,7 +74,11 @@ export class TtyManager {
     const info: TtySessionInfo = { id, shell, cwd, cols, rows, status: 'running', createdAt: new Date(), pid: terminal.pid };
     const session = { info, process: terminal, listeners: new Set<DataListener>() };
     terminal.onData((data) => session.listeners.forEach((listener) => listener(data)));
-    terminal.onExit(() => { info.status = 'closed'; });
+    terminal.onExit(() => {
+      info.status = 'closed';
+      session.listeners.clear();
+      if (this.sessions.get(id) === session) this.sessions.delete(id);
+    });
     this.sessions.set(id, session);
     return this.cloneInfo(info);
   }
@@ -143,8 +147,10 @@ export class TtyManager {
       const child = spawn(shell, args, { cwd: options.cwd, env: options.env, stdio: 'pipe', windowsHide: true }) as ChildProcessWithoutNullStreams;
       const dataListeners = new Set<(data: string) => void>();
       const exitListeners = new Set<(event?: { exitCode?: number; signal?: number }) => void>();
-      child.stdout.on('data', (chunk: Buffer) => dataListeners.forEach((listener) => listener(chunk.toString('utf8'))));
-      child.stderr.on('data', (chunk: Buffer) => dataListeners.forEach((listener) => listener(chunk.toString('utf8'))));
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => dataListeners.forEach((listener) => listener(chunk)));
+      child.stderr.on('data', (chunk: string) => dataListeners.forEach((listener) => listener(chunk)));
       child.on('exit', (exitCode, signal) => exitListeners.forEach((listener) => listener({ exitCode: exitCode ?? undefined, signal: signal ? os.constants.signals[signal] as unknown as number : undefined })));
       return { pid: child.pid, write: (data) => child.stdin.write(data), resize: () => undefined, kill: (signal) => child.kill(signal as NodeJS.Signals | undefined), onData: (listener) => { dataListeners.add(listener); }, onExit: (listener) => { exitListeners.add(listener); } };
     };

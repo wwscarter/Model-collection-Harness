@@ -3,6 +3,7 @@ import type { ModelMetrics } from '@core/observability/ObservabilityEngine';
 
 export interface MetricsLike {
   getModelMetrics(range?: { from?: Date | string; to?: Date | string }): ModelMetrics[];
+  getModelTokenUsage?(modelId: string, range?: { from?: Date | string; to?: Date | string }): number;
 }
 
 /**
@@ -29,8 +30,10 @@ export class ModelQuota {
     if (model.rateLimit.tokensPerDay > 0) {
       const start = new Date(now);
       start.setHours(0, 0, 0, 0);
-      const used = this.metrics.getModelMetrics({ from: start, to: new Date(now) })
-        .find((entry) => entry.modelId === id)?.totalTokens ?? 0;
+      const range = { from: start, to: new Date(now) };
+      const used = this.metrics.getModelTokenUsage
+        ? this.metrics.getModelTokenUsage(id, range)
+        : this.metrics.getModelMetrics(range).find((entry) => entry.modelId === id)?.totalTokens ?? 0;
       if (used >= model.rateLimit.tokensPerDay) return false;
     }
     return true;
@@ -41,5 +44,11 @@ export class ModelQuota {
     const recent = (this.requests.get(modelId) ?? []).filter((timestamp) => timestamp > now - 60_000);
     recent.push(now);
     this.requests.set(modelId, recent);
+  }
+
+  /** Check and count the request together immediately before starting a call. */
+  reserve(model: ModelConfig): void {
+    if (!this.isAvailable(model)) throw new Error(`模型「${model.name}」已达到速率或每日配额，请稍后再试`);
+    this.record(model.id);
   }
 }

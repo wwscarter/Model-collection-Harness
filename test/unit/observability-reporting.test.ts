@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ObservabilityEngine } from '../../src/core/observability/ObservabilityEngine';
 
 function invocation(engine: ObservabilityEngine, taskId: string, modelId: string, input = 100, output = 20) {
@@ -7,6 +7,40 @@ function invocation(engine: ObservabilityEngine, taskId: string, modelId: string
 }
 
 describe('observability reporting', () => {
+  it('aggregates model usage, UTC buckets and recent records within the requested range', () => {
+    vi.useFakeTimers();
+    const engine = new ObservabilityEngine();
+    try {
+      vi.setSystemTime(new Date('2026-11-04T10:00:00.000Z'));
+      invocation(engine, 'task-a', 'model-a', 100, 20);
+      vi.setSystemTime(new Date('2026-11-04T11:00:00.000Z'));
+      invocation(engine, 'task-a', 'model-a', 50, 10);
+      vi.setSystemTime(new Date('2026-11-05T09:00:00.000Z'));
+      invocation(engine, 'task-b', 'model-b', 30, 6);
+      expect(engine.getSummary()).toMatchObject({ totalInvocations: 3, totalTasks: 2, totalTokens: 216, successRate: 1 });
+      expect(engine.getModelTokenUsage('model-a')).toBe(180);
+      expect(engine.getModelTokenUsage('model-a', { from: '2026-11-04T11:00:00.000Z' })).toBe(60);
+      expect(engine.getModelTokenUsage('missing')).toBe(0);
+      expect(engine.getModelMetrics()[0]).toMatchObject({ modelId: 'model-a', invocations: 2, totalTokens: 180, share: 2 / 3 });
+      expect(engine.getCostTrend().map((point) => point.bucket)).toEqual(['2026-11-04', '2026-11-05']);
+      expect(engine.getCostTrend({}, 'hour')).toHaveLength(3);
+      expect(engine.getReport({}, 1).recent.map((entry) => entry.modelId)).toEqual(['model-b']);
+      const past = engine.getReport({ to: '2026-11-04T11:00:00.000Z' }, 1);
+      expect(past.summary.totalTokens).toBe(180);
+      expect(past.recent[0].inputTokens).toBe(50);
+    } finally { engine.close(); vi.useRealTimers(); }
+  });
+
+  it('returns finite empty aggregates without loading invocation history', () => {
+    const engine = new ObservabilityEngine();
+    try {
+      expect(engine.getSummary()).toEqual({ totalInvocations: 0, totalTasks: 0, totalTokens: 0, totalCost: 0, successRate: 0, avgLatency: 0, auditCount: 0, auditPassRate: 0 });
+      expect(engine.getModelMetrics()).toEqual([]);
+      expect(engine.getCostTrend()).toEqual([]);
+      expect(engine.getReport().recent).toEqual([]);
+    } finally { engine.close(); }
+  });
+
   it('aggregates dashboard data by model and cost bucket', () => {
     const engine = new ObservabilityEngine();
     invocation(engine, 'task-a', 'model-a');

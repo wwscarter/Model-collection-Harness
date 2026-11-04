@@ -85,6 +85,7 @@ function composeSummary(previous: string | undefined, turns: readonly ContextTur
 
 function boundSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
+  if (maxChars < 40) return text.slice(0, Math.max(0, maxChars));
   const head = text.slice(0, Math.max(0, maxChars - 40));
   return `${head}\n[summary truncated]`;
 }
@@ -98,10 +99,10 @@ function boundSummary(text: string, maxChars: number): string {
  * without re-summarizing history that has not changed.
  */
 export function assembleContext(input: ContextAssemblyInput): ContextAssemblyResult {
-  const minimumRecent = Math.max(0, input.minRecentTurns ?? DEFAULT_MIN_RECENT_TURNS);
-  const reserve = Math.max(0, input.reserveTokens ?? DEFAULT_RESERVE_TOKENS);
-  const configBudget = Math.max(512, (input.contextWindow || 8_192) - Math.max(1, input.maxOutputTokens) - reserve);
-  const budget = Math.max(512, Math.min(configBudget, input.maxInputTokens ?? Number.MAX_SAFE_INTEGER));
+  const reserve = Math.max(0, input.reserveTokens ?? Math.min(DEFAULT_RESERVE_TOKENS, Math.floor((input.contextWindow || 8_192) / 4), Math.max(0, (input.contextWindow || 8_192) - Math.max(1, input.maxOutputTokens))));
+  const configBudget = Math.max(0, (input.contextWindow || 8_192) - Math.max(1, input.maxOutputTokens) - reserve);
+  const budget = Math.max(0, Math.min(configBudget, input.maxInputTokens ?? Number.MAX_SAFE_INTEGER));
+  const minimumRecent = Math.min(Math.max(0, input.minRecentTurns ?? DEFAULT_MIN_RECENT_TURNS), Math.floor(budget / 16));
   const rendered = input.history.map(renderTurn);
   const existingSummary = input.summary?.trim() || undefined;
   const covers = input.summaryCovers ?? 0;
@@ -109,10 +110,11 @@ export function assembleContext(input: ContextAssemblyInput): ContextAssemblyRes
     && input.summaryHash === historyHash(input.history, covers);
   const baseSummary = summaryValid ? existingSummary : undefined;
   const baseCovers = summaryValid ? covers : 0;
+  if (budget < 16) return { history: [], summary: undefined, summaryCovers: 0, estimatedTokens: 0, droppedTurns: input.history.length, previousCovers: 0, compacted: input.history.length > 0, summaryChanged: false };
 
   const baseHistory = rendered.slice(baseCovers);
   const totalTokens = baseHistory.reduce((sum, turn) => sum + estimateTurn(turn), 0) + (baseSummary ? estimateTextTokens(baseSummary) : 0);
-  if (totalTokens <= budget || baseHistory.length <= minimumRecent) {
+  if (totalTokens <= budget) {
     return {
       history: baseHistory,
       summary: baseSummary,
@@ -140,8 +142,8 @@ export function assembleContext(input: ContextAssemblyInput): ContextAssemblyRes
   keepStart = Math.min(keepStart, Math.max(baseCovers, input.history.length - minimumRecent));
 
   const older = input.history.slice(baseCovers, keepStart);
-  const summaryBudgetChars = Math.max(400, Math.floor(budget * 0.25) * 4);
-  let nextSummary = older.length ? boundSummary(composeSummary(baseSummary, older.map(renderTurn)), summaryBudgetChars) : baseSummary;
+  const summaryBudgetChars = Math.floor(budget * 0.25) * 4;
+  let nextSummary = older.length ? boundSummary(composeSummary(baseSummary, older.map(renderTurn)), summaryBudgetChars) : baseSummary ? boundSummary(baseSummary, summaryBudgetChars) : undefined;
   let finalCovers = keepStart;
   const recent = rendered.slice(keepStart);
 
@@ -161,14 +163,18 @@ export function assembleContext(input: ContextAssemblyInput): ContextAssemblyRes
     finalCovers = keepStart + droppedRecent.length;
     estimated = recent.reduce((sum, turn) => sum + estimateTurn(turn), 0) + (nextSummary ? estimateTextTokens(nextSummary) : 0);
   }
-  if (estimated > budget && recent.length) {
-    const overflow = (estimated - budget) * 4;
-    const first = recent[0];
-    if (first && first.content.length > overflow + 80) {
-      const trimmed = `${first.content.slice(0, Math.max(80, first.content.length - overflow))}\n[truncated to fit context budget]`;
-      recent[0] = { ...first, content: trimmed };
-      estimated = recent.reduce((sum, turn) => sum + estimateTurn(turn), 0) + (nextSummary ? estimateTextTokens(nextSummary) : 0);
-    }
+  // Keeping recent turns is a preference, not permission to exceed the budget.
+  // Short histories can also contain a complete large file or model response.
+  for (let index = 0; estimated > budget && index < recent.length; index += 1) {
+    const turn = recent[index];
+    const textTokens = Math.max(1, estimateTextTokens(turn.content) - (estimated - budget));
+    const maxChars = textTokens * 4;
+    const notice = '\n[truncated to fit context budget]';
+    const content = maxChars >= notice.length
+      ? turn.content.slice(0, maxChars - notice.length) + notice
+      : notice.slice(0, maxChars);
+    recent[index] = { ...turn, content };
+    estimated += estimateTurn(recent[index]) - estimateTurn(turn);
   }
 
   return {

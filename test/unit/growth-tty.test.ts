@@ -82,4 +82,22 @@ describe('TtyManager', () => {
     manager = new TtyManager({ ptyFactory: () => ({ pid: 1, write: () => undefined, resize: () => undefined, kill: () => undefined, onData: () => undefined, onExit: () => undefined }) });
     await expect(manager.createSession({ cwd: '/definitely/not/a/real/directory' })).rejects.toThrow('工作目录');
   });
+
+  it('releases a terminal session and its listeners after a natural exit', async () => {
+    let onExit: (() => void) | undefined;
+    let onData: ((data: string) => void) | undefined;
+    manager = new TtyManager({ ptyFactory: () => ({
+      write: () => undefined, resize: () => undefined, kill: () => undefined,
+      onData: (listener) => { onData = listener; }, onExit: (listener) => { onExit = () => listener(); },
+    }) });
+    const session = await manager.createSession({ id: 'natural-exit' });
+    const output: string[] = [];
+    manager.onData(session.id, (data) => output.push(data));
+    onData?.('before exit');
+    onExit?.();
+    onData?.('after exit');
+    expect(output).toEqual(['before exit']);
+    expect(manager.getSession(session.id)).toBeUndefined();
+    expect(manager.listSessions()).toEqual([]);
+  });
 });

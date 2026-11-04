@@ -134,8 +134,8 @@ export function credentialOrigin(provider: ModelProvider, baseURL?: string): str
 }
 
 /** True when a model can make a real request. Keyless custom/local endpoints are allowed. */
-export function hasUsableCredentials(model: Pick<ModelConfig, 'provider' | 'apiKey' | 'baseURL'>): boolean {
-  return Boolean(model.apiKey?.trim()) || model.provider === 'custom';
+export function hasUsableCredentials(model: Pick<ModelConfig, 'provider' | 'apiKey' | 'baseURL' | 'credentialError'>): boolean {
+  return !model.credentialError && (Boolean(model.apiKey?.trim()) || model.provider === 'custom');
 }
 
 export function cloneModelConfig(config: ModelConfig): ModelConfig {
@@ -151,6 +151,7 @@ export function cloneModelConfig(config: ModelConfig): ModelConfig {
 }
 
 export function validateModelConfig(config: ModelConfig): void {
+  if (!["openai", "anthropic", "google", "deepseek", "custom"].includes(config.provider)) throw new Error("Unknown model provider");
   if (!config.id.trim()) throw new Error("Model id is required");
   if (!config.name.trim()) throw new Error("Model name is required");
   if (!config.modelId.trim()) throw new Error("Provider model id is required");
@@ -168,8 +169,8 @@ export function validateModelConfig(config: ModelConfig): void {
   }
   if (config.enableThinking !== undefined && typeof config.enableThinking !== "boolean") throw new Error("enableThinking must be a boolean");
   if (config.isPrimary !== undefined && typeof config.isPrimary !== "boolean") throw new Error("isPrimary must be a boolean");
-  if (!Number.isFinite(config.contextWindow ?? config.maxTokens) || (config.contextWindow ?? config.maxTokens) <= 0) {
-    throw new Error("contextWindow must be a positive number");
+  if (!Number.isInteger(config.contextWindow ?? config.maxTokens) || (config.contextWindow ?? config.maxTokens) <= 0) {
+    throw new Error("contextWindow must be a positive integer");
   }
   if (
     config.intelligenceScore !== undefined &&
@@ -186,12 +187,18 @@ export function validateModelConfig(config: ModelConfig): void {
     if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") throw new Error("API 地址必须使用 http 或 https");
     if (endpoint.username || endpoint.password) throw new Error("API 地址不能包含用户名或密码");
   }
-  if (!Number.isFinite(config.maxTokens) || config.maxTokens <= 0) {
-    throw new Error("maxTokens must be a positive number");
+  if (!Number.isInteger(config.maxTokens) || config.maxTokens <= 0) {
+    throw new Error("maxTokens must be a positive integer");
   }
   if (config.contextWindow !== undefined && config.maxTokens > config.contextWindow) {
     throw new Error("maxTokens cannot exceed contextWindow");
   }
+  if (!Number.isFinite(config.priority)) throw new Error("priority must be a finite number");
+  if (typeof config.enabled !== "boolean") throw new Error("enabled must be a boolean");
+  for (const value of [config.rateLimit.requestsPerMinute, config.rateLimit.tokensPerDay]) {
+    if (!Number.isInteger(value) || value < 0) throw new Error("rateLimit values must be non-negative integers");
+  }
+  if (!Number.isFinite(config.createdAt.getTime()) || !Number.isFinite(config.updatedAt.getTime())) throw new Error("Model timestamps must be valid dates");
   if (
     !Number.isFinite(config.costPer1kTokens.input) ||
     !Number.isFinite(config.costPer1kTokens.output) ||

@@ -138,43 +138,44 @@ export class MemoryStore {
   }
 
   list(filter: MemoryFilter = {}): MemoryRecord[] {
-    const clauses: string[] = [];
-    const params: unknown[] = [];
-    if (filter.scopes?.length) { clauses.push(`scope IN (${filter.scopes.map(() => '?').join(',')})`); params.push(...filter.scopes); }
-    if (filter.projectRoot) { clauses.push('(scope = ? AND project_root = ?)'); params.push('project', filter.projectRoot); }
-    if (filter.sessionId) { clauses.push('(scope = ? AND session_id = ?)'); params.push('session', filter.sessionId); }
-    if (filter.kind) { clauses.push('kind = ?'); params.push(filter.kind); }
-    if (filter.status && filter.status !== 'all') { clauses.push('status = ?'); params.push(filter.status); }
-    else if (!filter.status) { clauses.push("status = 'active'"); }
+    const { clauses, params } = this.filterSql(filter);
     const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
-    const limit = Math.min(2_000, Math.max(1, Math.floor(filter.limit ?? 500)));
+    const limit = this.limit(filter.limit, 500, 2_000);
     const rows = this.db.prepare(`SELECT * FROM memories${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit) as MemoryRow[];
-    return rows.map(toRecord).filter((record) => !record.expiresAt || record.expiresAt.getTime() > Date.now());
+    return rows.map(toRecord);
   }
 
-  /** FTS5 candidate search; filters are applied after the ranked query. */
+  /** Apply scope, status and expiry before limiting the ranked FTS candidates. */
   search(query: string, filter: MemoryFilter = {}): MemoryRecord[] {
     const trimmed = query.trim();
     if (!trimmed) return this.list(filter);
     const terms = trimmed.split(/\s+/).filter(Boolean).slice(0, 12).map((term) => `"${term.replace(/"/g, '""')}"`);
     if (!terms.length) return this.list(filter);
+    const { clauses, params } = this.filterSql(filter, 'm.');
+    const limit = this.limit(filter.limit, 50, 200);
     try {
       const rows = this.db.prepare(
-        `SELECT m.* FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE memories_fts MATCH ? ORDER BY rank LIMIT 200`,
-      ).all(terms.join(' OR ')) as MemoryRow[];
-      const scopes = new Set(filter.scopes ?? ['global', 'project', 'session']);
-      return rows.map(toRecord).filter((record) => {
-        if (!scopes.has(record.scope)) return false;
-        if (filter.projectRoot && record.scope === 'project' && record.projectRoot !== filter.projectRoot) return false;
-        if (filter.projectRoot && record.scope === 'session') return false;
-        if (filter.sessionId && record.scope === 'session' && record.sessionId !== filter.sessionId) return false;
-        if (filter.kind && record.kind !== filter.kind) return false;
-        if (record.status !== 'active') return false;
-        return !record.expiresAt || record.expiresAt.getTime() > Date.now();
-      }).slice(0, Math.min(200, Math.max(1, filter.limit ?? 50)));
+        `SELECT m.* FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE memories_fts MATCH ? AND ${clauses.join(' AND ')} ORDER BY rank LIMIT ?`,
+      ).all(terms.join(' OR '), ...params, limit) as MemoryRow[];
+      return rows.map(toRecord);
     } catch {
-      return this.list(filter).filter((record) => record.content.toLowerCase().includes(trimmed.toLowerCase())).slice(0, Math.min(200, Math.max(1, filter.limit ?? 50)));
+      return this.list({ ...filter, limit: 2_000 }).filter((record) => record.content.toLowerCase().includes(trimmed.toLowerCase())).slice(0, limit);
     }
+  }
+
+  private filterSql(filter: MemoryFilter, prefix = ''): { clauses: string[]; params: unknown[] } {
+    const clauses = [`(${prefix}expires_at IS NULL OR ${prefix}expires_at > ?)`];
+    const params: unknown[] = [new Date().toISOString()];
+    if (filter.scopes?.length) { clauses.push(`${prefix}scope IN (${filter.scopes.map(() => '?').join(',')})`); params.push(...filter.scopes); }
+    if (filter.projectRoot) { clauses.push(`(${prefix}scope = ? AND ${prefix}project_root = ?)`); params.push('project', filter.projectRoot); }
+    if (filter.sessionId) { clauses.push(`(${prefix}scope = ? AND ${prefix}session_id = ?)`); params.push('session', filter.sessionId); }
+    if (filter.kind) { clauses.push(`${prefix}kind = ?`); params.push(filter.kind); }
+    if (filter.status !== 'all') { clauses.push(`${prefix}status = ?`); params.push(filter.status ?? 'active'); }
+    return { clauses, params };
+  }
+
+  private limit(value: number | undefined, fallback: number, maximum: number): number {
+    return Math.min(maximum, Math.max(1, Math.floor(Number.isFinite(value) ? value! : fallback)));
   }
 
   getAutoExtract(): boolean {

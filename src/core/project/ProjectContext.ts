@@ -113,10 +113,10 @@ export class ProjectContext {
 
   buildContext(relativePaths?: string[], maxTokens = this.options.maxContextTokens): ProjectContextResult {
     const candidates = relativePaths?.length
-      ? relativePaths.map(normalizeRelative).filter(Boolean)
+      ? [...new Set(relativePaths.map(normalizeRelative).filter(Boolean))]
       : this.collectTextFiles();
     const files: ProjectFile[] = [];
-    let remainingChars = Math.max(1, Math.floor(maxTokens * 4));
+    let remainingChars = Math.max(0, Math.floor((Number.isFinite(maxTokens) ? maxTokens : this.options.maxContextTokens) * 4));
     let skippedFiles = 0;
     let wasTruncated = false;
     for (const relative of candidates) {
@@ -125,11 +125,12 @@ export class ProjectContext {
         const file = this.readTextFile(relative);
         const separator = files.length ? 1 : 0;
         const marker = `${separator ? "\n" : ""}--- FILE: ${relative} ---\n`;
-        if (remainingChars <= marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
+        if (remainingChars < marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
         const suffixLength = '\n[truncated]'.length;
-        const contentBudget = Math.max(0, remainingChars - marker.length - suffixLength);
-        const content = file.content.slice(0, contentBudget);
-        const truncated = file.truncated || content.length < file.content.length;
+        const contentBudget = remainingChars - marker.length;
+        const truncated = file.truncated || file.content.length > contentBudget;
+        if (truncated && contentBudget < suffixLength) { skippedFiles += 1; wasTruncated = true; continue; }
+        const content = file.content.slice(0, contentBudget - (truncated ? suffixLength : 0));
         files.push({ path: relative, size: file.size, content, truncated });
         remainingChars -= marker.length + content.length + (truncated ? suffixLength : 0);
         if (truncated) wasTruncated = true;
@@ -148,10 +149,10 @@ export class ProjectContext {
    */
   async buildContextAsync(relativePaths?: string[], maxTokens = this.options.maxContextTokens): Promise<ProjectContextResult> {
     const candidates = relativePaths?.length
-      ? relativePaths.map(normalizeRelative).filter(Boolean)
+      ? [...new Set(relativePaths.map(normalizeRelative).filter(Boolean))]
       : await this.collectTextFilesAsync();
     const files: ProjectFile[] = [];
-    let remainingChars = Math.max(1, Math.floor(maxTokens * 4));
+    let remainingChars = Math.max(0, Math.floor((Number.isFinite(maxTokens) ? maxTokens : this.options.maxContextTokens) * 4));
     let skippedFiles = 0;
     let wasTruncated = false;
     for (const relative of candidates) {
@@ -160,11 +161,12 @@ export class ProjectContext {
         const file = await this.readTextFileAsync(relative);
         const separator = files.length ? 1 : 0;
         const marker = `${separator ? "\n" : ""}--- FILE: ${relative} ---\n`;
-        if (remainingChars <= marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
+        if (remainingChars < marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
         const suffixLength = '\n[truncated]'.length;
-        const contentBudget = Math.max(0, remainingChars - marker.length - suffixLength);
-        const content = file.content.slice(0, contentBudget);
-        const truncated = file.truncated || content.length < file.content.length;
+        const contentBudget = remainingChars - marker.length;
+        const truncated = file.truncated || file.content.length > contentBudget;
+        if (truncated && contentBudget < suffixLength) { skippedFiles += 1; wasTruncated = true; continue; }
+        const content = file.content.slice(0, contentBudget - (truncated ? suffixLength : 0));
         files.push({ path: relative, size: file.size, content, truncated });
         remainingChars -= marker.length + content.length + (truncated ? suffixLength : 0);
         if (truncated) wasTruncated = true;

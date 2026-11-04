@@ -1,0 +1,156 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RunDependencies } from '../../src/core/agent/RunCoordinator';
+import type { ProjectRecord } from '../../src/core/storage/ProjectStorage';
+
+const state = vi.hoisted(() => ({
+  handlers: new Map<string, (...args: any[]) => any>(),
+  appEvents: new Map<string, (...args: any[]) => any>(),
+  userData: '',
+  showOpenDialog: vi.fn(),
+  executeRun: vi.fn(async (_request: unknown, _deps: unknown, _emit: unknown) => ({ output: 'done' })),
+}));
+
+vi.mock('electron', () => ({
+  app: {
+    whenReady: async () => undefined,
+    getPath: () => state.userData,
+    requestSingleInstanceLock: () => true,
+    on: (name: string, listener: (...args: any[]) => any) => state.appEvents.set(name, listener),
+    quit: vi.fn(),
+  },
+  BrowserWindow: class {
+    webContents = { send: vi.fn() };
+    loadFile = vi.fn();
+    loadURL = vi.fn();
+    on = vi.fn();
+  },
+  ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => state.handlers.set(channel, handler) },
+  nativeTheme: { shouldUseDarkColors: false, on: vi.fn() },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString(),
+  },
+  session: { defaultSession: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } },
+  dialog: { showOpenDialog: state.showOpenDialog, showMessageBox: vi.fn(), showErrorBox: vi.fn() },
+}));
+
+vi.mock('../../src/core/agent/RunCoordinator', () => ({ executeRun: state.executeRun }));
+
+let directory: string;
+let projectA: ProjectRecord;
+let projectB: ProjectRecord;
+const event = { senderFrame: { url: 'file:///newai/dist/renderer/index.html' } };
+const invoke = (channel: string, ...args: unknown[]) => state.handlers.get(channel)!(event, ...args);
+
+async function addProject(name: string): Promise<ProjectRecord> {
+  const root = path.join(directory, name);
+  fs.mkdirSync(root);
+  fs.writeFileSync(path.join(root, 'README.md'), name);
+  state.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [root] });
+  const picked = await invoke('projects:pick-directory');
+  return invoke('projects:create', { root: picked.root, name });
+}
+
+beforeAll(async () => {
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-main-session-'));
+  state.userData = path.join(directory, 'user-data');
+  await import('../../src/main/main');
+  await vi.waitFor(() => expect(state.handlers.has('session:execute')).toBe(true));
+  projectA = await addProject('project-a');
+  projectB = await addProject('project-b');
+});
+
+beforeEach(() => { state.executeRun.mockClear(); });
+
+afterAll(() => {
+  state.appEvents.get('before-quit')?.();
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
+function saveSession(id: string, projectId?: string) {
+  return invoke('session:save', { id, title: id, prompt: '', output: '', projectId, createdAt: new Date(), updatedAt: new Date() });
+}
+
+describe('main process session projects', () => {
+  it('validates routing edits before replacing the file and archives the current policy before restore', () => {
+    const original = JSON.stringify({ version: 1, rules: [{ id: 'review', enabled: true, priority: 1, when: {}, then: { strategy: 'single' } }], defaults: { strategy: 'single' } });
+    const updated = JSON.stringify({ version: 1, rules: [], defaults: { strategy: 'parallel' } });
+    invoke('routing:rules:set', original);
+    const before = invoke('routing:rules:history');
+    expect(() => invoke('routing:rules:set', JSON.stringify({ rules: 'wrong' }))).toThrow();
+    expect(invoke('routing:rules:get').text).toBe(original);
+    expect(invoke('routing:rules:history')).toEqual(before);
+
+    invoke('routing:rules:set', updated);
+    const history = invoke('routing:rules:history') as Array<{ name: string }>;
+    const archivedOriginal = history.find((item) => fs.readFileSync(path.join(state.userData, 'routing-rules.history', item.name), 'utf8') === original)!;
+    expect(invoke('routing:rules:restore', archivedOriginal.name).text).toBe(original);
+    expect(invoke('routing:rules:get').text).toBe(original);
+    const restoredHistory = invoke('routing:rules:history') as Array<{ name: string }>;
+    expect(restoredHistory.length).toBe(history.length + 1);
+    expect(restoredHistory.some((item) => fs.readFileSync(path.join(state.userData, 'routing-rules.history', item.name), 'utf8') === updated)).toBe(true);
+  });
+
+  it('publishes preference changes only after they have been persisted', () => {
+    expect(invoke('preferences:set', { approvalMode: 'auto' })).toEqual({ approvalMode: 'auto' });
+    const file = path.join(state.userData, 'preferences.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ approvalMode: 'auto' });
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('disk full'); });
+    try {
+      expect(() => invoke('preferences:set', { approvalMode: 'ask' })).toThrow('设置保存失败');
+      expect(invoke('preferences:get')).toEqual({ approvalMode: 'auto' });
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ approvalMode: 'auto' });
+    } finally { rename.mockRestore(); }
+  });
+
+  it('executes an explicitly unassociated session without the project shown in the file panel', async () => {
+    await invoke('projects:open', projectA.id);
+    await invoke('session:execute', { sessionId: 'unassociated', prompt: 'hello', projectId: null });
+
+    const deps = state.executeRun.mock.calls[0][1] as RunDependencies;
+    expect(deps.projectContext.getRoot()).toBeUndefined();
+    expect(await deps.projectContext.getContextAsync()).toBeUndefined();
+    expect(invoke('project:current').id).toBe(projectA.id);
+  });
+
+  it('restores the saved session association and retains its context after the file panel changes', async () => {
+    await saveSession('saved-project', projectA.id);
+    await invoke('projects:open', projectB.id);
+    await invoke('session:execute', { sessionId: 'saved-project', prompt: 'continue' });
+    const deps = state.executeRun.mock.calls[0][1] as RunDependencies;
+    await invoke('project:clear');
+
+    expect(deps.projectContext.getRoot()).toBe(projectA.root);
+    expect((await deps.projectContext.getContextAsync())?.text).toContain('project-a');
+  });
+
+  it('uses an explicit project selection instead of an older saved association', async () => {
+    await saveSession('updated-project', projectA.id);
+    await invoke('session:execute', { sessionId: 'updated-project', prompt: 'continue', projectId: projectB.id });
+
+    const deps = state.executeRun.mock.calls[0][1] as RunDependencies;
+    expect(deps.projectContext.getRoot()).toBe(projectB.root);
+  });
+
+  it('aborts the active run when its session is deleted', async () => {
+    await saveSession('deleted-running', projectA.id);
+    let finish!: () => void;
+    state.executeRun.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { output: 'done' };
+    });
+    const running = invoke('session:execute', { sessionId: 'deleted-running', prompt: 'continue', projectId: projectA.id });
+    const deps = state.executeRun.mock.calls[0][1] as RunDependencies;
+    expect(deps.controller.signal.aborted).toBe(false);
+
+    expect(await invoke('session:delete', 'deleted-running')).toEqual({ success: true });
+    expect(deps.controller.signal.aborted).toBe(true);
+    expect(invoke('session:get', 'deleted-running')).toBeUndefined();
+    finish();
+    await running;
+  });
+});

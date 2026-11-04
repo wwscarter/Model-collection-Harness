@@ -6,6 +6,36 @@ import path from 'node:path';
 import { SessionStorage } from '../../src/core/storage/SessionStorage';
 
 describe('SessionStorage', () => {
+  it('keeps an unsent draft out of the conversation history after saving and reopening', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-draft-session-'));
+    const file = path.join(directory, 'sessions.db');
+    const storage = new SessionStorage(file);
+    const now = new Date();
+    try {
+      const saved = storage.save({ id: 'draft', title: 'New conversation', prompt: 'An unsent draft', output: '', messages: [], createdAt: now, updatedAt: now });
+      expect(saved.messages).toEqual([]);
+      expect(saved.userMessage).toBeUndefined();
+      storage.close();
+      const reopened = new SessionStorage(file);
+      try { expect(reopened.get('draft')).toMatchObject({ prompt: 'An unsent draft', messages: [], output: '' }); }
+      finally { reopened.close(); }
+    } finally {
+      storage.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not resurrect an old answer when an explicit message history is cleared', () => {
+    const storage = new SessionStorage(':memory:');
+    const now = new Date();
+    try {
+      const original = storage.save({ id: 'cleared', title: 'Earlier conversation', prompt: '', userMessage: 'Earlier request', output: 'Earlier answer', createdAt: now, updatedAt: now });
+      storage.save({ ...original, prompt: 'New unsent draft', messages: [] });
+      expect(storage.get('cleared')).toMatchObject({ messages: [], prompt: 'New unsent draft', output: '' });
+      expect(storage.get('cleared')!.userMessage).toBeUndefined();
+    } finally { storage.close(); }
+  });
+
   it('round trips sessions and orders by updated time', () => {
     const storage = new SessionStorage(':memory:');
     const now = new Date('2026-01-01T00:00:00.000Z');

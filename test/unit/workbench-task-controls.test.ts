@@ -3,30 +3,61 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/renderer/App';
-import type { AmdApi } from '../../src/renderer/types';
+import type { AmdApi, ProjectInfo } from '../../src/renderer/types';
 
 let root: Root;
 let container: HTMLDivElement;
 let listeners: Map<string, (payload: unknown) => void>;
 let rejectRun: (error: Error) => void;
+let resolveRun: (result: unknown) => void;
 let save: ReturnType<typeof vi.fn>;
 let execute: ReturnType<typeof vi.fn>;
 let cancel: ReturnType<typeof vi.fn>;
+let remove: ReturnType<typeof vi.fn>;
+let listSessions: ReturnType<typeof vi.fn>;
+let listModels: ReturnType<typeof vi.fn>;
+let openProject: ReturnType<typeof vi.fn>;
+let clearProject: ReturnType<typeof vi.fn>;
+let listProjects: ReturnType<typeof vi.fn>;
+let removeProject: ReturnType<typeof vi.fn>;
+
+const sessionRecord = (id: string, projectId?: string) => ({ id, title: `Conversation ${id}`, prompt: '继续检查', output: '', messages: [], projectId, createdAt: new Date().toISOString() });
+const projectInfo = (id: string): ProjectInfo => ({ id, name: `Project ${id}`, root: `/projects/${id}`, displayRoot: `/projects/${id}`, languages: [], markers: [] });
+const click = async (selector: string) => {
+  await act(async () => { container.querySelector<HTMLButtonElement>(selector)!.click(); });
+};
+const selectSession = async (id: string) => {
+  await act(async () => {
+    [...container.querySelectorAll<HTMLButtonElement>('.session-item .item-main')].find((button) => button.textContent?.includes(`Conversation ${id}`))!.click();
+  });
+};
+const remount = async () => {
+  await act(async () => { root.unmount(); });
+  root = createRoot(container);
+  await act(async () => { root.render(createElement(App)); });
+};
 
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   listeners = new Map();
   save = vi.fn(async (session) => session);
-  execute = vi.fn(() => new Promise((_resolve, reject) => { rejectRun = reject; }));
+  execute = vi.fn(() => new Promise((resolve, reject) => { resolveRun = resolve; rejectRun = reject; }));
   cancel = vi.fn(async () => ({ success: true }));
+  remove = vi.fn(async () => ({ success: true }));
+  listSessions = vi.fn(async () => [sessionRecord('s1')]);
+  listModels = vi.fn(async () => []);
+  openProject = vi.fn(async (id: string) => projectInfo(id));
+  clearProject = vi.fn(async () => ({ success: true }));
+  listProjects = vi.fn(async () => []);
+  removeProject = vi.fn(async () => ({ success: true }));
   window.amd = {
-    models: { list: async () => [] },
+    models: { list: listModels },
     sessions: {
-      list: async () => [{ id: 's1', title: 'Project review', prompt: '继续检查', output: '', messages: [], createdAt: new Date().toISOString() }],
-      save, execute, cancel,
+      list: listSessions,
+      save, execute, cancel, delete: remove,
     },
-    projects: { list: async () => [] },
-    project: { current: async () => undefined },
+    projects: { list: listProjects, open: openProject, remove: removeProject },
+    project: { current: async () => undefined, clear: clearProject },
     on: (channel: string, listener: (payload: unknown) => void) => {
       listeners.set(channel, listener);
       return () => { listeners.delete(channel); };
@@ -79,5 +110,192 @@ describe('workbench task controls', () => {
     expect(execute).not.toHaveBeenCalled();
     expect(container.textContent).toContain('任务已取消');
     expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the next prompt and model preference when the current answer completes', async () => {
+    listModels.mockResolvedValue([{ id: 'next-model', name: 'Next model', modelId: 'next', enabled: true, provider: 'custom' }]);
+    await remount();
+    await click('[aria-label="执行任务"]');
+    const input = container.querySelector<HTMLTextAreaElement>('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '下一轮草稿');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click('[aria-label="切换模型"]');
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>('.model-menu-item')[1].click(); });
+    expect(save.mock.calls.at(-1)![0]).toMatchObject({ prompt: '下一轮草稿', modelId: 'next-model', multiModel: false });
+    await act(async () => { resolveRun({ output: '本轮结果', modelUsed: 'previous-model' }); });
+    expect(input.value).toBe('下一轮草稿');
+    expect(save.mock.calls.at(-1)![0]).toMatchObject({ prompt: '下一轮草稿', modelId: 'next-model', multiModel: false, output: '本轮结果' });
+  });
+
+  it('cancels a deleted running conversation and ignores its late result', async () => {
+    await click('[aria-label="执行任务"]');
+    await click('[aria-label="删除会话"]');
+    expect(cancel).toHaveBeenCalledWith('s1');
+    expect(remove).toHaveBeenCalledWith('s1');
+    const savedBeforeResult = save.mock.calls.length;
+    await act(async () => {
+      listeners.get('session:completed')!({ sessionId: 's1', output: '迟到结果' });
+      resolveRun({ output: '迟到结果' });
+    });
+    expect(save).toHaveBeenCalledTimes(savedBeforeResult);
+    expect(container.textContent).not.toContain('迟到结果');
+    expect(container.querySelector('.brand-notice-dot')).toBeNull();
+  });
+
+  it('waits for an initial save before deletion and never starts the deleted task', async () => {
+    let finishSave!: () => void;
+    save.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSave = resolve; }));
+    await click('[aria-label="执行任务"]');
+    await click('[aria-label="删除会话"]');
+    expect(cancel).toHaveBeenCalledWith('s1');
+    expect(remove).not.toHaveBeenCalled();
+    await act(async () => { finishSave(); });
+    expect(remove).toHaveBeenCalledWith('s1');
+    expect(execute).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it('makes deletion the last storage action when a completion save is already pending', async () => {
+    await click('[aria-label="执行任务"]');
+    let finishSave!: () => void;
+    const actions: string[] = [];
+    save.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSave = () => { actions.push('saved'); resolve(); }; }));
+    remove.mockImplementation(async () => { actions.push('deleted'); return { success: true }; });
+    await act(async () => { resolveRun({ output: '结果' }); });
+    expect(save).toHaveBeenCalledTimes(2);
+    await click('[aria-label="删除会话"]');
+    expect(remove).not.toHaveBeenCalled();
+    await act(async () => { finishSave(); });
+    expect(actions).toEqual(['saved', 'deleted']);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not save a rejected run after its conversation was deleted', async () => {
+    await click('[aria-label="执行任务"]');
+    await click('[aria-label="删除会话"]');
+    await act(async () => { rejectRun(new Error('任务已取消')); });
+    expect(save).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain('任务已取消');
+  });
+
+  it('shows background save failures even when the conversation has no assistant message', async () => {
+    save.mockRejectedValueOnce(new Error('磁盘不可写'));
+    await click('.new-session');
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain('会话保存失败：磁盘不可写');
+    expect(container.querySelector('textarea')).not.toBeNull();
+  });
+
+  it('keeps a newly created conversation selected when history finishes loading', async () => {
+    let finishLoading!: (records: unknown[]) => void;
+    listSessions.mockImplementationOnce(() => new Promise((resolve) => { finishLoading = resolve; }));
+    await remount();
+    await click('.new-session');
+    const created = save.mock.calls.at(-1)![0];
+    await act(async () => { finishLoading([sessionRecord('older')]); });
+    expect(container.querySelector('.topbar-title')!.textContent).toBe('新的工作会话');
+    expect(container.querySelector('.session-item.active')!.textContent).toContain('新的工作会话');
+    expect(container.textContent).toContain('Conversation older');
+    expect(created.id).not.toBe('older');
+  });
+
+  it('restores the conversation and explains a failed deletion', async () => {
+    remove.mockRejectedValueOnce(new Error('数据库暂时忙'));
+    await click('[aria-label="删除会话"]');
+    expect(container.querySelector('.session-item.active')!.textContent).toContain('Conversation s1');
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain('会话删除失败：数据库暂时忙');
+  });
+
+  it('shows the same fallback model that is used when a pinned model is unavailable', async () => {
+    listSessions.mockResolvedValue([{ ...sessionRecord('s1'), multiModel: false, modelId: 'removed' }]);
+    listModels.mockResolvedValue([
+      { id: 'first', name: 'First', modelId: 'first-model', provider: 'custom', enabled: true },
+      { id: 'primary', name: 'Primary', modelId: 'primary-model', provider: 'custom', enabled: true, isPrimary: true },
+    ]);
+    await remount();
+    expect(container.querySelector('[aria-label="切换模型"]')!.textContent).toContain('primary-model');
+    await click('[aria-label="执行任务"]');
+    expect(execute.mock.calls[0][0].pinnedModelId).toBe('primary');
+  });
+});
+
+describe('conversation project selection', () => {
+  it('clears the main selection when opening an unassociated conversation and sends explicit null', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1', 'p1'), sessionRecord('s2')]);
+    await remount();
+    expect(container.querySelector('[aria-label="当前项目：Project p1"]')).not.toBeNull();
+    const clearsBeforeSwitch = clearProject.mock.calls.length;
+    await selectSession('s2');
+    expect(clearProject.mock.calls.length).toBeGreaterThan(clearsBeforeSwitch);
+    expect(container.querySelector('[aria-label="关联本地项目"]')).not.toBeNull();
+    await click('[aria-label="执行任务"]');
+    expect(execute.mock.calls[0][0]).toMatchObject({ sessionId: 's2', projectId: null });
+  });
+
+  it('keeps the submitted project when the current conversation changes during its initial save', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1', 'p1'), sessionRecord('s2', 'p2')]);
+    await remount();
+    let finishSave!: () => void;
+    save.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSave = resolve; }));
+    await click('[aria-label="执行任务"]');
+    await selectSession('s2');
+    await act(async () => { finishSave(); });
+    expect(execute.mock.calls[0][0]).toMatchObject({ sessionId: 's1', projectId: 'p1' });
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).not.toBeNull();
+  });
+
+  it('ignores a slow open response after switching to an unassociated conversation', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1'), sessionRecord('s2', 'p2')]);
+    await remount();
+    let finishOpen!: (project: ProjectInfo) => void;
+    let mainProject: ProjectInfo | undefined;
+    openProject.mockImplementationOnce(() => new Promise<ProjectInfo>((resolve) => { finishOpen = (project) => { mainProject = project; resolve(project); }; }));
+    clearProject.mockImplementation(async () => { mainProject = undefined; return { success: true }; });
+    await selectSession('s2');
+    await selectSession('s1');
+    await act(async () => { finishOpen(projectInfo('p2')); });
+    expect(mainProject).toBeUndefined();
+    expect(container.querySelector('[aria-label="关联本地项目"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).toBeNull();
+  });
+
+  it('clears the old project and file preview when a conversation project cannot be reopened', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1', 'p1'), sessionRecord('s2', 'missing')]);
+    await remount();
+    openProject.mockRejectedValueOnce(new Error('项目记录不存在'));
+    const clearsBeforeSwitch = clearProject.mock.calls.length;
+    await selectSession('s2');
+    expect(clearProject.mock.calls.length).toBeGreaterThanOrEqual(clearsBeforeSwitch + 2);
+    expect(container.querySelector('[aria-label="关联本地项目"]')).not.toBeNull();
+    expect(container.textContent).toContain('项目记录不存在');
+    expect(container.querySelector('[aria-label="当前项目：Project p1"]')).toBeNull();
+  });
+
+  it('preserves a project association changed while a run is in progress', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1', 'p1')]);
+    listProjects.mockResolvedValue([projectInfo('p1'), projectInfo('p2')]);
+    await remount();
+    await click('[aria-label="执行任务"]');
+    await click('.composer-project-main');
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>('.project-menu-item')[1].click(); });
+    await act(async () => { resolveRun({ output: '结果' }); });
+    expect(save.mock.calls.at(-1)![0]).toMatchObject({ projectId: 'p2', projectRoot: '/projects/p2', output: '结果' });
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).not.toBeNull();
+  });
+
+  it('unbinds conversations when their project is removed from the list', async () => {
+    listSessions.mockResolvedValue([sessionRecord('s1', 'p1'), sessionRecord('s2', 'p1')]);
+    listProjects.mockResolvedValue([projectInfo('p1')]);
+    await remount();
+    await click('[aria-label="从列表移除 Project p1"]');
+    expect(removeProject).toHaveBeenCalledWith('p1');
+    expect(save.mock.calls.map(([session]) => ({ id: session.id, projectId: session.projectId }))).toEqual([{ id: 's1', projectId: undefined }, { id: 's2', projectId: undefined }]);
+    expect(container.querySelector('[aria-label="关联本地项目"]')).not.toBeNull();
+    const opensBeforeSwitch = openProject.mock.calls.length;
+    await selectSession('s2');
+    expect(openProject).toHaveBeenCalledTimes(opensBeforeSwitch);
+    await click('[aria-label="执行任务"]');
+    expect(execute.mock.calls[0][0]).toMatchObject({ sessionId: 's2', projectId: null });
   });
 });

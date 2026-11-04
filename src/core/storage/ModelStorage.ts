@@ -216,7 +216,9 @@ export class ModelStorage implements ModelStore {
             api_key: encryptAPIKey(model.apiKey),
             base_url: model.baseURL ?? null,
           });
-      } else {
+      } else if (!model.credentialError) {
+        // A failed decrypt leaves apiKey empty without clearing the saved secret.
+        // Registry updates remove credentialError only for an explicit key edit.
         this.db.prepare("DELETE FROM model_credentials WHERE model_id = ?").run(model.id);
       }
     });

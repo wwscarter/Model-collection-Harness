@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { BROWSER_USER_AGENT, decodeEntities, type FetchLike } from './search/SearchProvider';
+import { awaitWithSignal } from './awaitWithSignal';
 
 export interface WebPage { url: string; title: string; content: string; truncated: boolean; contentType: string; }
 export interface WebFetchOptions { fetchImpl?: FetchLike; resolveHost?: (host: string) => Promise<string[]>; maxBytes?: number; maxChars?: number; timeoutMs?: number; signal?: AbortSignal; }
@@ -156,13 +157,16 @@ export function htmlToText(html: string): { title: string; text: string } {
   };
 }
 
-async function readLimited(response: Response, maxBytes: number): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+async function readLimited(response: Response, maxBytes: number, signal?: AbortSignal): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   if (!response.body) return { bytes: new Uint8Array(), truncated: false };
   const reader = response.body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  signal?.addEventListener('abort', cancel, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
   try {
+    signal?.throwIfAborted();
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -170,7 +174,7 @@ async function readLimited(response: Response, maxBytes: number): Promise<{ byte
       chunks.push(value);
       total += value.byteLength;
     }
-  } finally { await reader.cancel().catch(() => undefined); }
+  } finally { signal?.removeEventListener('abort', cancel); await reader.cancel().catch(() => undefined); }
   const bytes = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
@@ -190,22 +194,23 @@ export async function fetchWebPage(rawUrl: string, options: WebFetchOptions = {}
   const maxChars = options.maxChars ?? 20_000;
   const timeout = AbortSignal.timeout(options.timeoutMs ?? 20_000);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  let url = await assertPublicUrl(rawUrl, resolveHost);
+  signal.throwIfAborted();
+  let url = await awaitWithSignal(assertPublicUrl(rawUrl, resolveHost), signal);
   let response: Response | undefined;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    response = await fetchImpl(url.toString(), { redirect: 'manual', signal, headers: { 'user-agent': BROWSER_USER_AGENT, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8' } });
+    response = await awaitWithSignal(fetchImpl(url.toString(), { redirect: 'manual', signal, headers: { 'user-agent': BROWSER_USER_AGENT, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8' } }), signal);
     if (response.status < 300 || response.status >= 400) break;
     const location = response.headers.get('location');
-    await response.body?.cancel().catch(() => undefined);
+    await awaitWithSignal(response.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
     if (!location) throw new Error(`重定向缺少目标地址（HTTP ${response.status}）`);
     if (hop === MAX_REDIRECTS) throw new Error('重定向次数过多');
-    url = await assertPublicUrl(new URL(location, url).toString(), resolveHost);
+    url = await awaitWithSignal(assertPublicUrl(new URL(location, url).toString(), resolveHost), signal);
   }
   if (!response) throw new Error('请求失败');
   if (!response.ok) throw new Error(`网页返回 HTTP ${response.status}`);
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType && !/text\/|json|xml|javascript/i.test(contentType)) throw new Error(`不支持的内容类型：${contentType.split(';')[0]}`);
-  const { bytes, truncated: byteTruncated } = await readLimited(response, maxBytes);
+  const { bytes, truncated: byteTruncated } = await awaitWithSignal(readLimited(response, maxBytes, signal), signal);
   const raw = new TextDecoder(charsetOf(contentType)).decode(bytes);
   const isHtml = /html|xml/i.test(contentType) || /^\s*<(!doctype|html)/i.test(raw);
   const { title, text } = isHtml ? htmlToText(raw) : { title: '', text: raw.trim() };

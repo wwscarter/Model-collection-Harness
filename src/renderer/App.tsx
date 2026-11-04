@@ -20,7 +20,7 @@ import { completeSessionMetrics, restoreRouteConfidence, type SessionRunTiming }
 
 interface Session extends SessionSummary { prompt: string; userMessage?: string; output: string; messages: ChatMessage[]; modelUsed?: string; runId?: string; routeConfidence?: number; metrics?: SessionMetrics; audit?: { passed: boolean; score: number; issueCount: number }; auditResult?: { passed: boolean; score: number; issueCount: number }; taskType?: string; rating?: number; multiModel?: boolean; modelId?: string; projectId?: string; projectRoot?: string; updatedAt?: Date; }
 
-const starterSession = (): Session => ({ id: `session-${Date.now()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], multiModel: true, createdAt: new Date() });
+const starterSession = (): Session => ({ id: `session-${crypto.randomUUID()}`, title: '新的工作会话', prompt: '', userMessage: '', output: '', messages: [], multiModel: true, createdAt: new Date() });
 const formatDuration = (value?: number) => value === undefined || !Number.isFinite(value) ? undefined : value < 1000 ? Math.round(value) + ' ms' : (value / 1000).toFixed(1) + ' s';
 
 export default function App() {
@@ -33,8 +33,27 @@ export default function App() {
     sessionsRef.current = next;
     setSessionsState(next);
   };
+  const deletedSessionIdsRef = useRef(new Set<string>());
+  const pendingSessionSavesRef = useRef(new Map<string, Set<Promise<unknown>>>());
+  const saveSession = (session: Session): Promise<unknown> => {
+    if (deletedSessionIdsRef.current.has(session.id)) return Promise.resolve();
+    const pending = Promise.resolve().then(() => {
+      if (!deletedSessionIdsRef.current.has(session.id)) return window.amd?.sessions.save(session);
+    });
+    const saves = pendingSessionSavesRef.current.get(session.id) ?? new Set<Promise<unknown>>();
+    saves.add(pending);
+    pendingSessionSavesRef.current.set(session.id, saves);
+    const settled = () => {
+      saves.delete(pending);
+      if (!saves.size) pendingSessionSavesRef.current.delete(session.id);
+    };
+    void pending.then(settled, settled);
+    return pending;
+  };
   const cancelRequestedRef = useRef(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const currentSessionIdRef = useRef(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -46,6 +65,9 @@ export default function App() {
   const [completionNotice, setCompletionNotice] = useState(false);
   const [projectList, setProjectList] = useState<ProjectRecord[]>([]);
   const [currentProject, setCurrentProject] = useState<ProjectInfo>();
+  const currentProjectRef = useRef<ProjectInfo | undefined>(undefined);
+  const projectRequestIdRef = useRef(0);
+  const projectQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [projectError, setProjectError] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
   const [approvalMode, setApprovalMode] = useState<'ask' | 'auto' | 'full'>('ask');
@@ -56,6 +78,11 @@ export default function App() {
   const [liveTrace, setLiveTrace] = useState<RunTrace>();
   const currentRunIdRef = useRef<string | undefined>(undefined);
   const [sessionError, setSessionError] = useState<{ sessionId: string; message: string } | null>(null);
+  const persistSession = (session: Session) => {
+    void saveSession(session).catch((cause) => {
+      if (!deletedSessionIdsRef.current.has(session.id)) setSessionError({ sessionId: session.id, message: `会话保存失败：${errorMessage(cause)}` });
+    });
+  };
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const includeProjectContext = true;
   const workspaceContentRef = useRef<HTMLDivElement | null>(null);
@@ -117,11 +144,12 @@ export default function App() {
   }, [currentSessionId]);
 
   useEffect(() => {
+    let active = true;
     // 预加载模型列表，避免第一次执行时的延迟
     const loadModels = async () => {
       try {
         const modelList = await window.amd?.models.list();
-        if (modelList) setModels(modelList);
+        if (active && modelList) setModels(modelList);
       } catch (error) {
         console.error('Failed to load models:', error);
       }
@@ -130,6 +158,7 @@ export default function App() {
     if (!window.amd) setCurrentSessionId(sessions[0]?.id || null);
 
     void window.amd?.sessions.list().then((records) => {
+      if (!active) return;
       const restored = records.map((record) => ({
         id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record),
         modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, runId: record.runId ? String(record.runId) : undefined, metrics: record.metrics as SessionMetrics | undefined,
@@ -140,9 +169,21 @@ export default function App() {
         rating: typeof record.rating === 'number' ? record.rating : undefined,
         createdAt: new Date(String(record.createdAt)), updatedAt: new Date(String(record.updatedAt || record.createdAt)),
       }));
-      if (restored.length) { setSessions(restored); setCurrentSessionId(restored[0].id); }
-      else setCurrentSessionId(sessions[0]?.id || null);
-    }).catch(() => setCurrentSessionId(sessions[0]?.id || null));
+      const localIds = new Set(sessionsRef.current.map((session) => session.id));
+      const hasLocalChanges = currentSessionIdRef.current !== null || deletedSessionIdsRef.current.size > 0;
+      const available = restored.filter((session) => !deletedSessionIdsRef.current.has(session.id));
+      const next = hasLocalChanges ? [...sessionsRef.current, ...available.filter((session) => !localIds.has(session.id))] : available.length ? available : sessionsRef.current;
+      setSessions(next);
+      if (!currentSessionIdRef.current) {
+        currentSessionIdRef.current = next[0]?.id || null;
+        setCurrentSessionId(currentSessionIdRef.current);
+      }
+    }).catch((cause) => {
+      if (!active) return;
+      const id = currentSessionIdRef.current ?? sessionsRef.current[0]?.id ?? null;
+      currentSessionIdRef.current = id; setCurrentSessionId(id);
+      if (id) setSessionError({ sessionId: id, message: `会话读取失败：${errorMessage(cause)}` });
+    });
     const unsubscribeChunk = window.amd?.on('session:chunk', (payload) => {
       const event = payload as { sessionId?: string; taskId?: string; delta?: string };
       const id = event.sessionId || event.taskId;
@@ -215,7 +256,7 @@ export default function App() {
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
       const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
       const id = event.sessionId || event.taskId;
-      if (!id) return;
+      if (!id || deletedSessionIdsRef.current.has(id)) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
       const metrics = withRunTiming(event.metrics, id, event.decision?.confidence, Boolean(event.output));
       setSessions((existing) => existing.map((session) => {
@@ -226,7 +267,7 @@ export default function App() {
       }));
       setCompletionNotice(true);
     });
-    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
+    return () => { active = false; unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
   }, []);
 
   const refreshProjects = async () => {
@@ -234,49 +275,71 @@ export default function App() {
   };
   useEffect(() => {
     void refreshProjects();
-    void window.amd?.project.current().then(setCurrentProject).catch(() => undefined);
   }, []);
   useEffect(() => {
     void window.amd?.preferences?.get().then((value) => setApprovalMode(value.approvalMode)).catch(() => undefined);
   }, [showSettings]);
-  const applyProject = (project: ProjectInfo | undefined) => { setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); void refreshProjects(); };
-  const bindSessionProject = (project: ProjectInfo) => {
-    if (!currentSession) return;
+  const applyProject = (project: ProjectInfo | undefined) => { currentProjectRef.current = project; setCurrentProject(project); setProjectReloadKey((key) => key + 1); setProjectError(null); setOpenFiles([]); setActiveFilePath(undefined); };
+  const queueProjectOperation = <T,>(operation: () => Promise<T>): Promise<T> => {
+    const pending = projectQueueRef.current.then(operation, operation);
+    projectQueueRef.current = pending.catch(() => undefined);
+    return pending;
+  };
+  const bindSessionProject = (sessionId: string | null, project: ProjectInfo) => {
+    const session = sessionsRef.current.find((candidate) => candidate.id === sessionId);
+    if (!session || deletedSessionIdsRef.current.has(session.id)) return;
     const patch: Partial<Session> = { projectId: project.id, projectRoot: project.root, updatedAt: new Date() };
-    updateCurrent(patch);
-    void window.amd?.sessions.save({ ...currentSession, ...patch });
+    setSessions((existing) => existing.map((candidate) => candidate.id === session.id ? { ...candidate, ...patch } : candidate));
+    persistSession({ ...session, ...patch });
   };
-  const openProject = async (id: string) => {
-    if (!window.amd) return;
-    try {
-      const project = await window.amd.projects.open(id);
-      applyProject(project);
-      bindSessionProject(project);
-      setView('workspace');
-      // Clicking a project is an explicit request for its files; reveal the tree
-      // so the active association is visible even though it is hidden by default.
-      setProjectDrawerOpen(true);
-    } catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
+  const selectProject = (id: string | undefined, sessionId: string | null, bind = false, reveal = false) => {
+    const requestId = ++projectRequestIdRef.current;
+    applyProject(undefined);
+    return queueProjectOperation(async () => {
+      const isCurrent = () => requestId === projectRequestIdRef.current && sessionId === currentSessionIdRef.current;
+      if (!isCurrent() || !window.amd) return;
+      try {
+        // Serialize mutations of the main-process selection. A late open must
+        // finish before the next session clears or replaces that selection.
+        await window.amd.project.clear();
+        if (!isCurrent()) return;
+        const project = id ? await window.amd.projects.open(id) : undefined;
+        if (!isCurrent()) return;
+        applyProject(project);
+        if (bind && project) bindSessionProject(sessionId, project);
+        if (reveal) { setView('workspace'); setProjectDrawerOpen(true); }
+        void refreshProjects();
+      } catch (cause) {
+        await window.amd.project.clear().catch(() => undefined);
+        if (!isCurrent()) return;
+        applyProject(undefined);
+        const message = errorMessage(cause);
+        setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message);
+      }
+    });
   };
-  const associateProject = async (id: string) => {
-    if (!window.amd) return;
-    try { const project = await window.amd.projects.open(id); applyProject(project); bindSessionProject(project); }
-    catch (cause) { setProjectError(errorMessage(cause)); }
-  };
+  const openProject = (id: string) => selectProject(id, currentSessionIdRef.current, true, true);
+  const associateProject = (id: string) => selectProject(id, currentSessionIdRef.current, true);
   const removeProject = async (id: string) => {
     try {
-      await window.amd?.projects.remove(id);
-      if (currentProject?.id === id) { setCurrentProject(undefined); setOpenFiles([]); setActiveFilePath(undefined); }
+      await queueProjectOperation(async () => window.amd?.projects.remove(id));
+      const affected = sessionsRef.current.filter((session) => session.projectId === id);
+      setSessions((existing) => existing.map((session) => session.projectId === id ? { ...session, projectId: undefined, projectRoot: undefined } : session));
+      for (const session of affected) persistSession({ ...session, projectId: undefined, projectRoot: undefined, updatedAt: new Date() });
+      if (currentProjectRef.current?.id === id) applyProject(undefined);
       setProjectError(null);
       void refreshProjects();
     } catch (cause) { setProjectError(errorMessage(cause)); }
   };
-  const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); applyProject(project); bindSessionProject(project); setProjectDrawerOpen(true); };
+  const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); void selectProject(project.id, currentSessionIdRef.current, true, true); };
   const initGit = async () => {
     if (!window.amd || !currentProject) return;
+    const requestId = projectRequestIdRef.current;
     setGitBusy(true); setProjectError(null);
     try {
-      const project = await window.amd.project.initGit();
+      const project = await queueProjectOperation(async () => requestId === projectRequestIdRef.current ? window.amd!.project.initGit() : undefined);
+      if (!project || requestId !== projectRequestIdRef.current) return;
+      currentProjectRef.current = project;
       setCurrentProject(project);
       setProjectReloadKey((key) => key + 1);
       await refreshProjects();
@@ -284,13 +347,9 @@ export default function App() {
     finally { setGitBusy(false); }
   };
   useEffect(() => {
-    if (!currentSession) return;
-    if (!currentSession.projectId) { setCurrentProject(undefined); return; }
-    if (currentProject?.id === currentSession.projectId) return;
-    let active = true;
-    void window.amd?.projects.open(currentSession.projectId).then((project) => { if (active) applyProject(project); }).catch((cause) => { if (active) setProjectError(errorMessage(cause)); });
-    return () => { active = false; };
-  }, [currentSessionId]);
+    if (currentSession?.projectId && currentProjectRef.current?.id === currentSession.projectId) return;
+    void selectProject(currentSession?.projectId, currentSessionId);
+  }, [currentSessionId, currentSession?.projectId]);
 
   const updateCurrent = (patch: Partial<Session>) => setSessions((existing) => existing.map((session) => session.id === currentSessionId ? { ...session, ...patch } : session));
   const openFile = (path: string) => {
@@ -311,26 +370,30 @@ export default function App() {
     promptBeforeEditingRef.current = '';
     setEditingMessageId(null);
   };
-  const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); setCurrentSessionId(id); setView('workspace'); };
+  const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); currentSessionIdRef.current = id; setCurrentSessionId(id); setView('workspace'); };
   const newSession = () => {
     if (editingMessageId) cancelMessageEdit();
-    const session: Session = { ...starterSession(), projectId: currentProject?.id, projectRoot: currentProject?.root };
+    const session: Session = { ...starterSession(), projectId: currentSession?.projectId ?? currentProject?.id, projectRoot: currentSession?.projectRoot ?? currentProject?.root };
     setSessions((existing) => [session, ...existing]);
+    currentSessionIdRef.current = session.id;
     setCurrentSessionId(session.id);
     setView('workspace');
     setProjectDrawerOpen(false);
     setOpenFiles([]);
     setActiveFilePath(undefined);
     setSessionError(null);
-    void window.amd?.sessions.save({ ...session, updatedAt: new Date() });
+    persistSession({ ...session, updatedAt: new Date() });
   };
   const enabledModelOptions = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
   const defaultSessionModelId = enabledModelOptions.find((model) => model.isPrimary)?.id ?? enabledModelOptions[0]?.id;
+  const selectedSessionModelId = enabledModelOptions.some((model) => model.id === currentSession?.modelId) ? currentSession?.modelId : defaultSessionModelId;
   const saveSessionPreference = (patch: Partial<Session>) => {
     if (!currentSession) return;
-    const next = { ...currentSession, ...patch };
+    const latest = sessionsRef.current.find((session) => session.id === currentSession.id);
+    if (!latest || deletedSessionIdsRef.current.has(latest.id)) return;
+    const next = { ...latest, ...patch };
     updateCurrent(patch);
-    void window.amd?.sessions.save({ ...next, updatedAt: new Date() });
+    persistSession({ ...next, updatedAt: new Date() });
   };
   const toggleMultiModel = () => {
     if (!currentSession) return;
@@ -338,14 +401,37 @@ export default function App() {
     saveSessionPreference({ multiModel, ...(multiModel ? {} : { modelId: currentSession.modelId ?? defaultSessionModelId }) });
   };
   const selectSessionModel = (modelId: string) => saveSessionPreference({ modelId, multiModel: false });
-  const deleteSession = (id: string) => { if (editingMessageId && currentSessionId === id) cancelMessageEdit(); const remaining = sessions.filter((session) => session.id !== id); setSessions(remaining); if (currentSessionId === id) setCurrentSessionId(remaining[0]?.id || null); void window.amd?.sessions.delete(id); };
+  const deleteSession = async (id: string) => {
+    const deleted = sessionsRef.current.find((session) => session.id === id);
+    deletedSessionIdsRef.current.add(id);
+    if (editingMessageId && currentSessionId === id) cancelMessageEdit();
+    const remaining = sessionsRef.current.filter((session) => session.id !== id);
+    setSessions(remaining);
+    if (currentSessionIdRef.current === id) {
+      currentSessionIdRef.current = remaining[0]?.id || null;
+      setCurrentSessionId(currentSessionIdRef.current);
+    }
+    if (runningSessionId === id) {
+      cancelRequestedRef.current = true;
+      void window.amd?.sessions.cancel(id).catch(() => undefined);
+    }
+    // A save already sent over IPC may finish after the user clicks delete.
+    // Drain those writes first so deletion is always the final storage action.
+    try {
+      await Promise.allSettled([...(pendingSessionSavesRef.current.get(id) ?? [])]);
+      await window.amd?.sessions.delete(id);
+    } catch (cause) {
+      deletedSessionIdsRef.current.delete(id);
+      if (deleted) setSessions((existing) => existing.some((session) => session.id === id) ? existing : [deleted, ...existing]);
+      if (!currentSessionIdRef.current) { currentSessionIdRef.current = id; setCurrentSessionId(id); }
+      setSessionError({ sessionId: id, message: `会话删除失败：${errorMessage(cause)}` });
+    }
+  };
   const handleModelsChanged = (nextModels: ModelConfig[]) => setModels(nextModels);
   const execute = async () => {
     // Enter bypasses the disabled send button, so guard here too.
-    if (!currentSession || !currentSession.prompt.trim() || isLoading) return;
-    const enabledModels = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
-    const defaultModel = enabledModels.find((model) => model.isPrimary) ?? enabledModels[0];
-    const pinnedModelId = currentSession.multiModel === false ? (currentSession.modelId && enabledModels.some((model) => model.id === currentSession.modelId) ? currentSession.modelId : defaultModel?.id) : undefined;
+    if (!currentSession || !currentSession.prompt.trim() || isLoading || deletedSessionIdsRef.current.has(currentSession.id)) return;
+    const pinnedModelId = currentSession.multiModel === false ? selectedSessionModelId : undefined;
     if (currentSession.multiModel === false && !pinnedModelId) { setSessionError({ sessionId: currentSession.id, message: '请先在设置中启用一个可用模型。' }); return; }
     const prompt = currentSession.prompt.trim();
     const runId = crypto.randomUUID();
@@ -369,11 +455,13 @@ export default function App() {
     setSessions((existing) => existing.map((session) => session.id === currentSession.id ? submittedSession : session));
     try {
       if (!window.amd) throw new Error('主进程尚未连接，请在 Electron 中运行应用。');
-      await window.amd.sessions.save(submittedSession);
+      await saveSession(submittedSession);
+      if (deletedSessionIdsRef.current.has(currentSession.id)) return;
       if (cancelRequestedRef.current) throw new Error('任务已取消');
       // 流式执行，不等待完全完成 - 由事件监听器处理结果
       const result = await window.amd.sessions.execute({
         sessionId: currentSession.id,
+        projectId: currentSession.projectId ?? null,
         taskId: currentSession.id,
         runId,
         assistantMessageId: `${messageId}-assistant`,
@@ -385,18 +473,22 @@ export default function App() {
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
         history: historyForModel(messages.slice(0, -2)),
       });
+      if (deletedSessionIdsRef.current.has(currentSession.id)) return;
+      const latestSession = sessionsRef.current.find((session) => session.id === currentSession.id);
+      if (!latestSession) return;
       const raw = result as any;
       const modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed : raw.modelUsed?.id || raw.modelUsed?.name;
       const output = String(raw.output || '');
       const metrics = withRunTiming(raw.metrics, currentSession.id, raw.decision?.confidence, Boolean(output));
-      let completedMessages = updateLatestAssistantContent(messages, output, modelUsed, raw.planningModelId);
+      let completedMessages = updateLatestAssistantContent(latestSession.messages, output, modelUsed, raw.planningModelId);
       const elapsedMs = metrics?.latencyMs ?? (runTimingRef.current?.sessionId === currentSession.id ? performance.now() - runTimingRef.current.startedAt : undefined);
       if (elapsedMs !== undefined) completedMessages = setLatestAssistantDuration(completedMessages, elapsedMs);
       const persistedMessages = stripAssistantProcess(completedMessages);
-      const completedSession: Session = { ...submittedSession, messages: persistedMessages, output, modelUsed, runId: raw.runId ?? runId, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
+      const completedSession: Session = { ...latestSession, messages: persistedMessages, output, modelUsed, runId: raw.runId ?? runId, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
-      await window.amd.sessions.save(completedSession);
+      await saveSession(completedSession);
     } catch (cause) {
+      if (deletedSessionIdsRef.current.has(currentSession.id)) return;
       setSessionError({ sessionId: currentSession.id, message: errorMessage(cause) });
       const latestSession = sessionsRef.current.find((session) => session.id === currentSession.id);
       if (latestSession) {
@@ -406,7 +498,7 @@ export default function App() {
         });
         const failedSession: Session = { ...latestSession, runId, messages: stripAssistantProcess(settledMessages), updatedAt: new Date() };
         setSessions((existing) => existing.map((session) => session.id === currentSession.id ? failedSession : session));
-        try { await window.amd?.sessions.save(failedSession); }
+        try { await saveSession(failedSession); }
         catch (saveError) { setSessionError({ sessionId: currentSession.id, message: `${errorMessage(cause)}（会话保存失败：${errorMessage(saveError)}）` }); }
       }
     } finally {
@@ -475,19 +567,19 @@ export default function App() {
                 {live && !!message.tools?.length && <ToolCallList tools={message.tools} />}
                 <OutputView content={message.content} loading={live && Boolean(message.content)} emptyState={false} />
                 {live && !!message.agents?.length && <section className="agent-board" aria-label="并行子智能体报告"><div className="agent-board-heading"><UsersRound size={15} /><strong>子智能体报告</strong><span>{message.agents.filter((agent) => agent.status === 'completed').length}/{message.agents.length} 完成</span></div>{message.agents.map((agent) => <div className="agent-report" key={agent.id}><header><strong>{agent.modelName}</strong><span className={`agent-status ${agent.status}`}>{({ queued: '等待中', running: '分析中', completed: '已完成', failed: '失败' })[agent.status]}</span></header>{agent.content ? <OutputView content={agent.content} loading={agent.status === 'running'} emptyState={false} /> : agent.status === 'running' ? <p className="agent-placeholder">正在独立分析…</p> : null}{agent.error && <div className="agent-error">{agent.error}</div>}</div>)}</section>}
-                {error && index === currentSession.messages.length - 1 && <div className="error-banner">{error}</div>}
               </article>
             </div>;
           }) : <WorkbenchWelcome onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => setShowNewProject(true)} />}
+          {error && <div className="error-banner" role="alert">{error}</div>}
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        project={currentProject} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} activeFilePath={activeFilePath} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onCancelEdit={cancelMessageEdit}
         multiModel={currentSession.multiModel !== false}
-        pinnedModelId={currentSession.multiModel === false ? (currentSession.modelId ?? defaultSessionModelId) : undefined}
+        pinnedModelId={currentSession.multiModel === false ? selectedSessionModelId : undefined}
         models={enabledModelOptions}
         onToggleMultiModel={toggleMultiModel}
         onSelectModel={selectSessionModel}

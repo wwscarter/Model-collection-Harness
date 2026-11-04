@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
-import { buildOrchestratorPrompt, parseOrchestratorPlan, selectOrchestratorModel } from '../../src/core/routing/Orchestrator';
+import { buildOrchestratorPrompt, buildSubagentInstruction, parseOrchestratorPlan, selectOrchestratorModel } from '../../src/core/routing/Orchestrator';
 
 function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
   return {
@@ -27,6 +27,12 @@ describe('DeepSeek orchestrator', () => {
     expect(prompt).toContain('JSON only');
   });
 
+  it('preserves requirements at the end of a long task in planning and subagent prompts', () => {
+    const task = 'Project requirement '.repeat(1000) + 'Final requirement: keep existing file names.';
+    expect(buildOrchestratorPrompt({ prompt: task, availableModels: [], orchestratorId: 'lead' })).toContain(task);
+    expect(buildSubagentInstruction(task, { modelId: 'analyst', role: 'analysis', instruction: 'Review the requirements.' })).toContain(task);
+  });
+
   it('parses and filters a valid delegate plan', () => {
     const models = [model('deepseek', { provider: 'deepseek' }), model('reviewer'), model('disabled', { enabled: false })];
     const plan = parseOrchestratorPlan(JSON.stringify({
@@ -49,5 +55,19 @@ describe('DeepSeek orchestrator', () => {
     const verify = parseOrchestratorPlan(JSON.stringify({ mode: 'verify', subagents: [] }), models, 'deepseek');
     expect(verify?.mode).toBe('verify');
     expect(verify?.verify).toBe(true);
+  });
+
+  it('keeps direct plans free of subagent invocations even when extra assignments are returned', () => {
+    const models = [model('deepseek', { provider: 'deepseek' }), model('reviewer')];
+    const plan = parseOrchestratorPlan(JSON.stringify({ mode: 'direct', subagents: [{ modelId: 'reviewer', instruction: 'Review the API.' }] }), models, 'deepseek');
+    expect(plan).toMatchObject({ mode: 'direct', subagents: [] });
+  });
+
+  it('does not let an empty duplicate assignment hide a later valid assignment', () => {
+    const models = [model('deepseek', { provider: 'deepseek' }), model('reviewer')];
+    const plan = parseOrchestratorPlan(JSON.stringify({ mode: 'delegate', subagents: [
+      { modelId: 'reviewer', instruction: '' }, { modelId: 'reviewer', instruction: 'Review the API.' },
+    ] }), models, 'deepseek');
+    expect(plan?.subagents).toMatchObject([{ modelId: 'reviewer', instruction: 'Review the API.' }]);
   });
 });
