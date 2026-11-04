@@ -58,7 +58,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
 
   return <section className="monitoring-page" aria-label="运行监测">
     <header className="monitoring-header">
-      <div><div className="eyebrow">OBSERVABILITY</div><h1>运行监测</h1><p>只保留判断运行质量所需的指标；调用链、成本与失败原因集中在右侧。</p></div>
+      <div><h1>运行监测</h1><p>只保留判断运行质量所需的指标；调用链、成本与失败原因集中在右侧。</p></div>
       <div className="monitoring-actions"><div className="monitoring-range" role="group" aria-label="统计范围">{([['24h', '24 小时'], ['7d', '7 天'], ['30d', '30 天']] as Array<[Range, string]>).map(([value, label]) => <button key={value} className={range === value ? 'active' : ''} onClick={() => setRange(value)}>{label}</button>)}</div><button className="icon-button" title="刷新" aria-label="刷新运行监测" onClick={() => void load()}><RefreshCw size={15} className={loading ? 'spinning' : ''} /></button></div>
     </header>
 

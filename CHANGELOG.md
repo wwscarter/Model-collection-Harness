@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.4 — 2026-11-04
+
+### UI
+
+- Moved to an immersive workspace: global top bar with centered session title and multi-file tabs, borderless sidebar with brand/bell/search toolbar, simplified composer, and a horizontal code-preview + file-tree right panel with filtering, line numbers and monochrome syntax highlighting.
+- Removed project info cards, uppercase labels, shortcuts, terminal entry points and redundant preview controls from the main workspace.
+
 ## 0.0.3 — 2026-11-04
 
 ### Security
