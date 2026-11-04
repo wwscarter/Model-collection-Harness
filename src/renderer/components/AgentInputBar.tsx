@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, X } from 'lucide-react';
-import type { ModelConfig, ProjectInfo } from '../types';
+import type { ModelConfig, ProjectInfo, ProjectRecord } from '../types';
 
 interface AgentInputBarProps {
   value: string;
@@ -13,6 +13,8 @@ interface AgentInputBarProps {
   pinnedModelId?: string;
   models: ModelConfig[];
   project?: ProjectInfo;
+  projects: ProjectRecord[];
+  onSelectProject: (id: string) => void;
   gitBusy: boolean;
   onInitGit: () => void;
   approvalMode: 'ask' | 'auto' | 'full';
@@ -23,7 +25,6 @@ interface AgentInputBarProps {
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
   onStop: () => void;
-  onOpenContext: () => void;
   onCancelEdit: () => void;
 }
 
@@ -34,20 +35,22 @@ const QUICK_COMMANDS = [
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onOpenContext, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, projects, onSelectProject, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!menuOpen && !quickOpen) return;
+    if (!menuOpen && !quickOpen && !projectMenuOpen) return;
     const close = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
       if (!event.target.closest('.model-menu, .model-menu-trigger')) setMenuOpen(false);
       if (!event.target.closest('.quick-menu, .quick-menu-trigger')) setQuickOpen(false);
+      if (!event.target.closest('.project-menu, .project-menu-trigger')) setProjectMenuOpen(false);
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [menuOpen, quickOpen]);
+  }, [menuOpen, quickOpen, projectMenuOpen]);
   const insertCommand = (promptText: string) => {
     onChange(value.trim() ? value.replace(/\s*$/, '') + '\n\n' + promptText : promptText);
     setQuickOpen(false);
@@ -59,7 +62,10 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
     <div className="prompt-card">
       {editing && <div className="prompt-editing-bar"><span>编辑消息 · 重新发送后将生成新的回复</span><button className="message-icon-button" title="取消编辑" aria-label="取消编辑" onClick={onCancelEdit}><X size={15} /></button></div>}
       <div className="composer-contextbar">
-        <button className="composer-project-main" title={project?.root || '关联本地项目'} aria-label={project ? '当前项目：' + project.name : '关联本地项目'} onClick={onOpenContext}>{project ? <Folder size={13} strokeWidth={1.7} /> : <FolderPlus size={13} strokeWidth={1.7} />}<span>{project?.name || '关联项目'}</span></button>
+        <div className="composer-project-wrap">
+          <button className="composer-project-main project-menu-trigger" title={project?.root || '关联本地项目'} aria-label={project ? '当前项目：' + project.name : '关联本地项目'} aria-expanded={projectMenuOpen} onClick={() => setProjectMenuOpen((open) => !open)}>{project ? <Folder size={13} strokeWidth={1.7} /> : <FolderPlus size={13} strokeWidth={1.7} />}<span>{project?.name || '关联项目'}</span><ChevronDown size={10} className={projectMenuOpen ? 'is-open' : ''} /></button>
+          {projectMenuOpen && <div className="project-menu" role="menu" aria-label="选择关联项目">{projects.map((item) => <button key={item.id} className={'project-menu-item ' + (project?.id === item.id ? 'is-active' : '')} role="menuitemradio" aria-checked={project?.id === item.id} title={item.displayRoot} onClick={() => { onSelectProject(item.id); setProjectMenuOpen(false); }}><Folder size={12} strokeWidth={1.7} /><span>{item.name}</span>{project?.id === item.id && <Check size={12} />}</button>)}{!projects.length && <div className="project-menu-empty">还没有项目，请在左侧「本地项目」中新建</div>}<div className="project-menu-hint">选择当前会话使用的项目</div></div>}
+        </div>
         {project && (project.git ? <span className="composer-git-state" title={project.git.branch || project.git.head || 'Git'}><GitBranch size={12} strokeWidth={1.7} />{project.git.branch || 'Git'}</span>
           : <button className="composer-git-create" disabled={gitBusy} onClick={onInitGit}>{gitBusy ? <LoaderCircle size={12} className="spinning" /> : null}{gitBusy ? '创建中…' : '创建 Git 存储库'}</button>)}
       </div>

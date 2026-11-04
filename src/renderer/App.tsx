@@ -250,6 +250,11 @@ export default function App() {
       setProjectDrawerOpen(true);
     } catch (cause) { const message = errorMessage(cause); setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message); }
   };
+  const associateProject = async (id: string) => {
+    if (!window.amd) return;
+    try { applyProject(await window.amd.projects.open(id)); }
+    catch (cause) { setProjectError(errorMessage(cause)); }
+  };
   const removeProject = async (id: string) => {
     try {
       await window.amd?.projects.remove(id);
@@ -461,10 +466,10 @@ export default function App() {
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        project={currentProject} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
-        onOpenContext={() => currentProject ? setProjectDrawerOpen(true) : setShowNewProject(true)} onCancelEdit={cancelMessageEdit}
+        onCancelEdit={cancelMessageEdit}
         multiModel={currentSession.multiModel !== false}
         pinnedModelId={currentSession.multiModel === false ? (currentSession.modelId ?? defaultSessionModelId) : undefined}
         models={enabledModelOptions}

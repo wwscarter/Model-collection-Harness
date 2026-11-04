@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, FileCode, Folder, FolderPlus, ShieldCheck, Plus, RefreshCw, X } from 'lucide-react';
+import { Check, Folder, FolderPlus, Plus, RefreshCw, X } from 'lucide-react';
 import type { ProjectInfo } from '../types';
 import { errorMessage } from '../format';
 
@@ -58,12 +58,6 @@ export function NewProjectDialog({ onClose, onCreated }: NewProjectDialogProps) 
           {picked ? <div className="directory-row"><div className="directory-path mono" title={picked.root}><Folder size={15} /><span>{picked.displayRoot}</span></div><button className="button outline" onClick={() => void pick()}><RefreshCw size={13} />更换文件夹</button></div>
             : <button className="directory-picker" onClick={() => void pick()}><Folder size={15} />选择本地文件夹…</button>}
         </div>
-        {picked && <div className="detection-card">
-          <div className="detection-row">
-            <span className="detection-left"><FileCode size={13} />{picked.languages.length ? <>检测到 <strong>{picked.languages.join(' / ')}</strong> 项目</> : '未识别到常见项目清单文件'}</span>
-            <span className="detection-right"><ShieldCheck size={12} />修改与执行需确认</span>
-          </div>
-        </div>}
         {error && <div className="error-banner" role="alert">{error}</div>}
       </div>
       <footer className="dialog-footer">
