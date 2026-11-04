@@ -15,6 +15,7 @@ import { AgentRouter } from '@core/routing/AgentRouter';
 import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { shouldFallback } from '@core/routing/Fallback';
+import { buildExecutionPlan, chooseRevisionModel } from '@core/agent/RunOrchestrator';
 import { BudgetExceededError, RunBudget } from '@core/routing/RunBudget';
 import { buildRevisionPrompt, hasCode, shouldRevise, verifyCodeAnswer } from '@core/agent/VerificationService';
 import { createProvider, type ModelResponse } from '@core/providers/ModelProvider';
@@ -397,23 +398,14 @@ function registerHandlers(): void {
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
       const model = registry.getModel(decision.modelId);
       if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
-      if (!collaboratorModels.length && (decision.collaboratorModelIds?.length || decision.strategy === 'parallel')) {
-        const requested = decision.collaboratorModelIds?.length
-          ? decision.collaboratorModelIds
-          : registry.getEnabledModels()
-            .filter((candidate) => candidate.id !== model.id && candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate))
-            .sort((a, b) => (a.costPer1kTokens.input + a.costPer1kTokens.output) - (b.costPer1kTokens.input + b.costPer1kTokens.output) || a.priority - b.priority)
-            .slice(0, 2)
-            .map((candidate) => candidate.id);
-        for (const id of requested) {
-          const candidate = registry.getModel(id);
-          if (!candidate || candidate.id === model.id || !candidate.enabled || !hasUsableCredentials(candidate) || !modelQuota.isAvailable(candidate)) continue;
-          if (collaboratorModels.some((entry) => entry.id === candidate.id)) continue;
-          collaboratorModels.push(candidate);
-          if (collaboratorModels.length >= 4) break;
-        }
-        if (collaboratorModels.length === 1) collaboratorModels.length = 0;
-      }
+      const executionPlan = buildExecutionPlan({
+        primary: model,
+        decision,
+        models: registry.getAllModels(),
+        requestedCollaborators: collaboratorModels,
+        isAvailable: (modelId) => { const candidate = registry.getModel(modelId); return Boolean(candidate && modelQuota.isAvailable(candidate)); },
+      });
+      collaboratorModels.splice(0, collaboratorModels.length, ...executionPlan.collaborators);
       const storedSummary = sessionStorage.getSummary(sessionId);
       const contextAssembly = assembleContext({
         history,
@@ -523,12 +515,7 @@ function registerHandlers(): void {
         }
       }
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: model.id, role: 'execution', planningModelId });
-      const executionCandidates: ModelConfig[] = [];
-      for (const candidateId of [model.id, ...(decision.fallbackModels ?? [])]) {
-        const candidate = registry.getModel(candidateId);
-        if (!candidate || !candidate.enabled || !hasUsableCredentials(candidate) || !modelQuota.isAvailable(candidate)) continue;
-        if (!executionCandidates.some((entry) => entry.id === candidate.id)) executionCandidates.push(candidate);
-      }
+      const executionCandidates = executionPlan.candidates;
       if (!executionCandidates.length) throw new Error('没有可执行的模型，请检查凭据与配额');
       let executionModel = model;
       let metrics: ModelInvocation | undefined;
@@ -659,9 +646,7 @@ function registerHandlers(): void {
                     auditModelId: verified.audit.auditModelId,
                   };
                   if (shouldRevise(verified.audit)) {
-                    const revisionModel = decision.strategy === 'escalate'
-                      ? (executionCandidates.find((candidate) => candidate.id !== executionModel.id) ?? executionModel)
-                      : executionModel;
+                    const revisionModel = chooseRevisionModel(executionPlan, executionModel);
                     const revisionSpan = verificationSpan.child('model', 'revision', { modelId: revisionModel.id, role: decision.strategy === 'escalate' ? 'escalated-reviser' : 'reviser' });
                     try {
                       runBudget.assertAvailable();
