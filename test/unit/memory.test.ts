@@ -8,9 +8,9 @@ describe('long-term memory', () => {
     const global = store.add({ content: '用户偏好：提交前先运行 npm test', kind: 'preference', scope: 'global' });
     const project = store.add({ content: '这个项目使用 pnpm 管理依赖', kind: 'decision', scope: 'project', projectRoot: '/tmp/project-a' });
     store.add({ content: '另一个项目的秘密约定', kind: 'fact', scope: 'project', projectRoot: '/tmp/project-b' });
-    const session = store.add({ content: '本轮决定先改 main.ts', kind: 'decision', scope: 'session', sessionId: 's1' });
+    const session = store.add({ content: '本项目决定先改 main.ts', kind: 'decision', scope: 'session', sessionId: 's1' });
 
-    const result = retrieveMemories(store, { query: 'pnpm 依赖 项目', projectRoot: '/tmp/project-a', sessionId: 's1' });
+    const result = retrieveMemories(store, { query: 'pnpm 项目 npm 提交', projectRoot: '/tmp/project-a', sessionId: 's1' });
     const ids = result.records.map((record) => record.id);
     expect(ids).toContain(project.id);
     expect(ids).toContain(global.id);

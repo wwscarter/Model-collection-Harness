@@ -46,8 +46,11 @@ export function retrieveMemories(store: MemoryStore, input: MemoryRetrievalInput
   ];
   const queryTerms = terms(input.query);
   const ranked = records
-    .map((record) => ({ record, score: score(record, queryTerms, input.query, input.taskType) }))
-    .filter((item) => queryTerms.length === 0 || item.score > 0.12)
+    .map((record) => {
+      const matched = queryTerms.length === 0 || queryTerms.some((term) => record.content.toLowerCase().includes(term) || record.tags.some((tag) => tag.toLowerCase().includes(term)));
+      return { record, matched, score: score(record, queryTerms, input.query, input.taskType) };
+    })
+    .filter((item) => item.matched && (queryTerms.length === 0 || item.score > 0.2))
     .sort((a, b) => b.score - a.score || b.record.updatedAt.getTime() - a.record.updatedAt.getTime())
     .slice(0, limit)
     .map((item) => item.record);

@@ -20,7 +20,7 @@ const DEFAULT_POLICY: ToolPolicy = { name: '*', maxResultChars: 12_000 };
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   web_search: { name: 'web_search', maxResultChars: 8_000, timeoutMs: 20_000, cacheTtlMs: 5 * 60_000 },
   web_fetch: { name: 'web_fetch', maxResultChars: 12_000, timeoutMs: 25_000, cacheTtlMs: 10 * 60_000 },
-  read: { name: 'read', maxResultChars: 12_000, timeoutMs: 5_000 },
+  read: { name: 'read', maxResultChars: 12_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
   ls: { name: 'ls', maxResultChars: 8_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
   write: { name: 'write', maxResultChars: 2_000, timeoutMs: 10_000 },
   edit: { name: 'edit', maxResultChars: 2_000, timeoutMs: 10_000 },
