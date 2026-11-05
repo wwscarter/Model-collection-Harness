@@ -54,6 +54,66 @@ function makeDeps(models: ModelConfig[], run: RunDependencies['invokeStreamed'],
 }
 
 describe('RunCoordinator', () => {
+  it('retains a tool-limit stage summary and usage without treating the task as completed', async () => {
+    const summary = '阶段总结：已检查入口文件；剩余适配尚未完成。\n\n```ts\nconst completedStep = true;\n```';
+    const provider = vi.fn(() => { throw new Error('Optional verification or extraction must not run after a tool limit'); });
+    const invoke = vi.fn(async (current: ModelConfig, _prompt: string, _max: number, onDelta: (delta: string) => void) => {
+      onDelta(summary);
+      return { content: summary, inputTokens: 0, outputTokens: 17, modelId: current.id, stopReason: 'tool_limit' };
+    });
+    const { deps, traceStore, cleanup } = makeDeps([model('executor', { contextWindow: 32_000 }), model('utility', { contextWindow: 32_000 })], invoke, provider);
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'verify', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'escalate' } },
+    ] });
+    deps.memory.setAutoExtract(true);
+    const growth = vi.spyOn(deps.growth, 'recordFeedback');
+    const events: Array<{ channel: string; payload: any }> = [];
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'tool-limit', prompt: 'Continue the implementation', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
+      expect(output).toMatchObject({ output: summary, stopReason: 'tool_limit', metrics: { stopReason: 'tool_limit', inputTokens: 0, outputTokens: 17 }, extractedMemoryIds: [] });
+      expect((output.metrics as { totalCost: number }).totalCost).toBeCloseTo(0.00034);
+      expect(output.verification).toBeUndefined();
+      expect(provider).not.toHaveBeenCalled();
+      expect(growth).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(deps.observability.getRecent(1)[0]).toMatchObject({ status: 'success', inputTokens: 0, outputTokens: 17 });
+      const trace = traceStore.getTrace('tool-limit');
+      expect(trace?.run).toMatchObject({ status: 'failed', errorMessage: expect.stringContaining('任务尚未完成'), totalInputTokens: 0, totalOutputTokens: 17 });
+      expect(trace?.spans.find((span) => span.kind === 'run')).toMatchObject({ status: 'failed', errorMessage: expect.stringContaining('工具执行额度') });
+      expect(trace?.spans.find((span) => span.name === 'execution')).toMatchObject({ status: 'failed', attributes: { stopReason: 'tool_limit' } });
+      expect(events.find((event) => event.channel === 'session:completed')?.payload).toMatchObject({ output: summary, stopReason: 'tool_limit', metrics: { stopReason: 'tool_limit' } });
+    } finally { cleanup(); }
+  });
+
+  it('labels a limited subagent report as partial while allowing the final executor to finish', async () => {
+    const lead = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', contextWindow: 32_000 });
+    const reviewer = model('reviewer', { name: 'Reviewer', contextWindow: 32_000 });
+    const plan = JSON.stringify({ mode: 'delegate', taskType: 'general', complexity: 'medium', subagents: [{ modelId: 'reviewer', role: 'analysis', instruction: 'Inspect the pending work.' }], verify: false });
+    let finalPrompt = '';
+    const { deps, traceStore, cleanup } = makeDeps([lead, reviewer], async (current, prompt, _max, onDelta) => {
+      const limited = current.id === 'reviewer';
+      const content = limited ? '已检查入口；剩余模块尚待检查。' : 'Final completed answer';
+      if (!limited) finalPrompt = prompt;
+      onDelta(content);
+      return { content, inputTokens: 10, outputTokens: 5, modelId: current.id, stopReason: limited ? 'tool_limit' : 'stop' };
+    }, () => ({ modelId: lead.id, invoke: async () => ({ content: plan, inputTokens: 20, outputTokens: 10, modelId: lead.id }) }));
+    const events: Array<{ channel: string; payload: any }> = [];
+    const growth = vi.spyOn(deps.growth, 'recordFeedback');
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'partial-agent', prompt: 'Complete the task', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
+      expect(finalPrompt).toContain('子任务部分完成');
+      expect(finalPrompt).toContain('不可视为完整成果');
+      expect(finalPrompt).toContain('剩余模块尚待检查');
+      expect(output).toMatchObject({ stopReason: 'stop', output: 'Final completed answer', metrics: { stopReason: 'stop' }, agentMessages: [{ status: 'failed', content: '已检查入口；剩余模块尚待检查。', error: expect.stringContaining('部分完成'), stopReason: 'tool_limit' }], agentReports: [{ stopReason: 'tool_limit', content: expect.stringContaining('子任务部分完成') }] });
+      expect(traceStore.getTrace('partial-agent')?.run.status).toBe('success');
+      expect(traceStore.getTrace('partial-agent')?.spans.find((span) => span.name === 'collaborator')).toMatchObject({ status: 'failed', errorMessage: expect.stringContaining('部分完成'), attributes: { stopReason: 'tool_limit' } });
+      expect(deps.observability.getInvocations().find((item) => item.modelId === reviewer.id)?.status).toBe('success');
+      expect(growth).toHaveBeenCalledOnce();
+      expect(growth).toHaveBeenCalledWith(expect.objectContaining({ modelId: lead.id, success: true, completed: true }));
+      expect(events.some((event) => event.channel === 'session:agent-update' && event.payload.status === 'failed' && event.payload.stopReason === 'tool_limit' && event.payload.error.includes('部分完成'))).toBe(true);
+    } finally { cleanup(); }
+  });
+
   it('runs a simple turn and emits completion with a trace', async () => {
     const { deps, traceStore, cleanup } = makeDeps([model('m1')], async (current, _prompt, _max, onDelta) => {
       onDelta('hello');

@@ -20,6 +20,7 @@ export function completeSessionMetrics(raw: InvocationMetrics | undefined, timin
     ttftMs: raw.ttftMs,
     cost: raw.cost ?? raw.totalCost,
     routeConfidence: raw.routeConfidence,
+    ...(typeof raw.stopReason === 'string' ? { stopReason: raw.stopReason } : {}),
   } : {};
   if (timing) {
     timing.completedAt ??= now;

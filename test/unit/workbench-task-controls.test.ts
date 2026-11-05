@@ -76,6 +76,48 @@ afterEach(async () => {
 });
 
 describe('workbench task controls', () => {
+  it('shows a completion event resource limit separately from the answer and preserves it when invoke resolves', async () => {
+    await click('[aria-label="执行任务"]');
+    const output = '已完成目录分析，后续还需要逐项检查。';
+    await act(async () => {
+      listeners.get('session:completed')!({ sessionId: 's1', output, stopReason: 'tool_limit', metrics: { inputTokens: 10, outputTokens: 5, cost: 0.03 } });
+    });
+    expect(container.querySelector('[aria-label="任务未完成"]')!.textContent).toContain('阶段性总结');
+    expect(container.querySelector('.output-content')!.textContent).toContain(output);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => { resolveRun({ output, metrics: { inputTokens: 10, outputTokens: 5, cost: 0.03 } }); });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.metrics).toMatchObject({ inputTokens: 10, outputTokens: 5, cost: 0.03, stopReason: 'tool_limit' });
+    expect(saved.output).toBe(output);
+    expect(saved.messages.at(-1).content).toBe(output);
+    expect(container.querySelector('[aria-label="任务未完成"]')).not.toBeNull();
+  });
+
+  it.each(['top-level', 'metrics'])('restores a %s resource limit notice when the conversation is reopened', async (source) => {
+    await click('[aria-label="执行任务"]');
+    const output = '已取得阶段性结果。';
+    const reason = source === 'top-level' ? { stopReason: 'tool_limit' } : { metrics: { stopReason: 'tool_limit' } };
+    await act(async () => { resolveRun({ output, ...reason }); });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.metrics.stopReason).toBe('tool_limit');
+    expect(container.querySelector('[aria-label="任务未完成"]')).not.toBeNull();
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('[aria-label="任务未完成"]')!.textContent).toContain('任务尚未完成');
+    expect(container.querySelector('.output-content')!.textContent).toContain(output);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('does not show an incomplete-task notice for an ordinary completed response', async () => {
+    await click('[aria-label="执行任务"]');
+    await act(async () => {
+      listeners.get('session:completed')!({ sessionId: 's1', output: '任务完成', stopReason: 'stop' });
+      resolveRun({ output: '任务完成', stopReason: 'stop' });
+    });
+    expect(container.querySelector('[aria-label="任务未完成"]')).toBeNull();
+    expect(save.mock.calls.at(-1)![0].output).toBe('任务完成');
+  });
+
   it.each(['任务已取消', '模型连接已中断'])('saves final text without transient tool cards when a turn ends: %s', async (reason) => {
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="执行任务"]')!.click(); });
     expect(execute).toHaveBeenCalledOnce();

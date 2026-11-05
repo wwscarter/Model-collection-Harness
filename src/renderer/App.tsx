@@ -102,9 +102,10 @@ export default function App() {
   };
   const latestAssistant = currentSession?.messages.slice().reverse().find((message) => message.role === 'assistant');
   const bannerModels = [modelLabel(latestAssistant?.planningModelId), modelLabel(latestAssistant?.modelUsed ?? currentSession?.modelUsed)].filter(Boolean).join(' + ') || '自动调度';
-  const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean): SessionMetrics | undefined => {
+  const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean, stopReason?: string): SessionMetrics | undefined => {
     const timing = runTimingRef.current;
-    return completeSessionMetrics(metrics, timing?.sessionId === sessionId ? timing : undefined, confidence, hasOutput, performance.now());
+    const source = stopReason === undefined ? metrics : { ...metrics, stopReason };
+    return completeSessionMetrics(source, timing?.sessionId === sessionId ? timing : undefined, confidence, hasOutput, performance.now());
   };
 
   useEffect(() => {
@@ -254,11 +255,12 @@ export default function App() {
       });
     });
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
+      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
       const id = event.sessionId || event.taskId;
       if (!id || deletedSessionIdsRef.current.has(id)) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
-      const metrics = withRunTiming(event.metrics, id, event.decision?.confidence, Boolean(event.output));
+      const stopReason = event.stopReason ?? event.metrics?.stopReason ?? sessionsRef.current.find((session) => session.id === id)?.metrics?.stopReason;
+      const metrics = withRunTiming(event.metrics, id, event.decision?.confidence, Boolean(event.output), stopReason);
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         let messages = updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId);
@@ -479,7 +481,7 @@ export default function App() {
       const raw = result as any;
       const modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed : raw.modelUsed?.id || raw.modelUsed?.name;
       const output = String(raw.output || '');
-      const metrics = withRunTiming(raw.metrics, currentSession.id, raw.decision?.confidence, Boolean(output));
+      const metrics = withRunTiming(raw.metrics, currentSession.id, raw.decision?.confidence, Boolean(output), raw.stopReason ?? raw.metrics?.stopReason ?? latestSession.metrics?.stopReason);
       let completedMessages = updateLatestAssistantContent(latestSession.messages, output, modelUsed, raw.planningModelId);
       const elapsedMs = metrics?.latencyMs ?? (runTimingRef.current?.sessionId === currentSession.id ? performance.now() - runTimingRef.current.startedAt : undefined);
       if (elapsedMs !== undefined) completedMessages = setLatestAssistantDuration(completedMessages, elapsedMs);
@@ -570,6 +572,7 @@ export default function App() {
               </article>
             </div>;
           }) : <WorkbenchWelcome onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => setShowNewProject(true)} />}
+          {currentSession.metrics?.stopReason === 'tool_limit' && <div className="runtime-notice" role="status" aria-label="任务未完成">本轮工具预算已用尽，任务尚未完成。以上为阶段性总结，可继续任务。</div>}
           {error && <div className="error-banner" role="alert">{error}</div>}
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>

@@ -39,6 +39,14 @@ export interface ToolRuntimeOptions {
   policies?: Record<string, ToolPolicy>;
 }
 
+export interface ToolBudgetState {
+  calls: number;
+  maxCalls: number;
+  resultChars: number;
+  maxResultChars: number;
+  exhaustedBy?: 'calls' | 'output';
+}
+
 function stable(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -63,8 +71,8 @@ export class ToolRuntime {
 
   constructor(options: ToolRuntimeOptions) {
     this.cwd = options.cwd;
-    this.maxCalls = options.maxCalls ?? 20;
-    this.maxResultCharsTotal = options.maxResultCharsTotal ?? 80_000;
+    this.maxCalls = options.maxCalls ?? 80;
+    this.maxResultCharsTotal = options.maxResultCharsTotal ?? 320_000;
     this.now = options.now ?? (() => Date.now());
     this.policies = { ...TOOL_POLICIES, ...(options.policies ?? {}) };
   }
@@ -74,6 +82,13 @@ export class ToolRuntime {
       ...tool,
       execute: async (...args: Parameters<ToolExecute>): Promise<ToolResult> => this.run(tool, args),
     })) as ToolDefinition[];
+  }
+
+  getBudgetState(): ToolBudgetState {
+    return {
+      calls: this.calls, maxCalls: this.maxCalls, resultChars: this.resultChars, maxResultChars: this.maxResultCharsTotal,
+      exhaustedBy: this.calls >= this.maxCalls ? 'calls' : this.resultChars >= this.maxResultCharsTotal ? 'output' : undefined,
+    };
   }
 
   private policy(name: string): ToolPolicy {
@@ -96,7 +111,8 @@ export class ToolRuntime {
 
   private async run(tool: ToolDefinition, args: Parameters<ToolExecute>): Promise<ToolResult> {
     args[2]?.throwIfAborted();
-    if (this.calls >= this.maxCalls) throw new Error(`本轮工具调用次数已达上限（${this.maxCalls} 次），请缩小任务范围。`);
+    if (this.calls >= this.maxCalls) throw new Error(`本轮工具调用次数已达上限（${this.maxCalls} 次），请基于已有结果生成阶段性总结。`);
+    if (this.resultChars >= this.maxResultCharsTotal) throw new Error('本轮工具输出额度已用尽，请基于已有结果生成阶段性总结。');
     this.calls += 1;
     const policy = this.policy(tool.name);
     const params = args[1];

@@ -137,17 +137,90 @@ describe('AgentRuntime (Pi SDK)', () => {
     }
   });
 
-  it('stops repeated tool requests at the configured round limit and streams the reason', async () => {
+  it('summarizes retained tool results without more tools at the configured round limit', async () => {
     requests.length = 0;
-    replies = [toolCall('web_search', { query: 'first' }, 'c1'), toolCall('web_search', { query: 'second' }, 'c2'), text('must not run')];
+    replies = [toolCall('web_search', { query: 'first' }, 'c1'), toolCall('web_search', { query: 'second' }, 'c2'), text('阶段性分析：已检查两项资料，剩余内容尚未验证。')];
     const { runtime: agent } = runtime({ maxToolRounds: 2 });
     const deltas: string[] = [];
     const result = await agent.run({ model: model(), prompt: 'Search', onTextDelta: (delta) => deltas.push(delta) });
     expect(result.stopReason).toBe('tool_limit');
     expect(result.toolCalls).toBe(2);
+    expect(requests).toHaveLength(3);
+    expect(requests[2].body.tools ?? []).toEqual([]);
+    expect(JSON.stringify(requests[2].body.messages)).toContain('Result for first');
+    expect(JSON.stringify(requests[2].body.messages)).toContain('Result for second');
+    expect(JSON.stringify(requests[2].body.messages)).toContain('阶段性分析');
+    expect(result.content).toBe('阶段性分析：已检查两项资料，剩余内容尚未验证。');
+    expect(deltas.join('')).toContain('阶段性分析');
+    expect(result.inputTokens).toBe(130);
+    expect(result.outputTokens).toBe(21);
+  });
+
+  it('allows ordinary analysis to continue beyond eight tool rounds by default', async () => {
+    requests.length = 0;
+    replies = [...Array.from({ length: 9 }, (_, index) => toolCall('web_search', { query: `section ${index}` }, `section_${index}`)), text('项目分析完成。')];
+    const { runtime: agent } = runtime();
+    const result = await agent.run({ model: model(), prompt: '分析这个项目' });
+    expect(result).toMatchObject({ stopReason: 'stop', toolCalls: 9, content: '项目分析完成。' });
+    expect(requests).toHaveLength(10);
+  });
+
+  it.each([
+    { options: { maxToolCalls: 1 }, label: 'call count' },
+    { options: { maxToolResultChars: 20 }, label: 'output size' },
+  ])('produces a final text-only summary when the $label budget is used', async ({ options }) => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'project overview' }), text('阶段性分析：已获得项目概览。')];
+    const { runtime: agent } = runtime(options);
+    const result = await agent.run({ model: model(), prompt: 'Analyze the project' });
+    expect(result).toMatchObject({ stopReason: 'tool_limit', toolCalls: 1, content: '阶段性分析：已获得项目概览。' });
     expect(requests).toHaveLength(2);
-    expect(result.content).toContain('工具调用上限（2 轮）');
-    expect(deltas.join('')).toContain('工具调用上限（2 轮）');
+    expect(requests[1].body.tools ?? []).toEqual([]);
+  });
+
+  it('does not restart tool execution if the summary response requests another tool', async () => {
+    requests.length = 0;
+    const searched: string[] = [];
+    const search: SearchProvider = { ...fakeSearch, search: async (query) => { searched.push(query); return fakeSearch.search(query); } };
+    replies = [toolCall('web_search', { query: 'first section' }, 'c1'), toolCall('web_search', { query: 'extra section' }, 'c2')];
+    const { runtime: agent } = runtime({ maxToolRounds: 1, search: new SearchProviderRegistry([search]) });
+    const result = await agent.run({ model: model(), prompt: 'Analyze the project' });
+    expect(requests).toHaveLength(2);
+    expect(searched).toEqual(['first section']);
+    expect(result).toMatchObject({ stopReason: 'tool_limit', toolCalls: 1 });
+    expect(result.content).toContain('阶段总结未能生成');
+    expect(result.content).toContain('first section');
+  });
+
+  it('keeps a truthful operation summary when the final summary request fails', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'read project notes' }), () => sse([{ error: { message: 'summary temporarily unavailable' } }])];
+    const { runtime: agent } = runtime({ maxToolRounds: 1 });
+    const result = await agent.run({ model: model(), prompt: 'Analyze the project' });
+    expect(requests).toHaveLength(2);
+    expect(result.stopReason).toBe('tool_limit');
+    expect(result.content).toContain('本轮分析尚未完成');
+    expect(result.content).toContain('read project notes');
+  });
+
+  it('honors user cancellation during the final summary request', async () => {
+    requests.length = 0;
+    const controller = new AbortController();
+    replies = [toolCall('web_search', { query: 'overview' }), () => { setTimeout(() => controller.abort(), 20); return null; }];
+    const { runtime: agent } = runtime({ maxToolRounds: 1 });
+    await expect(agent.run({ model: model(), prompt: 'Analyze', signal: controller.signal })).rejects.toThrow('任务已取消');
+    expect(requests).toHaveLength(2);
+  });
+
+  it('returns the final answer without retaining intermediate progress narration', async () => {
+    requests.length = 0;
+    replies = [
+      (body) => [...sse([{ choices: [{ index: 0, delta: { content: '我先读取项目资料。' } }] }]).slice(0, -1), ...toolCall('web_search', { query: 'overview' })(body)!],
+      text('项目采用模块化结构。'),
+    ];
+    const { runtime: agent } = runtime();
+    const result = await agent.run({ model: model(), prompt: 'Analyze the project' });
+    expect(result.content).toBe('项目采用模块化结构。');
   });
 
   it('cancels an active provider request', async () => {

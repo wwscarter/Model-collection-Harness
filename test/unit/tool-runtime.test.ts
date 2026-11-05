@@ -61,6 +61,16 @@ describe('ToolRuntime', () => {
     await expect(wrapped[0].execute(...args)).rejects.toThrow('上限');
   });
 
+  it('stops starting tool work after the result budget has been consumed', async () => {
+    const runtime = new ToolRuntime({ cwd: process.cwd(), maxResultCharsTotal: 3 });
+    const write = vi.fn(async () => result('saved'));
+    const wrapped = runtime.wrap([tool('read', async () => result('abcdef')), tool('write', write)]);
+    await wrapped[0].execute(...args);
+    expect(runtime.getBudgetState()).toMatchObject({ calls: 1, resultChars: 3, exhaustedBy: 'output' });
+    await expect(wrapped[1].execute(...args)).rejects.toThrow('工具输出额度已用尽');
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it('ends a tool wait when the tool ignores its timeout signal', async () => {
     const wrapped = new ToolRuntime({ cwd: process.cwd(), policies: { slow: { name: 'slow', maxResultChars: 100, timeoutMs: 20 } } })
       .wrap([tool('slow', async () => new Promise(() => undefined))])[0];

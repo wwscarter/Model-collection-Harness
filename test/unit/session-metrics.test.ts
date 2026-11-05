@@ -34,11 +34,16 @@ describe('completed session metrics', () => {
       .toEqual({ inputTokens: 4, outputTokens: 5, latencyMs: 300, ttftMs: 100, cost: 0.02, routeConfidence: 0.9 });
   });
 
+  it('retains a resource limit reason without changing measured usage', () => {
+    expect(completeSessionMetrics({ ...invocation, stopReason: 'tool_limit' }, undefined, undefined, true, 1000))
+      .toMatchObject({ inputTokens: 8036, outputTokens: 73, latencyMs: 61.8, cost: 0.08255, stopReason: 'tool_limit' });
+  });
+
   it('restores measured timing and confidence after closing and reopening session storage', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-session-metrics-'));
     const dbPath = path.join(directory, 'sessions.db');
     const now = new Date('2026-11-03T00:00:00.000Z');
-    const metrics = completeSessionMetrics(invocation, { sessionId: 'run', startedAt: 100, ttftMs: 65 }, 0.98, true, 168);
+    const metrics = completeSessionMetrics({ ...invocation, stopReason: 'tool_limit' }, { sessionId: 'run', startedAt: 100, ttftMs: 65 }, 0.98, true, 168);
     let storage = new SessionStorage(dbPath);
     try {
       storage.save({ id: 'run', title: 'Test', prompt: '', output: 'Complete', metrics, createdAt: now, updatedAt: now });
@@ -46,6 +51,7 @@ describe('completed session metrics', () => {
       storage = new SessionStorage(dbPath);
       const restored = storage.list()[0];
       expect(restored.metrics).toEqual(metrics);
+      expect(restored.metrics).toMatchObject({ stopReason: 'tool_limit' });
       expect(restoreRouteConfidence(restored)).toBe(0.98);
       expect(restoreRouteConfidence({ routeConfidence: 0.8, metrics })).toBe(0.8);
       expect(restoreRouteConfidence({ metrics: { cost: 1 } })).toBeUndefined();

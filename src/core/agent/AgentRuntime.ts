@@ -81,11 +81,11 @@ export interface AgentRuntimeOptions {
   enableFileExtensions?: boolean;
   /** Maximum duration of a run, including model requests and tools. Default five minutes. */
   runTimeoutMs?: number;
-  /** Maximum consecutive turns that execute tools. Default eight. */
+  /** Maximum turns that execute tools before a final text-only summary. Default 32. */
   maxToolRounds?: number;
-  /** Maximum tool invocations in one run. Default twenty. */
+  /** Maximum tool invocations in one run. Default 80. */
   maxToolCalls?: number;
-  /** Maximum model-facing tool output characters in one run. Default 80k. */
+  /** Maximum model-facing tool output characters in one run. Default 320k. */
   maxToolResultChars?: number;
   /** Test seam. */
   now?: () => Date;
@@ -102,7 +102,7 @@ export interface ResourceSummary {
 const MAX_HISTORY_TURNS = 20;
 const MAX_HISTORY_CHARS = 60_000;
 const RUN_TIMEOUT_MS = 5 * 60_000;
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 32;
 
 /** Keep the newest turns that fit the budget; always start the window on a user turn. */
 export function trimHistory(history: ChatTurn[] = [], maxTurns = MAX_HISTORY_TURNS, maxChars = MAX_HISTORY_CHARS): ChatTurn[] {
@@ -281,11 +281,12 @@ export class AgentRuntime {
     const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
     const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
-    const toolDefinitions = new ToolRuntime({
+    const toolRuntime = new ToolRuntime({
       cwd,
       maxCalls: this.options.maxToolCalls,
       maxResultCharsTotal: this.options.maxToolResultChars,
-    }).wrap(rawTools);
+    });
+    const toolDefinitions = toolRuntime.wrap(rawTools);
     const systemPrompt = buildSystemPrompt({ now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot });
     const resourceLoader = await this.resourceLoader(cwd, settingsManager, systemPrompt, request.projectRoot);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
@@ -307,22 +308,48 @@ export class AgentRuntime {
       ...(mapping.temperature !== undefined ? { temperature: mapping.temperature } : {}),
       timeoutMs: Math.min(options?.timeoutMs ?? RUN_TIMEOUT_MS, this.options.runTimeoutMs ?? RUN_TIMEOUT_MS),
     });
-    return this.drive(session, request);
+    return this.drive(session, request, toolRuntime);
   }
 
-  private async drive(session: AgentSession, request: AgentRunRequest): Promise<AgentRunResult> {
+  private async drive(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime): Promise<AgentRunResult> {
     let content = '';
     let toolCalls = 0;
     let toolRounds = 0;
     let toolLimitReached = false;
+    let summaryCompleted = false;
+    let limitDescription = '';
+    const toolLabels = new Map<string, string>();
+    const completedTools: string[] = [];
     const maxToolRounds = Math.max(1, this.options.maxToolRounds ?? MAX_TOOL_ROUNDS);
     const finishTurn = session.agent.finishTurn;
-    // Pi's finishTurn hook stops before another provider request while retaining tool results.
+    const beforeToolCall = session.agent.beforeToolCall;
+    session.agent.beforeToolCall = async (call, signal) => {
+      if (toolLimitReached) return { block: true, reason: '工具额度已用尽，请只基于现有结果生成阶段性总结。', terminate: true };
+      return beforeToolCall?.(call, signal);
+    };
+    // Keep the accumulated tool results and reserve one logical answer turn.
+    // This does not reset tool counts or the existing run deadline.
     session.agent.finishTurn = async (turn, signal) => {
       const decision = await finishTurn?.(turn, signal);
-      if (turn.toolResults.length && ++toolRounds >= maxToolRounds) {
-        toolLimitReached = true;
+      if (signal?.aborted || request.signal?.aborted || turn.message.stopReason === 'error' || turn.message.stopReason === 'aborted') return { action: 'end' };
+      if (toolLimitReached) {
+        summaryCompleted = !turn.toolResults.length && Boolean(textOf(turn.message).trim());
         return { action: 'end' };
+      }
+      if (decision?.action === 'end') return decision;
+      if (turn.toolResults.length) toolRounds += 1;
+      const budget = toolRuntime.getBudgetState();
+      if (turn.toolResults.length && (toolRounds >= maxToolRounds || toolCalls >= budget.maxCalls || budget.exhaustedBy)) {
+        toolLimitReached = true;
+        limitDescription = toolRounds >= maxToolRounds ? `${maxToolRounds} 轮工具调用`
+          : budget.exhaustedBy === 'output' ? `${budget.maxResultChars} 字符工具结果` : `${budget.maxCalls} 次工具调用`;
+        session.setActiveToolsByName([]);
+        session.setAutoRetryEnabled(false);
+        await session.sendCustomMessage({
+          customType: 'newai-tool-budget-summary', display: false,
+          content: `本轮工具额度已用尽（${limitDescription}），工具现已关闭。请立即根据本轮已经获取的资料，用用户的语言给出阶段性分析。明确列出已确认的结论、已检查的文件或范围、仍未验证或未完成的事项，以及下一步最值得继续的内容。不要再次请求工具，不要只说“继续读取”，不要把未完成的项目分析称为已全部完成。如果资料不足，说明具体缺少什么，不要编造结论。`,
+        }, { deliverAs: 'steer' });
+        return { action: 'continue' };
       }
       return decision || undefined;
     };
@@ -337,28 +364,42 @@ export class AgentRuntime {
         content += '\n\n';
         request.onTextDelta?.('\n\n');
       } else if (event.type === 'tool_execution_start') {
+        if (toolLimitReached) return;
         toolCalls += 1;
+        const args = event.args as { path?: unknown; query?: unknown } | undefined;
+        const label = typeof args?.path === 'string' ? args.path : typeof args?.query === 'string' ? args.query : '';
+        toolLabels.set(event.toolCallId, `${event.toolName}${label ? `：${label.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`);
         request.onToolEvent?.({ toolCallId: event.toolCallId, toolName: event.toolName, status: 'running', args: event.args });
       } else if (event.type === 'tool_execution_end') {
+        if (toolLimitReached) return;
+        if (!event.isError) completedTools.push(toolLabels.get(event.toolCallId) ?? event.toolName);
+        toolLabels.delete(event.toolCallId);
         request.onToolEvent?.({ toolCallId: event.toolCallId, toolName: event.toolName, status: event.isError ? 'failed' : 'completed', summary: summarizeToolResult(event.result), details: (event.result as { details?: unknown })?.details, durationMs: event.durationMs });
       }
     });
     try {
       await session.bindExtensions({ mode: 'print' });
       if (request.signal?.aborted) throw new Error('任务已取消');
-      await session.prompt(request.prompt, { expandPromptTemplates: false });
+      let summaryFailed = false;
+      try { await session.prompt(request.prompt, { expandPromptTemplates: false }); }
+      catch (error) {
+        if (!toolLimitReached || request.signal?.aborted) throw error;
+        summaryFailed = true;
+      }
       const stats = session.getSessionStats();
       const last = [...session.messages].reverse().find((message) => (message as { role?: string }).role === 'assistant') as { stopReason?: string; errorMessage?: string } | undefined;
-      if (last?.stopReason === 'error') throw new Error(last.errorMessage || '模型调用失败');
+      if (last?.stopReason === 'error' && !toolLimitReached) throw new Error(last.errorMessage || '模型调用失败');
       if (last?.stopReason === 'aborted' || request.signal?.aborted) throw new Error('任务已取消');
       const finalText = session.getLastAssistantText() ?? '';
-      if (toolLimitReached) {
-        const notice = `${content.trim() || finalText.trim() ? '\n\n' : ''}已达到本轮工具调用上限（${maxToolRounds} 轮），任务已停止。请缩小范围后继续。`;
-        content = (content.trim() ? content : finalText) + notice;
-        request.onTextDelta?.(notice);
+      let answer = finalText.trim() ? finalText : content;
+      if (toolLimitReached && (!summaryCompleted || summaryFailed || last?.stopReason === 'error')) {
+        answer = `工具额度已用尽（${limitDescription}）。阶段总结未能生成，本轮分析尚未完成。\n\n`
+          + (completedTools.length ? `已完成 ${completedTools.length} 次工具操作，最近的操作包括：\n${completedTools.slice(-12).map((label) => `- ${label}`).join('\n')}` : '本轮没有获得可用的工具结果。')
+          + '\n\n继续任务时可从上述已检查范围接着分析。';
+        request.onTextDelta?.(`${content.trim() ? '\n\n' : ''}${answer}`);
       }
       return {
-        content: content.trim() ? content : finalText,
+        content: answer,
         inputTokens: stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite,
         outputTokens: stats.tokens.output,
         toolCalls,

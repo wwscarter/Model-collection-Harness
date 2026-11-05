@@ -159,7 +159,7 @@ async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: num
     enableTools: options.enableTools !== false,
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
   });
-  return { content: result.content, inputTokens: result.inputTokens || estimateTokens(prompt), outputTokens: result.outputTokens || estimateTokens(result.content), modelId: model.id };
+  return { content: result.content, inputTokens: result.inputTokens ?? estimateTokens(prompt), outputTokens: result.outputTokens ?? estimateTokens(result.content), modelId: model.id, stopReason: result.stopReason };
 }
 
 function publicModel(model: ModelConfig) {

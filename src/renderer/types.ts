@@ -27,6 +27,8 @@ export interface ModelConfig {
 }
 
 export interface SessionMetrics {
+  /** Why the model stopped; resource limits can leave a usable partial answer. */
+  stopReason?: string;
   inputTokens?: number;
   outputTokens?: number;
   latencyMs?: number;
@@ -96,6 +98,7 @@ export interface MemoryRecord {
 
 export interface ExecutionResult {
   output: string;
+  stopReason?: string;
   runId?: string;
   modelUsed?: string;
   metrics?: SessionMetrics;

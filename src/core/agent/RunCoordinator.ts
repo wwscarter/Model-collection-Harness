@@ -89,6 +89,8 @@ export interface RunDependencies {
 }
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
+const TOOL_LIMIT_NOTICE = '已达到本轮工具执行额度，任务尚未完成；已保留当前阶段总结，可继续处理剩余工作。';
+const PARTIAL_AGENT_NOTICE = '【子任务部分完成：已达到工具执行额度】以下报告仅为当前阶段总结，未完成项仍需继续处理，不可视为完整成果。';
 function costOf(inputTokens: number, outputTokens: number, model: Pick<ModelConfig, 'costPer1kTokens'>): number {
   return (inputTokens * model.costPer1kTokens.input + outputTokens * model.costPer1kTokens.output) / 1000;
 }
@@ -487,7 +489,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         synthesisSpan = collaboratorModels.length ? trace.child('synthesis', 'synthesis', { agents: collaboratorModels.length }) : undefined;
         executionSpan = (synthesisSpan ?? trace).child('model', 'execution', { modelId: model.id, role: 'executor' });
         let result: ModelResponse | undefined;
-        let agentReports: Array<{ modelName: string; content: string }> = [];
+        let agentReports: Array<{ modelName: string; content: string; stopReason?: string }> = [];
         let failedAgentCount = 0;
         const agentMessages = collaboratorModels.map((agentModel, index) => ({
           id: `${assistantMessageId}-agent-${index + 1}`,
@@ -495,6 +497,8 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           modelName: agentModel.name,
           status: 'queued' as 'queued' | 'running' | 'completed' | 'failed',
           content: '',
+          error: undefined as string | undefined,
+          stopReason: undefined as string | undefined,
         }));
         if (collaboratorModels.length) {
           const agentResults = await runParallelAgents(collaboratorModels, async (agentModel, index) => {
@@ -524,11 +528,16 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               totalOutputTokens += agentResult.outputTokens;
               totalCost += agentCost;
               runBudget.add({ cost: agentCost, tokens: agentResult.inputTokens + agentResult.outputTokens });
-              agentSpan.end({ inputTokens: agentResult.inputTokens, outputTokens: agentResult.outputTokens, cost: agentCost });
-              agentMessages[index].status = 'completed';
+              const limited = agentResult.stopReason === 'tool_limit';
+              const status = limited ? 'failed' : 'completed';
+              const error = limited ? PARTIAL_AGENT_NOTICE : undefined;
+              agentSpan.end({ status: limited ? 'failed' : 'success', error, inputTokens: agentResult.inputTokens, outputTokens: agentResult.outputTokens, cost: agentCost, attributes: { stopReason: agentResult.stopReason } });
+              agentMessages[index].status = status;
               agentMessages[index].content = agentResult.content;
-              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status: 'completed', content: agentResult.content });
-              return { modelName: agentModel.name, content: agentResult.content };
+              agentMessages[index].error = error;
+              agentMessages[index].stopReason = agentResult.stopReason;
+              mainWindow?.webContents.send('session:agent-update', { sessionId, taskId, assistantMessageId, agentId, modelId: agentModel.id, modelName: agentModel.name, status, content: agentResult.content, error, stopReason: agentResult.stopReason });
+              return { modelName: agentModel.name, content: agentResult.content, stopReason: agentResult.stopReason };
             } catch (agentError) {
               const message = agentError instanceof Error ? agentError.message : String(agentError);
               observability.recordInvocationEnd(agentInvocationId, estimateTokens(contextPrompt), estimateTokens(agentContent), agentModel.costPer1kTokens, 'failure', message);
@@ -545,7 +554,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         }
         const buildFinalPrompt = (parts: string[]) => {
           const task = parts[2] ? buildPlannedTask(buildTaskPrompt(parts), parts[2]) : buildTaskPrompt(parts);
-          const reports = agentReports.map((report, index) => ({ ...report, content: parts[index + 5] }));
+          const reports = agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + 5]}` : parts[index + 5] }));
           return orchestration
             ? buildOrchestratedFinalPrompt(task, { ...orchestration, plan: parts[3], reason: parts[4] }, reports, failedAgentCount)
             : collaboratorModels.length ? buildSynthesisPrompt(task, reports, failedAgentCount) : task;
@@ -585,7 +594,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
             totalCost += executionCost;
             runBudget.add({ cost: executionCost, tokens: attemptResult.inputTokens + attemptResult.outputTokens });
             executionSpan.setAttributes({ fallbackAttempts });
-            executionSpan.end({ inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost });
+            executionSpan.end({ status: attemptResult.stopReason === 'tool_limit' ? 'failed' : 'success', error: attemptResult.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost, attributes: { stopReason: attemptResult.stopReason } });
             break;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -600,9 +609,9 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         if (!result) throw new Error('模型没有返回结果');
         runBudget.assertAvailable();
         if (controller.signal.aborted) throw cancellationError();
-        synthesisSpan?.end({ attributes: { reports: agentReports.length, failedAgents: failedAgentCount } });
+        synthesisSpan?.end({ status: result.stopReason === 'tool_limit' ? 'failed' : 'success', error: result.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, attributes: { reports: agentReports.length, failedAgents: failedAgentCount, partialAgents: agentReports.filter((report) => report.stopReason === 'tool_limit').length, stopReason: result.stopReason } });
         let verification: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string } | undefined;
-        if ((decision.strategy === 'plan+verify' || decision.strategy === 'escalate') && hasCode(result.content)) {
+        if (result.stopReason !== 'tool_limit' && (decision.strategy === 'plan+verify' || decision.strategy === 'escalate') && hasCode(result.content)) {
           const verifierModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => candidate.id !== executionModel.id && modelQuota.isAvailable(candidate)),
             executionModel.id,
@@ -654,10 +663,10 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                         totalOutputTokens += revised.outputTokens;
                         totalCost += revisionCost;
                         runBudget.add({ cost: revisionCost, tokens: revised.inputTokens + revised.outputTokens });
-                        result = { ...result, content: revised.content };
+                        result = revised;
                         executionModel = revisionModel;
                         verification.revised = true;
-                        revisionSpan.end({ inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost });
+                        revisionSpan.end({ status: revised.stopReason === 'tool_limit' ? 'failed' : 'success', error: revised.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost, attributes: { stopReason: revised.stopReason } });
                       } catch (revisionError) {
                         const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
                         observability.recordInvocationEnd(revisionInvocationId, 0, 0, revisionModel.costPer1kTokens, 'failure', message);
@@ -698,7 +707,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         const extractedMemoryIds: string[] = [];
         let autoExtract = false;
         try { autoExtract = memoryStore.getAutoExtract(); } catch { /* memory settings must not fail an answer */ }
-        if (autoExtract && !controller.signal.aborted) {
+        if (result.stopReason !== 'tool_limit' && autoExtract && !controller.signal.aborted) {
           const extractionModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)),
             executionModel.id,
@@ -745,15 +754,17 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         }
         runBudget.assertAvailable();
         if (controller.signal.aborted) throw cancellationError();
-        if (metrics) {
+        if (metrics && result.stopReason !== 'tool_limit') {
           recordGrowth({ modelId: executionModel.id, taskType: decision.taskType, success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration, auditApproval: audit?.passed });
         }
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
-        const runMetrics = metrics ? { ...metrics, startTime: new Date(startedAt), endTime: new Date(), inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalCost, latency: Date.now() - startedAt } : undefined;
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, modelUsed: publicModel(executionModel), modelsUsed: observability.getTaskMetrics(runId).modelsUsed, fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics: runMetrics, verification, audit, extractedMemoryIds, agentReports, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
-        finishTrace('success');
+        const stopReason = result.stopReason;
+        const reportedAgents = agentReports.map((report) => report.stopReason === 'tool_limit' ? { ...report, content: `${PARTIAL_AGENT_NOTICE}\n\n${report.content}` } : report);
+        const runMetrics = metrics ? { ...metrics, startTime: new Date(startedAt), endTime: new Date(), inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalCost, latency: Date.now() - startedAt, stopReason } : undefined;
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, stopReason, modelUsed: publicModel(executionModel), modelsUsed: observability.getTaskMetrics(runId).modelsUsed, fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics: runMetrics, verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        finishTrace(stopReason === 'tool_limit' ? 'failed' : 'success', stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined);
         mainWindow?.webContents.send('session:completed', output);
         return output;
       } catch (error) {

@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunDependencies } from '../../src/core/agent/RunCoordinator';
 import type { ProjectRecord } from '../../src/core/storage/ProjectStorage';
+import { AgentRuntime } from '../../src/core/agent/AgentRuntime';
+import type { ModelConfig } from '../../src/core/models/ModelConfig';
 
 const state = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
@@ -76,6 +78,19 @@ function saveSession(id: string, projectId?: string) {
 }
 
 describe('main process session projects', () => {
+  it('forwards the agent stop reason and preserves zero usage through streamed model responses', async () => {
+    const run = vi.spyOn(AgentRuntime.prototype, 'run').mockResolvedValue({ content: 'Current stage summary', inputTokens: 0, outputTokens: 17, toolCalls: 80, stopReason: 'tool_limit' });
+    const current = { ...invoke('model:list')[0], id: 'synthetic', name: 'Synthetic model', provider: 'custom', apiKey: '', baseURL: 'http://127.0.0.1/v1' } as ModelConfig;
+    state.executeRun.mockImplementationOnce(async (_request, supplied) => {
+      const response = await (supplied as RunDependencies).invokeStreamed(current, 'hello', 100, () => undefined);
+      return { output: response.content, response };
+    });
+    try {
+      expect(await invoke('session:execute', { sessionId: 'forward-stop-reason', prompt: 'hello', projectId: null })).toMatchObject({ response: { content: 'Current stage summary', stopReason: 'tool_limit', inputTokens: 0, outputTokens: 17 } });
+      expect(run).toHaveBeenCalledOnce();
+    } finally { run.mockRestore(); }
+  });
+
   it('validates routing edits before replacing the file and archives the current policy before restore', () => {
     const original = JSON.stringify({ version: 1, rules: [{ id: 'review', enabled: true, priority: 1, when: {}, then: { strategy: 'single' } }], defaults: { strategy: 'single' } });
     const updated = JSON.stringify({ version: 1, rules: [], defaults: { strategy: 'parallel' } });
