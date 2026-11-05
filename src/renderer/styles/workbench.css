@@ -57,7 +57,7 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .workbench-welcome { width: 100%; max-width: 720px; margin: auto; padding: 12px 0; text-align: center; }
 .welcome-symbol { position: relative; display: grid; width: 62px; height: 62px; place-items: center; margin: 0 auto 22px; border: 1px solid var(--line); border-radius: 20px; color: var(--text-secondary); background: var(--surface-low); box-shadow: none; }
 .welcome-symbol > span { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border: 3px solid var(--canvas); border-radius: 50%; background: var(--surface-low); }
-.welcome-eyebrow { color: var(--text-muted); font-size: 11px; letter-spacing: .12em; }
+.welcome-eyebrow { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; letter-spacing: .12em; }
 .workbench-welcome h2 { margin: 10px 0 13px; color: var(--text); font-size: clamp(20px, 1.9vw, 26px); font-weight: 600; letter-spacing: -.04em; line-height: 1.5; }
 .workbench-welcome > p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 23px; }
 .welcome-suggestions { width: 100%; margin: 30px auto 24px; text-align: left; }
@@ -468,6 +468,16 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .project-item .item-copy, .session-item .item-copy { gap: 0; }
 .project-item .item-title, .session-item .item-title { line-height: 19px; }
 .session-item .session-ring { align-self: center; margin-top: 0; }
+/* Project conversations share their parent's branch and remain independently selectable. */
+.project-branch { min-width: 0; }
+.project-item .item-main { padding-left: 25px; }
+.project-expand { position: absolute; z-index: 1; top: 4px; left: 2px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: var(--text-faint); }
+.project-expand:hover { color: var(--text); background: var(--hover); }
+.project-expand svg { transition: transform .15s ease; }
+.project-expand svg.open { transform: rotate(90deg); }
+.project-sessions { display: grid; min-width: 0; gap: 2px; margin: 1px 0 4px 35px; padding-left: 8px; border-left: 1px solid var(--line); }
+.project-sessions-empty { padding: 5px 8px; color: var(--text-faint); font-size: 11px; line-height: 19px; }
+.project-sessions .session-item.active { background: var(--surface-low); }
 
 /* New-project dialog: no gray blocks, readable in both themes. */
 .new-project-window .dialog-icon { color: var(--text); background: var(--surface-low); border: 1px solid var(--line); box-shadow: none; }
@@ -495,11 +505,12 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 
 
 .composer-contextbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 1px 5px; }
-.composer-project-main { display: inline-flex; min-width: 0; align-items: center; gap: 5px; padding: 2px 5px 2px 1px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 11px; }
+.composer-project-main { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 5px; padding: 2px 5px 2px 1px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 11px; }
+.composer-project-main svg { flex-shrink: 0; }
 .composer-project-main:hover { color: var(--text); background: var(--surface-low); }
 .composer-project-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-git-state { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint); font: 10px var(--code-font); }
-.composer-git-create { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; }
+.composer-git-create { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 10px; }
 .composer-git-create:hover:not(:disabled) { color: var(--text); background: var(--surface-low); }
 .quick-menu-wrap { position: relative; }
 .quick-menu { position: absolute; z-index: 46; bottom: 34px; left: -4px; width: 190px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-float); }
