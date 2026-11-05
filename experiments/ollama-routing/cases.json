@@ -1,0 +1,30 @@
+{
+  "synthetic": true,
+  "labelPolicy": "These 24 cases and reference labels were manually authored for a synthetic experiment. They are not real user records, production evaluations, or independently verified ground truth.",
+  "cases": [
+    {"id": "general-greeting", "synthetic": true, "language": "zh", "description": "你好，简单介绍一下你能帮我做什么，用一句话。", "expected": {"taskType": "general", "complexity": "low"}},
+    {"id": "code-one-function", "synthetic": true, "language": "zh-en", "description": "写一个 TypeScript 函数，把字符串数组中的空字符串过滤掉，只输出这个小函数。", "expected": {"taskType": "code", "complexity": "low"}},
+    {"id": "code-local-bug", "synthetic": true, "language": "zh-en", "description": "修复 parsePrice 的小 bug：输入空字符串时返回 null，其他行为保留。只改这一处条件判断。", "expected": {"taskType": "code", "complexity": "low"}},
+    {"id": "code-architecture-migration", "synthetic": true, "language": "zh-en", "description": "全面重构桌面应用的同步架构：把单机 SQLite 改为离线优先、多设备合并与冲突恢复，迁移历史记录并实现灰度发布和回滚，修改前后端所有相关模块。", "expected": {"taskType": "code", "complexity": "high"}},
+    {"id": "review-small-function", "synthetic": true, "language": "zh-en", "description": "Review 这个简单函数的可读性，只指出一个最明显的命名问题，不改代码：function f(a){return a.filter(x=>x.active)}。", "expected": {"taskType": "review", "complexity": "low"}},
+    {"id": "review-cross-system", "synthetic": true, "language": "zh", "description": "全面审查这次横跨桌面端、同步服务、数据库迁移和消息队列的架构变更，评估一致性、失败恢复及上线回滚；给出逐模块审查报告，先不要实施修改。", "expected": {"taskType": "review", "complexity": "high"}},
+    {"id": "analysis-small-table", "synthetic": true, "language": "zh", "description": "简单比较两个方案的价格：A每月20元，B每月30元。指出哪个便宜以及差多少钱。", "expected": {"taskType": "analysis", "complexity": "low"}},
+    {"id": "analysis-channel-metrics", "synthetic": true, "language": "zh-en", "description": "分析这三个月的渠道指标，算转化率并比较趋势：一月访客1000、订单50；二月访客1200、订单48；三月访客1500、订单90。给出结果和两个可能解释。", "expected": {"taskType": "analysis", "complexity": "medium"}},
+    {"id": "reasoning-syllogism", "synthetic": true, "language": "zh", "description": "简单推理：所有红球都在盒子里，这个球是红球，所以它在哪里？一句话回答。", "expected": {"taskType": "reasoning", "complexity": "low"}},
+    {"id": "reasoning-delivery-plan", "synthetic": true, "language": "zh", "description": "为六个城市的仓库制定全国配送改造方案，同时约束车辆载重、司机排班、分段时窗、预算和节假日需求，推导阶段安排及冲突解决策略，不写代码。", "expected": {"taskType": "reasoning", "complexity": "high"}},
+    {"id": "creative-short-copy", "synthetic": true, "language": "zh", "description": "给一家书店写一句简单的开业文案，十个字以内。", "expected": {"taskType": "creative", "complexity": "low"}},
+    {"id": "creative-story", "synthetic": true, "language": "zh", "description": "写一个六百字的温暖故事：修钟表的人收到一封迟到的信，需要完整起承转合，并用钟声呼应开头。", "expected": {"taskType": "creative", "complexity": "medium"}},
+    {"id": "general-simple-fact", "synthetic": true, "language": "en", "description": "Quick question: what is the capital of France? Give a short answer.", "expected": {"taskType": "general", "complexity": "low"}},
+    {"id": "reasoning-proof", "synthetic": true, "language": "zh", "description": "证明对任意整数n，n的平方与n的差是偶数，并解释为什么连续整数中必有一个偶数。", "expected": {"taskType": "reasoning", "complexity": "medium"}},
+    {"id": "code-english-local-fix", "synthetic": true, "language": "en", "description": "Fix the pagination bug in the React list: reset the page when filters change, preserve sorting, and update the existing component tests. The change is limited to the list component and its tests.", "expected": {"taskType": "code", "complexity": "medium"}},
+    {"id": "review-english-pr", "synthetic": true, "language": "en", "description": "Review a pull request touching the date parser and its tests. Check timezone correctness and edge cases, then report actionable findings. Do not edit any files.", "expected": {"taskType": "review", "complexity": "medium"}},
+    {"id": "analysis-mixed-data", "synthetic": true, "language": "zh-en", "description": "Compare 两款产品的 monthly retention 数据：A=[80,72,68]，B=[75,73,71]。计算各自下滑幅度，分析哪个更稳定，并说明样本限制。", "expected": {"taskType": "analysis", "complexity": "medium"}},
+    {"id": "creative-english-story", "synthetic": true, "language": "en", "description": "Write a 150-word story about an astronaut who misses the rain. Include a clear turning point and end with a hopeful image.", "expected": {"taskType": "creative", "complexity": "medium"}},
+    {"id": "general-translation", "synthetic": true, "language": "zh-en", "description": "把这一句简单翻译成英文：会议改到明天下午三点。", "expected": {"taskType": "general", "complexity": "low"}},
+    {"id": "followup-code", "synthetic": true, "language": "zh-en", "context": "上一轮用户要求写一个小的 TypeScript trimInput 函数，助手已给出实现，尚未添加空字符串示例。", "description": "继续，只给它补一个空字符串的调用示例。", "expected": {"taskType": "code", "complexity": "low"}},
+    {"id": "followup-analysis", "synthetic": true, "language": "zh", "context": "上一轮讨论同一桌面应用的三种存储选择：第一种JSON文件，第二种SQLite，第三种嵌入式键值库；本轮目标是比较，不是实施。", "description": "再比较第二种和第三种，重点看查询方式、维护成本和适用范围。", "expected": {"taskType": "analysis", "complexity": "medium"}},
+    {"id": "followup-creative", "synthetic": true, "language": "zh", "context": "上一轮正在创作一段约三百字的乡村旅行散文，风格平实、缓慢，使用第三人称。", "description": "沿用刚才的风格，写下一段三百字，加入雨停后的细节和一次人物互动。", "expected": {"taskType": "creative", "complexity": "medium"}},
+    {"id": "followup-complex-code", "synthetic": true, "language": "zh-en", "context": "第二个方案是把旧版跨区域数据同步服务整体迁移到事件日志架构，涉及所有客户端、服务端协议、历史数据回填、双写校验和分批回滚。上一轮仅完成了方案对比。", "description": "按第二个方案实施，把相关模块和迁移工具一起完成。", "expected": {"taskType": "code", "complexity": "high"}},
+    {"id": "general-thanks", "synthetic": true, "language": "zh", "description": "谢谢，先这样。", "expected": {"taskType": "general", "complexity": "low"}}
+  ]
+}
