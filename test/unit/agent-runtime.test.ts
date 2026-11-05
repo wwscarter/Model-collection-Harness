@@ -427,6 +427,24 @@ describe('AgentRuntime (Pi SDK)', () => {
     const { runtime: agent } = runtime();
     await expect(agent.run({ model: model(), prompt: 'hi' })).rejects.toThrow();
   });
+
+  it.each(['', '  \n '])('rejects a completed provider response containing only %j', async (content) => {
+    requests.length = 0;
+    replies = [text(content)];
+    const { runtime: agent } = runtime();
+    await expect(agent.run({ model: model({ provider: 'custom' }), prompt: 'hi', enableTools: false })).rejects.toThrow('模型返回空文本，未生成可用回答');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('does not treat a successful tool result as a final answer when the following response is empty', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'project overview' }), text('')];
+    const { runtime: agent } = runtime();
+    const events: ToolEvent[] = [];
+    await expect(agent.run({ model: model(), prompt: 'Analyze the project', onToolEvent: (event) => events.push(event) })).rejects.toThrow('模型返回空文本，未生成可用回答');
+    expect(requests).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ toolName: 'web_search', status: 'completed' });
+  });
 });
 
 describe('model mapping', () => {

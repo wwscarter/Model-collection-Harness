@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased — 2026-11-04
+## 0.1.0 — 2026-11-05
+
+### Routing and learning
+
+- Added optional local Ollama classification with model detection, background warmup, cancellation, deadlines, circuit breaking, and deterministic fallback.
+- Replaced DeepSeek-specific master selection with capability-based planning roles; the selected executor retains ownership of execution and synthesis.
+- Added local, explicitly confirmed classification corrections and bounded example retrieval; prompt/model versions and fallback evidence are recorded in traces. This does not train model weights.
+- Preserved recent conversation context for follow-up classification and reject empty final answers instead of recording them as successful.
 
 ### UI
+
+- Unified model/endpoint settings, runtime settings, monitoring, dialogs, file previews, terminal and code output with shared neutral colors: light backgrounds and dark text in system light mode, dark backgrounds and light text in system dark mode. Native controls, focus, hover, selection and status surfaces follow the same appearance.
 
 - Added progressive file preview: the right workspace is hidden by default, opens as a 270px file tree from the top-bar panel switch, expands to a code-preview + tree dual pane only after a file is clicked, and returns to the tree-only state when the preview is closed.
 - Swapped the sidebar brand toolbar sides and show concrete model ids (instead of display names) in the chat attribution, model menu and composer.

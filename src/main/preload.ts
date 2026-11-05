@@ -21,6 +21,17 @@ const amdApi = {
   deleteModel: (id: string) => ipcRenderer.invoke('model:delete', id),
   testModel: (id: string) => ipcRenderer.invoke('model:test-connection', id),
   routingStatus: () => ipcRenderer.invoke('routing:status'),
+  routingConfig: {
+    get: () => ipcRenderer.invoke('routing:config:get'),
+    set: (settings: unknown) => ipcRenderer.invoke('routing:config:set', settings),
+    probe: (settings?: unknown) => ipcRenderer.invoke('routing:config:probe', settings),
+  },
+  routingLearning: {
+    get: (runId: string) => ipcRenderer.invoke('routing:learning:get', runId),
+    correct: (input: unknown) => ipcRenderer.invoke('routing:learning:correct', input),
+    export: () => ipcRenderer.invoke('routing:learning:export'),
+    clear: () => ipcRenderer.invoke('routing:learning:clear'),
+  },
   executeTask: (input: unknown) => ipcRenderer.invoke('session:execute', input),
   getTaskMetrics: (sessionId?: string) => ipcRenderer.invoke('metrics:task', sessionId),
   getRecentInvocations: (limit?: number) => ipcRenderer.invoke('metrics:recent', limit),

@@ -1,6 +1,6 @@
 import { hasUsableCredentials, type ModelConfig, type ModelCapabilityType } from '@core/models/ModelConfig';
 import { modelRegistry } from '@core/models/ModelRegistry';
-import { LocalRoutingModel } from './LocalRoutingModel';
+import { LocalRoutingModel, type LocalRoutingClassification } from './LocalRoutingModel';
 export interface RoutingRegistry { getEnabledModels(): ModelConfig[]; }
 export interface RoutingPerformance { getRoutingAdjustment(modelId: string, taskType?: string): number; }
 
@@ -15,7 +15,11 @@ export interface TaskContext {
   complexity?: TaskComplexity;
   estimatedTokens?: number;
   budget?: number;
+  /** Minimal conversation context for resolving follow-up requests. */
+  priorContext?: string;
 }
+
+export interface RoutingOptions { signal?: AbortSignal; skipSemantic?: boolean; }
 
 export interface RoutingDecision {
   modelId: string;
@@ -31,6 +35,8 @@ export interface RoutingDecision {
   collaboratorModelIds?: string[];
   estimatedCost: number;
   estimatedDuration: number;
+  /** Classifier evidence is separate from the execution model's capability score. */
+  classification?: LocalRoutingClassification;
 }
 
 const capabilityForTask: Record<TaskType, ModelCapabilityType> = {
@@ -51,13 +57,17 @@ export class AgentRouter {
 
   getLocalModelStatus(): ReturnType<LocalRoutingModel['getStatus']> { return this.localModel.getStatus(); }
 
-  async routeTask(context: TaskContext, candidates = this.registry.getEnabledModels()): Promise<RoutingDecision> {
+  async routeTask(context: TaskContext, candidates = this.registry.getEnabledModels(), options: RoutingOptions = {}): Promise<RoutingDecision> {
+    options.signal?.throwIfAborted();
     const enabled = candidates.filter((model) => model.enabled && hasUsableCredentials(model));
     if (!enabled.length) {
       const anyEnabled = candidates.some((model) => model.enabled);
       throw new Error(anyEnabled ? '已启用的模型都没有可用的 API Key，请先在模型设置中配置凭据' : 'No enabled models are configured');
     }
-    const localClassification = await this.localModel.classify(context);
+    // Pinned sessions need labels for reporting, without waiting for semantic inference.
+    const classifier = options.skipSemantic ? new LocalRoutingModel() : this.localModel;
+    const localClassification = await classifier.classify(context, { signal: options.signal });
+    options.signal?.throwIfAborted();
     const taskType = context.type === 'general' ? localClassification.taskType : context.type;
     const complexity = context.complexity ?? localClassification.complexity;
     const capability = capabilityForTask[taskType] ?? 'reasoning';
@@ -85,6 +95,7 @@ export class AgentRouter {
         ? `Explicit primary model for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`
         : `Capability match for ${taskType} at ${complexity} complexity (${localClassification.backend}).${budgetNote}`,
       confidence: Math.min(0.98, 0.62 + (selected.capabilities.find(c => c.type === capability)?.score ?? 0) / 300),
+      classification: localClassification,
       alternativeModels: ranked.slice(1, 3).map(model => model.id),
       estimatedCost,
       estimatedDuration: Math.max(1000, estimatedTokens * (complexity === 'high' ? 12 : 7))

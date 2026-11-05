@@ -19,6 +19,7 @@ import { executeRun, type RunDependencies } from '../../src/core/agent/RunCoordi
 import type { ContextTurn } from '../../src/core/context/ContextAssembler';
 import * as summaryService from '../../src/core/context/SummaryService';
 import { modelContextBudget } from '../../src/core/context/ContextBudget';
+import { DEFAULT_ROUTING_SETTINGS } from '../../src/core/routing/RoutingSettings';
 
 function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
   return {
@@ -86,7 +87,7 @@ describe('RunCoordinator', () => {
   });
 
   it('labels a limited subagent report as partial while allowing the final executor to finish', async () => {
-    const lead = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', contextWindow: 32_000 });
+    const lead = model('lead', { name: 'Lead', contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 95 }] });
     const reviewer = model('reviewer', { name: 'Reviewer', contextWindow: 32_000 });
     const plan = JSON.stringify({ mode: 'delegate', taskType: 'general', complexity: 'medium', subagents: [{ modelId: 'reviewer', role: 'analysis', instruction: 'Inspect the pending work.' }], verify: false });
     let finalPrompt = '';
@@ -100,7 +101,7 @@ describe('RunCoordinator', () => {
     const events: Array<{ channel: string; payload: any }> = [];
     const growth = vi.spyOn(deps.growth, 'recordFeedback');
     try {
-      const output = await executeRun({ sessionId: 'session-1', runId: 'partial-agent', prompt: 'Complete the task', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
+      const output = await executeRun({ sessionId: 'session-1', runId: 'partial-agent', prompt: 'Complete the task', complexity: 'high', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
       expect(finalPrompt).toContain('子任务部分完成');
       expect(finalPrompt).toContain('不可视为完整成果');
       expect(finalPrompt).toContain('剩余模块尚待检查');
@@ -133,40 +134,42 @@ describe('RunCoordinator', () => {
     } finally { cleanup(); }
   });
 
-  it('lets DeepSeek plan and delegate to a subagent before synthesizing', async () => {
-    const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', capabilities: [{ type: 'reasoning', score: 95 }] });
+  it('uses a generic planner for suggestions while the routed executor synthesizes', async () => {
+    const planner = model('planner', { capabilities: [{ type: 'reasoning', score: 95 }] });
+    const executor = model('executor', { isPrimary: true, capabilities: [{ type: 'code', score: 95 }] });
     const reviewer = model('reviewer', { name: 'Reviewer', capabilities: [{ type: 'reasoning', score: 90 }, { type: 'code', score: 90 }] });
     const prompts: Array<{ model: string; prompt: string }> = [];
     const plan = JSON.stringify({
       mode: 'delegate', taskType: 'code', complexity: 'high', plan: 'Review the API, then rewrite the handler.',
       subagents: [{ modelId: 'reviewer', role: 'review', instruction: 'Find correctness and security issues in src/api.ts.' }], verify: false,
     });
-    const { deps, traceStore, cleanup } = makeDeps([deepseek, reviewer], async (current, prompt, _max, onDelta) => {
+    const { deps, traceStore, cleanup } = makeDeps([planner, reviewer, executor], async (current, prompt, _max, onDelta) => {
       prompts.push({ model: current.id, prompt });
       const content = current.id === 'reviewer' ? 'reviewer report: handlers need validation ' + 'details '.repeat(4_000) : 'final synthesized answer';
       onDelta(content);
       return { content, inputTokens: 10, outputTokens: 5, modelId: current.id };
-    }, () => ({ modelId: 'deepseek-chat', invoke: async () => ({ content: plan, inputTokens: 20, outputTokens: 10, modelId: 'deepseek-chat' }) }));
+    }, () => ({ modelId: planner.id, invoke: async () => ({ content: plan, inputTokens: 20, outputTokens: 10, modelId: planner.id }) }));
     try {
       const output = await executeRun({
         sessionId: 'session-1', taskId: 'session-1', runId: 'run-3', assistantMessageId: 'a-3',
-        prompt: 'review and fix the API', includeProjectContext: false, enableTools: false, history: [],
+        prompt: 'review and fix the API', complexity: 'high', includeProjectContext: false, enableTools: false, history: [],
       }, deps, () => undefined);
       expect(output.output).toBe('final synthesized answer');
-      expect(output.orchestration).toMatchObject({ orchestratorModelId: 'deepseek-chat', mode: 'delegate' });
-      expect(prompts.map((entry) => entry.model)).toEqual(['reviewer', 'deepseek-chat']);
+      expect(output.orchestration).toMatchObject({ orchestratorModelId: planner.id, planningModelId: planner.id, executorModelId: executor.id, synthesizerModelId: executor.id, mode: 'delegate' });
+      expect((output.modelUsed as { id: string }).id).toBe(executor.id);
+      expect(prompts.map((entry) => entry.model)).toEqual(['reviewer', executor.id]);
       expect(prompts[0].prompt).toContain('Find correctness and security issues');
       expect(prompts[1].prompt).toContain('reviewer report: handlers need validation');
       expect(prompts[1].prompt).toContain('附加上下文已按模型窗口截断');
       expect(Math.ceil(prompts[1].prompt.length / 4)).toBeLessThanOrEqual(1024);
       expect(output.metrics).toMatchObject({ inputTokens: 40, outputTokens: 20 });
       expect((output.metrics as { totalCost: number }).totalCost).toBeCloseTo(0.0008);
-      expect(output.modelsUsed).toEqual(expect.arrayContaining(['deepseek-chat', 'reviewer']));
-      expect(traceStore.getTrace('run-3')?.spans.some((span) => span.name === 'orchestrator-plan')).toBe(true);
+      expect(output.modelsUsed).toEqual(expect.arrayContaining([planner.id, 'reviewer', executor.id]));
+      expect(traceStore.getTrace('run-3')?.spans.find((span) => span.name === 'planning')?.attributes).toMatchObject({ modelId: planner.id, executorModelId: executor.id });
     } finally { cleanup(); }
   });
 
-  it('runs the pinned session model without DeepSeek orchestration', async () => {
+  it('runs the pinned session model without semantic classification or planning', async () => {
     const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', capabilities: [{ type: 'reasoning', score: 95 }] });
     const reviewer = model('reviewer', { name: 'Reviewer', capabilities: [{ type: 'code', score: 90 }] });
     let calls = 0;
@@ -175,6 +178,7 @@ describe('RunCoordinator', () => {
       onDelta('pinned answer');
       return { content: 'pinned answer', inputTokens: 10, outputTokens: 5, modelId: current.id };
     }, () => { throw new Error('orchestrator must not run for a pinned model'); });
+    const route = vi.spyOn(deps.routing, 'routeTask');
     try {
       const output = await executeRun({
         sessionId: 'session-1', taskId: 'session-1', runId: 'run-pinned', assistantMessageId: 'a-pinned',
@@ -184,7 +188,8 @@ describe('RunCoordinator', () => {
       expect((output.modelUsed as { id: string }).id).toBe('reviewer');
       expect(output.orchestration).toBeUndefined();
       expect(calls).toBe(1);
-      expect(traceStore.getTrace('run-pinned')?.spans.some((span) => span.name === 'orchestrator-plan')).toBe(false);
+      expect(route).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), expect.objectContaining({ signal: expect.any(AbortSignal), skipSemantic: true }));
+      expect(traceStore.getTrace('run-pinned')?.spans.some((span) => span.name === 'planning')).toBe(false);
     } finally { cleanup(); }
   });
 
@@ -383,12 +388,12 @@ describe('RunCoordinator', () => {
   });
 
   it('fits an expanded planning report before final execution', async () => {
-    const models = [model('executor', { contextWindow: 10_000 }), model('planner', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 90 }] })];
+    const models = [model('executor', { contextWindow: 4096 }), model('planner', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 90 }] })];
     let finalPrompt = '';
     const { deps, cleanup } = makeDeps(models, async (current, prompt) => {
       finalPrompt = prompt;
       return { content: 'answer', inputTokens: 10, outputTokens: 5, modelId: current.id };
-    }, (current) => ({ modelId: current.id, invoke: async () => ({ content: 'Detailed execution plan '.repeat(2_000), inputTokens: 10, outputTokens: 1200, modelId: current.id }) }));
+    }, (current) => ({ modelId: current.id, invoke: async () => ({ content: JSON.stringify({ mode: 'direct', plan: 'Detailed execution plan '.repeat(2_000) }), inputTokens: 10, outputTokens: 1200, modelId: current.id }) }));
     deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [{ id: 'selected', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'plan' } }] });
     try {
       await executeRun({ sessionId: 'session-1', prompt: 'Complete USER_REQUIREMENT_AT_END', complexity: 'high', includeProjectContext: false }, deps, () => undefined);
@@ -409,6 +414,221 @@ describe('RunCoordinator', () => {
     try {
       await executeRun({ sessionId: 'session-1', prompt: 'hello', complexity, includeProjectContext: false }, deps, () => undefined);
       expect(plan).toHaveBeenCalledTimes(expectedPlans);
+    } finally { cleanup(); }
+  });
+
+  it('does not let a DeepSeek candidate add planning or replace a simple routed task', async () => {
+    const planner = model('deepseek', { provider: 'deepseek', capabilities: [{ type: 'reasoning', score: 99 }] });
+    const executor = model('executor', { capabilities: [{ type: 'code', score: 99 }] });
+    const provider = vi.fn(() => { throw new Error('simple tasks do not need a planner'); });
+    const invoke = vi.fn(async (current: ModelConfig) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    const { deps, cleanup } = makeDeps([planner, executor], invoke, provider);
+    try {
+      const output = await executeRun({ sessionId: 'session-1', prompt: 'fix this simple API bug', includeProjectContext: false }, deps, () => undefined);
+      expect((output.modelUsed as { id: string }).id).toBe(executor.id);
+      expect(output.planningModelId).toBeUndefined();
+      expect(provider).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally { cleanup(); }
+  });
+
+  it.each(['off', 'missing', 'disabled'] as const)('continues with its executor when planner setting is %s', async (setting) => {
+    const models = [model('executor', { isPrimary: true }), model('planner', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 95 }] }), model('disabled', { enabled: false, capabilities: [{ type: 'reasoning', score: 99 }] })];
+    const provider = vi.fn(() => { throw new Error('must not silently replace the configured planner'); });
+    const { deps, cleanup } = makeDeps(models, async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }), provider);
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: setting === 'off' ? { mode: 'off' } : { mode: 'auto', modelId: setting } };
+    try {
+      const output = await executeRun({ sessionId: 'session-1', prompt: 'Design a system', complexity: 'high', includeProjectContext: false }, deps, () => undefined);
+      expect((output.modelUsed as { id: string }).id).toBe('executor');
+      expect(output.planningModelId).toBeUndefined();
+      expect(provider).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('keeps explicit parallel collaborators when planning is off', async () => {
+    const models = [model('executor', { isPrimary: true }), model('a'), model('b')];
+    const provider = vi.fn();
+    const calls: string[] = [];
+    const { deps, cleanup } = makeDeps(models, async (current) => {
+      calls.push(current.id);
+      return { content: 'report', inputTokens: 1, outputTokens: 1, modelId: current.id };
+    }, provider);
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' } };
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'parallel', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'parallel', collaboratorModelIds: ['a', 'b'] } },
+    ] });
+    try {
+      await executeRun({ sessionId: 'session-1', prompt: 'Compare alternatives', includeProjectContext: false }, deps, () => undefined);
+      expect(calls).toEqual(['a', 'b', 'executor']);
+      expect(provider).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('reserves the specified planner once and keeps its suggestions from changing task classification', async () => {
+    const planner = model('chosen', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 70 }], rateLimit: { requestsPerMinute: 1, tokensPerDay: 100_000 } });
+    const strongest = model('strongest', { capabilities: [{ type: 'reasoning', score: 99 }] });
+    const executor = model('executor', { isPrimary: true });
+    const plan = vi.fn(async () => ({ content: JSON.stringify({ mode: 'direct', taskType: 'creative', complexity: 'low', plan: 'Inspect before implementing' }), inputTokens: 2, outputTokens: 3, modelId: planner.id }));
+    const provider = vi.fn((current: ModelConfig) => ({ modelId: current.id, invoke: plan }));
+    const { deps, cleanup } = makeDeps([executor, strongest, planner], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }), provider);
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'auto', modelId: planner.id } };
+    const reserve = vi.spyOn(deps.quota, 'reserve');
+    try {
+      const output = await executeRun({ sessionId: 'session-1', prompt: 'Implement a system', taskType: 'code', complexity: 'high', includeProjectContext: false }, deps, () => undefined);
+      expect(provider).toHaveBeenCalledWith(expect.objectContaining({ id: planner.id }));
+      expect(reserve.mock.calls.filter(([current]) => current.id === planner.id)).toHaveLength(1);
+      expect(deps.quota.isAvailable(planner)).toBe(false);
+      expect(output.decision).toMatchObject({ modelId: executor.id, taskType: 'code', complexity: 'high' });
+      expect(output.planningModelId).toBe(planner.id);
+    } finally { cleanup(); }
+  });
+
+  it('uses bounded prior conversation separately from the user description and records classification in trace', async () => {
+    const { deps, traceStore, cleanup } = makeDeps([model('executor')], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    const route = vi.spyOn(deps.routing, 'routeTask');
+    const observe = vi.fn();
+    deps.onClassification = observe;
+    const history = [{ role: 'user' as const, content: 'Earlier context '.repeat(200) + 'PROJECT_CONTEXT_TAIL' }];
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'classification-trace', prompt: 'continue', history, includeProjectContext: false }, deps, () => undefined);
+      const context = route.mock.calls[0][0];
+      expect(context.description).toBe('continue');
+      expect(context.priorContext?.length).toBeLessThanOrEqual(250);
+      expect(context.priorContext).toContain('PROJECT_CONTEXT_TAIL');
+      expect(context.priorContext).toContain('[截断]');
+      expect(observe).toHaveBeenCalledWith(expect.objectContaining({ runId: 'classification-trace', sessionId: 'session-1', description: 'continue', priorContext: context.priorContext, classification: (output.decision as { classification: unknown }).classification }));
+      expect(traceStore.getTrace('classification-trace')?.spans.find((span) => span.name === 'route')?.attributes?.classification).toEqual((output.decision as { classification: unknown }).classification);
+    } finally { cleanup(); }
+  });
+
+  it('uses the latest second-option exchange instead of an older stored summary for classification and feedback', async () => {
+    const { deps, cleanup } = makeDeps([model('executor', { contextWindow: 128_000 })], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    deps.summaries.saveSummary('session-1', { text: 'OLD_SUMMARY: earlier branding discussion', coversTo: 1, tokens: 20 });
+    const route = vi.spyOn(deps.routing, 'routeTask');
+    const observe = vi.fn();
+    deps.onClassification = observe;
+    const history = [
+      { role: 'user', content: '请比较第一方案和第二方案的部署方式。' },
+      { role: 'assistant', content: '第一方案：本地运行。' + '说明细节。'.repeat(9000) + '第二方案：使用托管路由服务。' },
+      { role: 'assistant', content: '   ' },
+    ];
+    try {
+      await executeRun({ sessionId: 'session-1', prompt: '采用第二方案', history, includeProjectContext: false }, deps, () => undefined);
+      const context = route.mock.calls[0][0];
+      expect(context.description).toBe('采用第二方案');
+      expect(context.priorContext?.length).toBeLessThanOrEqual(250);
+      expect(context.priorContext).toContain('请比较第一方案和第二方案');
+      expect(context.priorContext).toContain('第一方案：本地运行');
+      expect(context.priorContext).toContain('第二方案：使用托管路由服务');
+      expect(context.priorContext).toContain('[截断]');
+      expect(context.priorContext).not.toContain('OLD_SUMMARY');
+      expect(observe.mock.calls[0][0].priorContext).toBe(context.priorContext);
+    } finally { cleanup(); }
+  });
+
+  it('uses bounded summary snippets only when there are no nonempty recent turns', async () => {
+    const { deps, cleanup } = makeDeps([model('executor')], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    deps.summaries.saveSummary('session-1', { text: 'SUMMARY_START ' + 'old details '.repeat(100) + 'SUMMARY_END', coversTo: 1, tokens: 300 });
+    const route = vi.spyOn(deps.routing, 'routeTask');
+    try {
+      await executeRun({ sessionId: 'session-1', prompt: 'continue', history: [{ role: 'user', content: ' ' }], includeProjectContext: false }, deps, () => undefined);
+      const prior = route.mock.calls[0][0].priorContext;
+      expect(prior?.length).toBeLessThanOrEqual(250);
+      expect(prior).toContain('SUMMARY_START');
+      expect(prior).toContain('SUMMARY_END');
+      expect(prior).toContain('[截断]');
+    } finally { cleanup(); }
+  });
+
+  it('isolates an observation callback failure from task execution', async () => {
+    const { deps, cleanup } = makeDeps([model('executor')], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    deps.onClassification = () => { throw new Error('observation unavailable'); };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const output = await executeRun({ sessionId: 'session-1', prompt: 'hello', includeProjectContext: false }, deps, () => undefined);
+      expect(output.output).toBe('done');
+      expect(log).toHaveBeenCalledWith('Routing observation failed', expect.any(Error));
+    } finally { log.mockRestore(); cleanup(); }
+  });
+
+  it('cancels a pending semantic route before invoking any model', async () => {
+    const invoke = vi.fn();
+    const { deps, traceStore, cleanup } = makeDeps([model('executor')], invoke);
+    vi.spyOn(deps.routing, 'routeTask').mockImplementation(async () => new Promise(() => undefined));
+    try {
+      const pending = executeRun({ sessionId: 'session-1', runId: 'cancel-route', prompt: 'continue', includeProjectContext: false }, deps, () => undefined);
+      queueMicrotask(() => deps.controller.abort());
+      await expect(pending).rejects.toThrow('任务已取消');
+      expect(invoke).not.toHaveBeenCalled();
+      expect(traceStore.getTrace('cancel-route')?.run.status).toBe('cancelled');
+    } finally { cleanup(); }
+  });
+
+  it('cancels a pending planner without continuing to execution', async () => {
+    const invoke = vi.fn();
+    let started: () => void = () => undefined;
+    const planningStarted = new Promise<void>((resolve) => { started = resolve; });
+    const { deps, traceStore, cleanup } = makeDeps([model('executor', { isPrimary: true }), model('planner', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 95 }] })], invoke, (current) => ({ modelId: current.id, invoke: async () => { started(); return new Promise(() => undefined); } }));
+    try {
+      const pending = executeRun({ sessionId: 'session-1', runId: 'cancel-planner', prompt: 'Design a system', complexity: 'high', includeProjectContext: false }, deps, () => undefined);
+      const rejected = expect(pending).rejects.toThrow('任务已取消');
+      await planningStarted;
+      deps.controller.abort();
+      await rejected;
+      expect(invoke).not.toHaveBeenCalled();
+      expect(traceStore.getTrace('cancel-planner')?.spans.find((span) => span.name === 'planning')?.status).toBe('cancelled');
+    } finally { cleanup(); }
+  });
+
+  it('does not silently replace an unavailable utility model for summaries or extraction', async () => {
+    const provider = vi.fn();
+    const { deps, cleanup } = makeDeps([model('executor', { contextWindow: 10_000 }), model('available-utility')], async (current) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }), provider);
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), utilityModelId: 'removed' };
+    deps.memory.setAutoExtract(true);
+    const history: ContextTurn[] = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: 'history '.repeat(100) }));
+    try {
+      await executeRun({ sessionId: 'session-1', prompt: 'continue', pinnedModelId: 'executor', history, includeProjectContext: false }, deps, () => undefined);
+      expect(provider).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it('plans a parallel strategy without replacing its explicitly selected collaborators', async () => {
+    const models = [model('executor'), model('planner', { contextWindow: 32_000, capabilities: [{ type: 'reasoning', score: 95 }] }), model('a'), model('b'), model('suggested')];
+    const calls: string[] = [];
+    const plan = vi.fn(async () => ({ content: JSON.stringify({ mode: 'delegate', subagents: [{ modelId: 'suggested', instruction: 'Inspect an alternative.' }] }), inputTokens: 1, outputTokens: 1, modelId: 'planner' }));
+    const { deps, cleanup } = makeDeps(models, async (current) => {
+      calls.push(current.id);
+      return { content: 'report', inputTokens: 1, outputTokens: 1, modelId: current.id };
+    }, (current) => ({ modelId: current.id, invoke: plan }));
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'parallel', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'parallel', collaboratorModelIds: ['a', 'b'] } },
+    ] });
+    try {
+      const output = await executeRun({ sessionId: 'session-1', prompt: 'Compare alternatives', includeProjectContext: false }, deps, () => undefined);
+      expect(plan).toHaveBeenCalledOnce();
+      expect(calls).toEqual(['a', 'b', 'executor']);
+      expect(output.planningModelId).toBe('planner');
+      expect(output.decision).toMatchObject({ modelId: 'executor', strategy: 'parallel', collaboratorModelIds: ['a', 'b'] });
+    } finally { cleanup(); }
+  });
+
+  it.each(['invalid-json', 'undersized'] as const)('falls back to its routed executor when optional planning is %s', async (failure) => {
+    const planner = model('planner', { contextWindow: failure === 'undersized' ? 1000 : 32_000, maxTokens: 1000, capabilities: [{ type: 'reasoning', score: 95 }] });
+    const provider = vi.fn((current: ModelConfig) => ({ modelId: current.id, invoke: async () => ({ content: 'not a JSON plan', inputTokens: 2, outputTokens: 1, modelId: current.id }) }));
+    const invoke = vi.fn(async (current: ModelConfig) => ({ content: 'done', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    const { deps, traceStore, cleanup } = makeDeps([model('executor', { isPrimary: true }), planner], invoke, provider);
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'plan-fallback', prompt: 'Plan this system', complexity: 'high', includeProjectContext: false }, deps, () => undefined);
+      expect((output.modelUsed as { id: string }).id).toBe('executor');
+      expect(output.orchestration).toBeUndefined();
+      expect(invoke).toHaveBeenCalledOnce();
+      if (failure === 'undersized') {
+        expect(provider).not.toHaveBeenCalled();
+        expect(traceStore.getTrace('plan-fallback')?.spans.find((span) => span.name === 'planning')?.status).toBe('failed');
+      } else {
+        expect(provider).toHaveBeenCalledOnce();
+        expect(traceStore.getTrace('plan-fallback')?.spans.find((span) => span.name === 'planning')?.attributes).toMatchObject({ valid: false, fallback: 'normal-routing' });
+      }
     } finally { cleanup(); }
   });
 });
