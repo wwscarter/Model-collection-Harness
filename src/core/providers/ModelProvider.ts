@@ -1,7 +1,7 @@
 import { hasUsableCredentials, type ModelConfig } from '@core/models/ModelConfig';
 
 export interface InvokeConfig { temperature?: number; maxTokens?: number; signal?: AbortSignal; }
-export interface ModelResponse { content: string; inputTokens: number; outputTokens: number; modelId: string; stopReason?: string; }
+export interface ModelResponse { content: string; inputTokens: number; outputTokens: number; modelId: string; stopReason?: string; budgetLimitReason?: string; }
 export interface ModelStreamChunk { delta: string; done?: boolean; inputTokens?: number; outputTokens?: number; }
 export interface ModelProvider { readonly modelId?: string; invoke(prompt: string, config?: InvokeConfig): Promise<ModelResponse>; invokeStream?(prompt: string, config?: InvokeConfig): AsyncIterable<ModelStreamChunk>; }
 

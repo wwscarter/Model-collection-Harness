@@ -39,6 +39,12 @@ describe('completed session metrics', () => {
       .toMatchObject({ inputTokens: 8036, outputTokens: 73, latencyMs: 61.8, cost: 0.08255, stopReason: 'tool_limit' });
   });
 
+  it('keeps budget termination details for partial output and session restoration', () => {
+    const budgetLimit = { code: 'BUDGET_EXCEEDED' as const, message: '本轮预估费用达到上限', estimatedCost: 0.301, maxCostUsd: 0.25 };
+    expect(completeSessionMetrics({ ...invocation, stopReason: 'budget_limit', budgetLimit }, undefined, undefined, true, 1000))
+      .toMatchObject({ inputTokens: 8036, outputTokens: 73, cost: 0.08255, stopReason: 'budget_limit', budgetLimit });
+  });
+
   it('restores measured timing and confidence after closing and reopening session storage', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-session-metrics-'));
     const dbPath = path.join(directory, 'sessions.db');

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-11-05
+
+- Made per-run estimated cost and duration limits configurable in runtime settings, with legacy settings migration.
+- Check configured budgets before each actual model request, cap output tokens, account reply usage incrementally, and reserve concurrent request estimates.
+- Preserve partial answers and usage for budget stops and output truncation; interrupted revisions retain the original paid answer.
+- Store and display requested model identity and configured pricing snapshots separately from stable configuration IDs; flag edited presets that still carry their original rates.
+- Record bounded tool-failure reasons and correct fallback trace ownership and failed-request usage.
+
 ## 0.1.0 — 2026-11-05
 
 ### Routing and learning

@@ -166,4 +166,33 @@ describe('model routing settings', () => {
     expect(container.querySelector('.endpoint-list-foot')!.textContent).toContain('本地分类模型可用，尚未加载');
     expect(container.querySelector('.endpoint-list-foot')!.textContent).not.toContain('关键词规则就绪');
   });
+
+  it('loads legacy budget defaults and saves USD and minute inputs in the shared settings', async () => {
+    await render();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="每轮预估费用上限（USD）"]')!.value).toBe('0.25');
+    expect(container.querySelector<HTMLInputElement>('[aria-label="最长运行时间（分钟）"]')!.value).toBe('10');
+    expect(button('保存路由设置').disabled).toBe(true);
+    await input('每轮预估费用上限（USD）', '1.5');
+    await input('最长运行时间（分钟）', '25');
+    expect(set).not.toHaveBeenCalled();
+    await submit();
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ budget: { maxCostUsd: 1.5, maxDurationMs: 1_500_000 } }));
+    expect(container.textContent).toContain('与供应商账单可能不同');
+    expect(container.textContent).toContain('单次请求结束时可能超过估算上限');
+  });
+
+  it('explains unchanged preset rates on an edited model without changing prices', async () => {
+    const migrated = { id: 'openai-gpt-4-turbo', provider: 'custom', name: 'Migrated endpoint', modelId: 'different-upstream', enabled: true, priority: 0, capabilities: [], costPer1kTokens: { input: 0.01, output: 0.03 } };
+    await act(async () => { root.render(createElement(Settings, { models: [migrated], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn() })); });
+    expect(container.querySelector('.settings-pricing-diagnostic')!.textContent).toContain('当前配置沿用旧预设费率');
+    expect(container.querySelector('.settings-pricing-diagnostic')!.textContent).toContain('不代表已确认费率错误');
+    const inputPrice = [...container.querySelectorAll<HTMLLabelElement>('label')].find((label) => label.textContent?.includes('输入价格 / 1K Token'))!.querySelector<HTMLInputElement>('input')!;
+    expect(inputPrice.value).toBe('0.01');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(inputPrice, '0.02');
+      inputPrice.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.querySelector('.settings-pricing-diagnostic')).toBeNull();
+    expect(set).not.toHaveBeenCalled();
+  });
 });

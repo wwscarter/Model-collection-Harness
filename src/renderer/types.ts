@@ -39,6 +39,21 @@ export interface SessionMetrics {
   ttftMs?: number;
   routeConfidence?: number;
   cost?: number;
+  budgetLimit?: BudgetLimitNotice;
+}
+
+export interface BudgetLimitNotice { code: 'BUDGET_EXCEEDED'; message: string; estimatedCost: number; maxCostUsd: number; }
+
+export interface TraceModelSnapshot {
+  configurationId: string;
+  modelId: string;
+  name: string;
+  provider: string;
+  endpointOrigin?: string;
+  costPer1kTokens: { input: number; output: number };
+  configurationUpdatedAt: string;
+  pricingBasis?: 'configured-token-rates';
+  legacyPresetRates?: boolean;
 }
 
 export type RunStatus = 'running' | 'success' | 'failed' | 'cancelled';
@@ -106,6 +121,7 @@ export interface ExecutionResult {
   runId?: string;
   modelUsed?: string;
   metrics?: SessionMetrics;
+  budgetLimit?: BudgetLimitNotice;
   auditResult?: { passed?: boolean; score?: number; issueCount?: number };
   audit?: { passed: boolean; score: number; issueCount: number; auditModelId?: string };
   verification?: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string };

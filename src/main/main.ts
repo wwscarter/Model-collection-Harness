@@ -155,7 +155,7 @@ function sanitizeHistory(value: unknown): HistoryTurn[] {
   });
 }
 
-async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: { history?: HistoryTurn[]; summary?: string; skipHistoryTrim?: boolean; enableTools?: boolean; projectRoot?: string; projectAccess?: 'read' | 'write'; signal?: AbortSignal; onToolEvent?: (event: ToolEvent) => void } = {}): Promise<ModelResponse> {
+async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: number, onDelta: (delta: string) => void, options: NonNullable<Parameters<RunDependencies['invokeStreamed']>[4]> = {}): Promise<ModelResponse> {
   if (options.signal?.aborted) throw new Error('任务已取消');
   // Never turn a missing credential into a plausible-looking "demo" answer:
   // the router filters these models, and a direct call fails loudly instead.
@@ -164,8 +164,9 @@ async function invokeStreamed(model: ModelConfig, prompt: string, maxTokens: num
     model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
+    beforeModelRequest: options.beforeModelRequest, onUsage: options.onUsage,
   });
-  return { content: result.content, inputTokens: result.inputTokens ?? estimateTokens(prompt), outputTokens: result.outputTokens ?? estimateTokens(result.content), modelId: model.id, stopReason: result.stopReason };
+  return { content: result.content, inputTokens: result.inputTokens ?? estimateTokens(prompt), outputTokens: result.outputTokens ?? estimateTokens(result.content), modelId: model.id, stopReason: result.stopReason, budgetLimitReason: result.budgetLimitReason };
 }
 
 function publicModel(model: ModelConfig) {

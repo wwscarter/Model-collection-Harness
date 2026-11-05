@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ChevronRight, Clock3, Coins, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { DashboardSnapshot, RunTrace, TraceRun } from '../types';
-import { TraceTimeline } from '../components/TraceTimeline';
+import { TraceTimeline, traceModelSnapshot } from '../components/TraceTimeline';
 import { RoutingClassificationFeedback } from '../components/RoutingClassificationFeedback';
 
 type Range = '24h' | '7d' | '30d';
@@ -85,6 +85,16 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
   const selectedRun = selectedTrace?.run ?? runs.find((run) => run.id === selectedId);
   const summary = snapshot?.summary;
   const models = (snapshot?.modelUsage ?? []).slice(0, 5);
+  const usedModels = useMemo(() => {
+    const seen = new Set<string>();
+    return (selectedTrace?.spans ?? []).flatMap((span) => {
+      const model = traceModelSnapshot(span);
+      if (!model) return [];
+      const key = model.configurationId + ':' + model.modelId + ':' + model.configurationUpdatedAt;
+      if (seen.has(key)) return [];
+      seen.add(key); return [model];
+    });
+  }, [selectedTrace]);
 
   return <section className="monitoring-page" aria-label="运行监测" aria-busy={loading}>
     <header className="monitoring-header">
@@ -98,7 +108,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
       <div><span><Activity size={13} />运行轮次</span><strong>{integer(summary?.totalTasks)}</strong><small>{summary?.totalInvocations ?? 0} 次模型调用</small></div>
       <div><span><ChevronRight size={13} />调用成功率</span><strong>{summary?.successRate === undefined ? '—' : Math.round(summary.successRate * 100) + '%'}</strong><small>最近 {runs.length} 轮中 {totals.failures} 个失败</small></div>
       <div><span><Clock3 size={13} />平均调用耗时</span><strong>{duration(summary?.avgLatency)}</strong><small>最近 {runs.length} 轮 · {integer(totals.totalTokens)} tok</small></div>
-      <div><span><Coins size={13} />预估成本</span><strong>{money(summary?.totalCost)}</strong><small>{models.length ? models[0].modelId : '暂无模型数据'}</small></div>
+      <div><span><Coins size={13} />预估成本</span><strong>{money(summary?.totalCost)}</strong><small>{models.length ? '配置ID: ' + models[0].modelId : '暂无模型数据'}</small></div>
     </div>
 
     <div className="monitoring-grid">
@@ -108,13 +118,13 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
           {runs.map((run) => <button key={run.id} className={'monitoring-run-row ' + (selectedId === run.id ? 'is-selected' : '')} onClick={() => setSelectedId(run.id)}>
             <span className={'monitoring-run-dot ' + run.status} />
             <span className="monitoring-run-main"><strong>{run.taskType || 'general'}</strong><small>{time(run.startedAt)} · {run.complexity || 'auto'}</small></span>
-            <span className="monitoring-run-model mono" title={run.id}>{run.id.slice(0, 8)}</span>
+            <span className="monitoring-run-model mono" title={'运行 ID: ' + run.id}>{run.id.slice(0, 8)}</span>
             <span className="monitoring-run-metric mono">{duration(run.durationMs)}</span>
             <span className="monitoring-run-status">{statusLabel[run.status] ?? run.status}</span>
           </button>)}
           {!runs.length && <div className="monitoring-empty"><Activity size={20} /><span>完成一次任务后，这里会出现运行记录。</span></div>}
         </div>
-        <div className="monitoring-model-breakdown"><strong>模型分布</strong>{models.map((model) => <div key={model.modelId}><span className="mono" title={model.modelId}>{model.modelId}</span><i><b style={{ width: Math.round((model.share ?? 0) * 100) + '%' }} /></i><small>{Math.round((model.share ?? 0) * 100)}%</small></div>)}</div>
+        <div className="monitoring-model-breakdown"><strong>模型配置分布</strong>{models.map((model) => <div key={model.modelId}><span className="mono" title={'配置 ID: ' + model.modelId}>配置ID: {model.modelId}</span><i><b style={{ width: Math.round((model.share ?? 0) * 100) + '%' }} /></i><small>{Math.round((model.share ?? 0) * 100)}%</small></div>)}</div>
       </section>
 
       <section className="monitoring-trace" aria-label="调用链详情">
@@ -128,6 +138,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
             <span><small>模型调用</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'model').length}</strong></span>
             <span><small>工具</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'tool').length}</strong></span>
           </div>
+          {usedModels.length > 0 && <div className="monitoring-model-snapshots" aria-label="本轮实际模型"><strong>本轮实际模型</strong>{usedModels.map((model, index) => <span key={index} title={'配置ID: ' + model.configurationId}><b className="mono">{model.modelId}</b><small>{model.name} · {model.provider}{model.legacyPresetRates ? ' · 沿用旧预设费率，请核对' : ''}</small></span>)}</div>}
           <RoutingClassificationFeedback trace={selectedTrace} />
           {selectedTrace.run.errorMessage && <div className="monitoring-trace-error">{selectedTrace.run.errorMessage}</div>}
           <TraceTimeline trace={selectedTrace} defaultOpen />

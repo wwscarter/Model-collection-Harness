@@ -21,6 +21,7 @@ export function completeSessionMetrics(raw: InvocationMetrics | undefined, timin
     cost: raw.cost ?? raw.totalCost,
     routeConfidence: raw.routeConfidence,
     ...(typeof raw.stopReason === 'string' ? { stopReason: raw.stopReason } : {}),
+    ...(raw.budgetLimit ? { budgetLimit: raw.budgetLimit } : {}),
   } : {};
   if (timing) {
     timing.completedAt ??= now;

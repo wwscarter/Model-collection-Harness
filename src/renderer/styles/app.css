@@ -929,6 +929,16 @@ select.input { padding-right: 28px; }
 .routing-feedback-fields .input { min-height: 30px; }
 .routing-feedback-fields > button { min-height: 30px; }
 .routing-feedback-notice { margin: 9px 0 0; color: var(--text-secondary); font-size: 10px; overflow-wrap: anywhere; }
+.budget-limit-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; }
+.budget-limit-notice > span { flex-basis: 100%; }
+.budget-limit-notice small { color: var(--text-muted); font-size: 10px; }
+.budget-limit-notice .button { flex: 0 0 auto; }
+.error-banner > .button { margin-left: 8px; }
+.monitoring-model-snapshots { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 14px 12px; font-size: 10px; }
+.monitoring-model-snapshots > strong { flex-basis: 100%; color: var(--text-secondary); font-weight: 500; }
+.monitoring-model-snapshots > span { display: grid; min-width: 0; gap: 3px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface-soft); }
+.monitoring-model-snapshots b { font-size: 10px; font-weight: 500; overflow-wrap: anywhere; }
+.monitoring-model-snapshots small, .trace-detail-note { color: var(--text-muted); font-size: 9px; overflow-wrap: anywhere; }
 .inspector-rating button.is-rated, .inspector-rating button:hover:not(:disabled) { color: var(--text); }
 .trace-export { color: var(--text-secondary); border-color: var(--line); background: var(--surface); }
 .trace-export:hover { color: var(--text); background: var(--surface-low); }

@@ -9,6 +9,14 @@ const settings = () => structuredClone(DEFAULT_ROUTING_SETTINGS);
 afterEach(() => { vi.restoreAllMocks(); for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('RoutingSettings', () => {
+  it('migrates settings without budget fields and validates saved runtime limits', () => {
+    const legacy = settings(); delete legacy.budget;
+    expect(validateRoutingSettings(legacy).budget).toEqual({ maxCostUsd: 0.25, maxDurationMs: 600_000 });
+    expect(validateRoutingSettings({ ...settings(), budget: { maxCostUsd: 2.5, maxDurationMs: 1_200_000 } }).budget).toEqual({ maxCostUsd: 2.5, maxDurationMs: 1_200_000 });
+    for (const maxCostUsd of [0, -1, 1001, NaN, Infinity, '1']) expect(() => validateRoutingSettings({ ...settings(), budget: { maxCostUsd, maxDurationMs: 600_000 } })).toThrow('费用上限');
+    for (const maxDurationMs of [0, 59999, 3600001, NaN, Infinity, '600000']) expect(() => validateRoutingSettings({ ...settings(), budget: { maxCostUsd: 1, maxDurationMs } })).toThrow('运行时间');
+    expect(() => validateRoutingSettings({ ...settings(), budget: { maxCostUsd: 1, maxDurationMs: 600_000, disabled: true } })).toThrow('未知字段');
+  });
   it('starts with rules and returns independent defaults for absent or invalid files', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-settings-')); directories.push(directory);
     const file = path.join(directory, 'routing.json');

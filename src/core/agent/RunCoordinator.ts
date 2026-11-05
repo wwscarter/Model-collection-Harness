@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { ModelConfig } from '@core/models/ModelConfig';
 import { hasUsableCredentials } from '@core/models/ModelConfig';
+import { snapshotModel } from '@core/models/ModelSnapshot';
 import type { ModelRegistry } from '@core/models/ModelRegistry';
 import type { RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import type { RoutingDecision } from '@core/routing/AgentRouter';
 import type { RoutingSettings } from '@core/routing/RoutingSettings';
+import { DEFAULT_ROUTING_SETTINGS } from '@core/routing/RoutingSettings';
+import type { ModelRequestEstimate, ModelUsage } from '@core/routing/ModelUsage';
 import type { ModelQuota } from '@core/routing/ModelQuota';
 import { RunBudget, BudgetExceededError } from '@core/routing/RunBudget';
 import { shouldFallback } from '@core/routing/Fallback';
@@ -68,6 +71,8 @@ export type InvokeStreamed = (
     projectAccess?: 'read' | 'write';
     signal?: AbortSignal;
     onToolEvent?: (event: ToolEvent) => void;
+    onUsage?: (usage: ModelUsage) => void;
+    beforeModelRequest?: (request: ModelRequestEstimate) => { maxOutputTokens: number } | void;
   },
 ) => Promise<ModelResponse>;
 
@@ -96,8 +101,15 @@ export interface RunDependencies {
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
 const TOOL_LIMIT_NOTICE = '已达到本轮工具执行额度，任务尚未完成；已保留当前阶段总结，可继续处理剩余工作。';
 const PARTIAL_AGENT_NOTICE = '【子任务部分完成：已达到工具执行额度】以下报告仅为当前阶段总结，未完成项仍需继续处理，不可视为完整成果。';
+const OUTPUT_LIMIT_NOTICE = '本轮输出达到模型长度上限，回答可能不完整；可继续处理剩余内容。';
+const limitedStop = (stopReason?: string): boolean => ['tool_limit', 'budget_limit', 'length'].includes(stopReason ?? '');
+const limitMessage = (stopReason?: string): string | undefined => stopReason === 'budget_limit' ? '本轮已达到预估费用预算，已保留阶段结果；可在设置中调整运行预算。' : stopReason === 'length' ? OUTPUT_LIMIT_NOTICE : stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined;
 function costOf(inputTokens: number, outputTokens: number, model: Pick<ModelConfig, 'costPer1kTokens'>): number {
   return (inputTokens * model.costPer1kTokens.input + outputTokens * model.costPer1kTokens.output) / 1000;
+}
+function errorUsage(error: unknown): ModelUsage {
+  const usage = error && typeof error === 'object' ? (error as { modelUsage?: ModelUsage }).modelUsage : undefined;
+  return { inputTokens: Number.isFinite(usage?.inputTokens) ? Math.max(0, usage!.inputTokens) : 0, outputTokens: Number.isFinite(usage?.outputTokens) ? Math.max(0, usage!.outputTokens) : 0 };
 }
 function publicModel(model: ModelConfig) {
   const { apiKey, ...safe } = model;
@@ -165,20 +177,63 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
   const memoryStore = deps.memory;
   const sessionStorage = deps.summaries;
   const projects = deps.projectContext;
-  const invokeStreamed: InvokeStreamed = (model, prompt, maxTokens, onDelta, options) => {
+  const reservations = new Map<symbol, number>();
+  const accountUsage = (model: ModelConfig, usage: ModelUsage) => {
+    const cost = costOf(usage.inputTokens, usage.outputTokens, model);
+    runBudget.add({ cost, tokens: usage.inputTokens + usage.outputTokens });
+    totalInputTokens += usage.inputTokens; totalOutputTokens += usage.outputTokens; totalCost += cost;
+  };
+  const reserveRequest = (lease: symbol, model: ModelConfig, estimate: ModelRequestEstimate): { maxOutputTokens: number } => {
+    reservations.delete(lease);
+    const held = [...reservations.values()].reduce((sum, value) => sum + value, 0);
+    const maxOutputTokens = runBudget.capOutputTokens(estimate.estimatedInputTokens, estimate.maxOutputTokens, model.costPer1kTokens, held);
+    reservations.set(lease, (estimate.estimatedInputTokens * model.costPer1kTokens.input + maxOutputTokens * model.costPer1kTokens.output) / 1000);
+    return { maxOutputTokens };
+  };
+  const invokeStreamed: InvokeStreamed = async (model, prompt, maxTokens, onDelta, options) => {
     options?.signal?.throwIfAborted();
-    return awaitWithSignal(deps.invokeStreamed(model, prompt, maxTokens, (delta) => {
-      if (!options?.signal?.aborted) onDelta(delta);
-    }, options), options?.signal);
+    const lease = Symbol(model.id);
+    const observed = { inputTokens: 0, outputTokens: 0 };
+    let streamedContent = '';
+    try {
+      const initial = reserveRequest(lease, model, { estimatedInputTokens: estimateTokens(prompt) + estimateTokens(JSON.stringify(options?.history ?? [])) + (options?.summary ? estimateTokens(options.summary) : 0), maxOutputTokens: maxTokens });
+      const result = await awaitWithSignal(deps.invokeStreamed(model, prompt, initial.maxOutputTokens, (delta) => {
+        if (!options?.signal?.aborted) { streamedContent += delta; onDelta(delta); }
+      }, { ...options,
+        beforeModelRequest: (estimate) => reserveRequest(lease, model, estimate),
+        onUsage: (usage) => {
+          reservations.delete(lease);
+          observed.inputTokens += usage.inputTokens; observed.outputTokens += usage.outputTokens;
+          accountUsage(model, usage); options?.onUsage?.(usage);
+          runBudget.assertAvailable();
+        },
+      }), options?.signal);
+      // Test/provider adapters without progress hooks still account usage once at completion.
+      accountUsage(model, { inputTokens: Math.max(0, result.inputTokens - observed.inputTokens), outputTokens: Math.max(0, result.outputTokens - observed.outputTokens) });
+      return result;
+    } catch (error) {
+      const limit = options?.signal?.reason instanceof BudgetExceededError ? options.signal.reason : error instanceof BudgetExceededError ? error : undefined;
+      if (limit && !deps.controller.signal.aborted) {
+        return { content: streamedContent.trim() ? streamedContent : '本轮因运行预算停止，尚未生成完整回答。', ...observed, modelId: model.id, stopReason: 'budget_limit', budgetLimitReason: limit.message };
+      }
+      if (error instanceof Error) Object.assign(error, { modelUsage: { ...observed } });
+      throw error;
+    } finally { reservations.delete(lease); }
   };
   const createProvider = (model: ModelConfig): ModelProvider => {
     const provider = (deps.createProvider ?? createProviderImpl)(model);
-    return { modelId: provider.modelId, invoke: (prompt, options) => {
+    return { modelId: provider.modelId, invoke: async (prompt, options) => {
       const budget = modelContextBudget([model], options?.maxTokens ?? model.maxTokens);
       assertPromptFits(prompt, budget);
       options?.signal?.throwIfAborted();
-      modelQuota.reserve(model);
-      return awaitWithSignal(provider.invoke(prompt, { ...options, maxTokens: budget.maxOutputTokens }), options?.signal);
+      const lease = Symbol(model.id);
+      try {
+        const capped = reserveRequest(lease, model, { estimatedInputTokens: estimateTokens(prompt), maxOutputTokens: budget.maxOutputTokens });
+        modelQuota.reserve(model);
+        const result = await awaitWithSignal(provider.invoke(prompt, { ...options, maxTokens: capped.maxOutputTokens }), options?.signal);
+        accountUsage(model, result);
+        return result;
+      } finally { reservations.delete(lease); }
     } };
   };
   const mainWindow = { webContents: { send: (channel: string, value: unknown) => emit(channel, value) } };
@@ -205,6 +260,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCost = 0;
+    let budgetLimit: { code: 'BUDGET_EXCEEDED'; message: string; estimatedCost: number; maxCostUsd: number } | undefined;
     let executionSpan: TraceSpanHandle | undefined;
     let synthesisSpan: TraceSpanHandle | undefined;
     const agentSpans = new Map<string, TraceSpanHandle>();
@@ -227,7 +283,8 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         const span = toolSpans.get(event.toolCallId);
         span?.end({
           status: event.status === 'failed' ? 'failed' : 'success',
-          attributes: { tool: event.toolName, durationMs: event.durationMs, resultChars: event.summary?.length ?? 0 },
+          error: event.status === 'failed' ? event.summary?.slice(0, 500) || 'Tool failed without an available failure summary' : undefined,
+          attributes: { tool: event.toolName, durationMs: event.durationMs, summaryChars: event.summary?.length ?? 0 },
         });
         toolSpans.delete(event.toolCallId);
       }
@@ -243,13 +300,18 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
     });
     const trace = traceRecorder.startRun({ runId, sessionId, taskType: payload.taskType, complexity: payload.complexity });
     const startedAt = Date.now();
-    const maxDurationMs = 10 * 60_000;
-    const runBudget = new RunBudget({ maxCost: 0.25, maxDurationMs });
-    const deadline = AbortSignal.timeout(maxDurationMs);
-    const controller = { signal: AbortSignal.any([deps.controller.signal, deadline]) };
+    const budgetLimits = deps.routingSettings?.budget ?? DEFAULT_ROUTING_SETTINGS.budget!;
+    const { maxDurationMs } = budgetLimits;
+    const runBudget = new RunBudget({ maxCost: budgetLimits.maxCostUsd, maxDurationMs });
+    const noteBudgetLimit = (message: string) => { budgetLimit = { code: 'BUDGET_EXCEEDED', message, estimatedCost: totalCost, maxCostUsd: budgetLimits.maxCostUsd }; };
+    trace.setAttributes({ budget: { ...budgetLimits, pricingBasis: 'configured-token-rates' } });
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => deadline.abort(new BudgetExceededError(`本轮运行已超过 ${Math.round(maxDurationMs / 1000)} 秒预算`)), maxDurationMs);
+    deadlineTimer.unref?.();
+    const controller = { signal: AbortSignal.any([deps.controller.signal, deadline.signal]) };
     const cancellationError = () => deps.controller.signal.aborted
       ? new Error('任务已取消')
-      : new BudgetExceededError('本轮运行已超过 600 秒预算');
+      : new BudgetExceededError(`本轮运行已超过 ${Math.round(maxDurationMs / 1000)} 秒预算`);
     const projectRoot = projects.getRoot();
     const memorySpan = trace.child('memory', 'memory.retrieve', { projectRoot });
     let memory: ReturnType<typeof retrieveMemories> | undefined;
@@ -274,6 +336,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       const message = failure instanceof Error ? failure.message : String(failure);
       contextSpan.end({ status: 'failed', error: message });
       finishTrace(deps.controller.signal.aborted ? 'cancelled' : 'failed', message);
+      clearTimeout(deadlineTimer);
       throw failure;
     }
     const contextSections = [payload.prompt];
@@ -305,7 +368,9 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           collaboratorModels.splice(0, collaboratorModels.length);
           decision = { ...decision, modelId: pinned.id, strategy: 'single' as const, reason: 'Session model override', alternativeModels: [], fallbackModels: [], collaboratorModelIds: [], ruleId: undefined };
         }
-        routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, classification: decision.classification, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId, pinned: Boolean(pinned) } });
+        const routedModel = registry.getModel(decision.modelId);
+        const snapshots = (ids: string[] = []) => ids.flatMap((id) => { const candidate = registry.getModel(id); return candidate ? [snapshotModel(candidate)] : []; });
+        routeSpan.end({ attributes: { modelId: decision.modelId, modelSnapshot: routedModel ? snapshotModel(routedModel) : undefined, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, classification: decision.classification, alternatives: decision.alternativeModels, alternativeSnapshots: snapshots(decision.alternativeModels), fallbackModels: decision.fallbackModels, fallbackSnapshots: snapshots(decision.fallbackModels), strategy: decision.strategy, ruleId: decision.ruleId, pinned: Boolean(pinned) } });
       } catch (error) {
         const failure = controller.signal.aborted ? cancellationError() : error;
         routeSpan.end({ status: controller.signal.aborted ? 'cancelled' : 'failed', error: failure instanceof Error ? failure.message : String(failure) });
@@ -327,8 +392,8 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         && (decision.complexity === 'high' || ['plan', 'plan+verify', 'parallel', 'escalate'].includes(decision.strategy ?? 'single'));
       const planner = needsPlanning ? selectOrchestratorModel(plannerModels, deps.routingSettings?.planning.modelId) : undefined;
       if (planner) {
-        const planSpan = trace.child('plan', 'planning', { modelId: planner.id, role: 'planner', executorModelId: model.id });
-        const planModelSpan = planSpan.child('model', 'planning-model', { modelId: planner.id, role: 'planner' });
+        const planSpan = trace.child('plan', 'planning', { modelId: planner.id, modelSnapshot: snapshotModel(planner), role: 'planner', executorModelId: model.id });
+        const planModelSpan = planSpan.child('model', 'planning-model', { modelId: planner.id, modelSnapshot: snapshotModel(planner), role: 'planner' });
         const planInvocationId = observability.recordInvocationStart(runId, planner.id);
         let invocationEnded = false;
         try {
@@ -344,10 +409,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           const cost = costOf(response.inputTokens, response.outputTokens, planner);
           observability.recordInvocationEnd(planInvocationId, response.inputTokens, response.outputTokens, planner.costPer1kTokens, 'success');
           invocationEnded = true;
-          totalInputTokens += response.inputTokens;
-          totalOutputTokens += response.outputTokens;
-          totalCost += cost;
-          runBudget.add({ cost, tokens: response.inputTokens + response.outputTokens });
           planModelSpan.end({ inputTokens: response.inputTokens, outputTokens: response.outputTokens, cost });
           const parsed = parseOrchestratorPlan(response.content, plannerModels, planner.id, model.id);
           if (parsed) {
@@ -410,7 +471,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         : undefined;
       if (summaryModel) {
         runBudget.assertAvailable();
-        const summarySpan = compactSpan.child('model', 'summary-model', { modelId: summaryModel.id, role: 'summarizer' });
+        const summarySpan = compactSpan.child('model', 'summary-model', { modelId: summaryModel.id, modelSnapshot: snapshotModel(summaryModel), role: 'summarizer' });
         const summaryInvocationId = observability.recordInvocationStart(runId, summaryModel.id);
         try {
           const summaryResult = await summarizeContext({
@@ -426,10 +487,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
             contextAssembly.estimatedTokens += estimateTokens(contextAssembly.summary) - estimateTokens(previousSummary);
             contextAssembly.summaryChanged = true;
             summarySource = 'llm';
-            totalInputTokens += summaryResult.inputTokens;
-            totalOutputTokens += summaryResult.outputTokens;
-            totalCost += summaryResult.cost;
-            runBudget.add({ cost: summaryResult.cost, tokens: summaryResult.inputTokens + summaryResult.outputTokens });
             observability.recordInvocationEnd(summaryInvocationId, summaryResult.inputTokens, summaryResult.outputTokens, summaryModel.costPer1kTokens, 'success');
             summarySpan.end({ inputTokens: summaryResult.inputTokens, outputTokens: summaryResult.outputTokens, cost: summaryResult.cost });
           } else {
@@ -468,9 +525,10 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       let executionModel = model;
       let metrics: ModelInvocation | undefined;
       const fallbackAttempts: string[] = [];
+      const traceAttempts: Array<{ index: number; status: 'success' | 'failed'; modelSnapshot: ReturnType<typeof snapshotModel>; error?: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number }> = [];
       try {
         synthesisSpan = collaboratorModels.length ? trace.child('synthesis', 'synthesis', { agents: collaboratorModels.length }) : undefined;
-        executionSpan = (synthesisSpan ?? trace).child('model', 'execution', { modelId: model.id, role: 'executor' });
+        executionSpan = (synthesisSpan ?? trace).child('model', 'execution', { modelId: model.id, modelSnapshot: snapshotModel(model), role: 'executor' });
         let result: ModelResponse | undefined;
         let agentReports: Array<{ modelName: string; content: string; stopReason?: string }> = [];
         let failedAgentCount = 0;
@@ -487,7 +545,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           const agentResults = await runParallelAgents(collaboratorModels, async (agentModel, index) => {
             const agentId = `${assistantMessageId}-agent-${index + 1}`;
             runBudget.assertAvailable();
-            const agentSpan = trace.child('model', 'collaborator', { agentId, modelId: agentModel.id, role: 'analyst' });
+            const agentSpan = trace.child('model', 'collaborator', { agentId, modelId: agentModel.id, modelSnapshot: snapshotModel(agentModel), role: 'analyst' });
             agentSpans.set(agentId, agentSpan);
             const agentInvocationId = observability.recordInvocationStart(runId, agentModel.id);
             let agentContent = '';
@@ -507,13 +565,9 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               }, { history: agentContext.history, summary: agentContext.summary, skipHistoryTrim: true, enableTools, projectRoot, projectAccess: 'read', signal: controller.signal, onToolEvent: (event) => emitToolEvent(agentId, event) });
               observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
               const agentCost = costOf(agentResult.inputTokens, agentResult.outputTokens, agentModel);
-              totalInputTokens += agentResult.inputTokens;
-              totalOutputTokens += agentResult.outputTokens;
-              totalCost += agentCost;
-              runBudget.add({ cost: agentCost, tokens: agentResult.inputTokens + agentResult.outputTokens });
-              const limited = agentResult.stopReason === 'tool_limit';
+              const limited = limitedStop(agentResult.stopReason);
               const status = limited ? 'failed' : 'completed';
-              const error = limited ? PARTIAL_AGENT_NOTICE : undefined;
+              const error = agentResult.stopReason === 'tool_limit' ? PARTIAL_AGENT_NOTICE : limited ? limitMessage(agentResult.stopReason) : undefined;
               agentSpan.end({ status: limited ? 'failed' : 'success', error, inputTokens: agentResult.inputTokens, outputTokens: agentResult.outputTokens, cost: agentCost, attributes: { stopReason: agentResult.stopReason } });
               agentMessages[index].status = status;
               agentMessages[index].content = agentResult.content;
@@ -523,8 +577,9 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               return { modelName: agentModel.name, content: agentResult.content, stopReason: agentResult.stopReason };
             } catch (agentError) {
               const message = agentError instanceof Error ? agentError.message : String(agentError);
-              observability.recordInvocationEnd(agentInvocationId, estimateTokens(contextPrompt), estimateTokens(agentContent), agentModel.costPer1kTokens, 'failure', message);
-              agentSpan.end({ status: 'failed', error: message });
+              const usage = errorUsage(agentError);
+              observability.recordInvocationEnd(agentInvocationId, usage.inputTokens, usage.outputTokens, agentModel.costPer1kTokens, 'failure', message);
+              agentSpan.end({ status: 'failed', error: message, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cost: costOf(usage.inputTokens, usage.outputTokens, agentModel) });
               agentMessages[index].status = 'failed';
               agentMessages[index].content = agentContent;
               Object.assign(agentMessages[index], { error: message });
@@ -559,6 +614,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
             throw new Error(`模型「${candidate.name}」已达到速率或每日配额，请稍后再试`);
           }
           modelQuota.reserve(candidate);
+          executionSpan.setAttributes({ modelId: candidate.id, modelSnapshot: snapshotModel(candidate), attemptIndex: index });
           const attemptInvocationId = observability.recordInvocationStart(runId, candidate.id);
           let emittedText = false;
           let emittedTool = false;
@@ -568,40 +624,53 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
               chunkIndex += 1;
               mainWindow?.webContents.send('session:chunk', { sessionId, taskId, delta, index: chunkIndex, modelId: candidate.id });
             }, { history: finalContext.history, summary: finalContext.summary, skipHistoryTrim: true, enableTools, projectRoot, signal: controller.signal, onToolEvent: (event) => { if (event.status === 'running') emittedTool = true; emitToolEvent(undefined, event); } });
-            metrics = observability.recordInvocationEnd(attemptInvocationId, attemptResult.inputTokens, attemptResult.outputTokens, candidate.costPer1kTokens, 'success');
+            metrics = observability.recordInvocationEnd(attemptInvocationId, attemptResult.inputTokens, attemptResult.outputTokens, candidate.costPer1kTokens, attemptResult.stopReason === 'budget_limit' ? 'failure' : 'success', attemptResult.budgetLimitReason);
             result = attemptResult;
+            if (attemptResult.stopReason === 'budget_limit') noteBudgetLimit(attemptResult.budgetLimitReason ?? limitMessage('budget_limit')!);
+            try { runBudget.assertAvailable(); } catch (error) {
+              if (!(error instanceof BudgetExceededError)) throw error;
+              noteBudgetLimit(error.message); result = { ...attemptResult, stopReason: 'budget_limit' };
+            }
             executionModel = candidate;
             const executionCost = costOf(attemptResult.inputTokens, attemptResult.outputTokens, candidate);
-            totalInputTokens += attemptResult.inputTokens;
-            totalOutputTokens += attemptResult.outputTokens;
-            totalCost += executionCost;
-            runBudget.add({ cost: executionCost, tokens: attemptResult.inputTokens + attemptResult.outputTokens });
-            executionSpan.setAttributes({ fallbackAttempts });
-            executionSpan.end({ status: attemptResult.stopReason === 'tool_limit' ? 'failed' : 'success', error: attemptResult.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost, attributes: { stopReason: attemptResult.stopReason } });
+            traceAttempts.push({ index, status: limitedStop(result.stopReason) ? 'failed' : 'success', modelSnapshot: snapshotModel(candidate), inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, estimatedCost: executionCost, ...(limitedStop(result.stopReason) ? { error: budgetLimit?.message ?? limitMessage(result.stopReason) } : {}) });
+            executionSpan.setAttributes({ fallbackAttempts, attempts: [...traceAttempts] });
+            executionSpan.end({ status: limitedStop(result.stopReason) ? 'failed' : 'success', error: limitMessage(result.stopReason), inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost, attributes: { stopReason: result.stopReason } });
             break;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            observability.recordInvocationEnd(attemptInvocationId, 0, 0, candidate.costPer1kTokens, 'failure', message);
+            const usage = errorUsage(error);
+            traceAttempts.push({ index, status: 'failed', modelSnapshot: snapshotModel(candidate), error: message.slice(0, 500), ...usage, estimatedCost: costOf(usage.inputTokens, usage.outputTokens, candidate) });
+            executionSpan.setAttributes({ attempts: [...traceAttempts] });
+            metrics = observability.recordInvocationEnd(attemptInvocationId, usage.inputTokens, usage.outputTokens, candidate.costPer1kTokens, 'failure', message);
             executionModel = candidate;
             const canFallback = shouldFallback({ index, total: executionCandidates.length, emittedText, emittedTool, error });
-            if (!canFallback) throw error;
+            if (!canFallback) {
+              executionSpan.end({ status: deps.controller.signal.aborted ? 'cancelled' : 'failed', error: message, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cost: costOf(usage.inputTokens, usage.outputTokens, candidate) });
+              throw error;
+            }
             fallbackAttempts.push(candidate.id);
             executionSpan.setAttributes({ fallbackAttempts });
           }
         }
         if (!result) throw new Error('模型没有返回结果');
-        runBudget.assertAvailable();
-        if (controller.signal.aborted) throw cancellationError();
-        synthesisSpan?.end({ status: result.stopReason === 'tool_limit' ? 'failed' : 'success', error: result.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, attributes: { reports: agentReports.length, failedAgents: failedAgentCount, partialAgents: agentReports.filter((report) => report.stopReason === 'tool_limit').length, stopReason: result.stopReason } });
+        if (result.stopReason === 'budget_limit' && !budgetLimit) noteBudgetLimit(result.budgetLimitReason ?? limitMessage('budget_limit')!);
+        try { runBudget.assertAvailable(); } catch (error) {
+          if (!(error instanceof BudgetExceededError)) throw error;
+          noteBudgetLimit(error.message); result = { ...result, stopReason: 'budget_limit' };
+        }
+        if (deps.controller.signal.aborted) throw cancellationError();
+        if (deadline.signal.aborted) { noteBudgetLimit(cancellationError().message); result = { ...result, stopReason: 'budget_limit' }; }
+        synthesisSpan?.end({ status: limitedStop(result.stopReason) ? 'failed' : 'success', error: limitMessage(result.stopReason), attributes: { reports: agentReports.length, failedAgents: failedAgentCount, partialAgents: agentReports.filter((report) => limitedStop(report.stopReason)).length, stopReason: result.stopReason } });
         let verification: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string } | undefined;
-        if (result.stopReason !== 'tool_limit' && (decision.strategy === 'plan+verify' || decision.strategy === 'escalate') && hasCode(result.content)) {
+        if (!['tool_limit', 'budget_limit', 'length'].includes(result.stopReason ?? '') && (decision.strategy === 'plan+verify' || decision.strategy === 'escalate') && hasCode(result.content)) {
           const verifierModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => candidate.id !== executionModel.id && modelQuota.isAvailable(candidate)),
             executionModel.id,
             deps.routingSettings?.utilityModelId,
           );
           if (verifierModel) {
-            const verificationSpan = trace.child('audit', 'model-verify', { modelId: verifierModel.id });
+            const verificationSpan = trace.child('audit', 'model-verify', { modelId: verifierModel.id, modelSnapshot: snapshotModel(verifierModel) });
             try {
               runBudget.assertAvailable();
               const verificationInvocationId = observability.recordInvocationStart(runId, verifierModel.id);
@@ -611,10 +680,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                 });
                 if (verified) {
                   observability.recordInvocationEnd(verificationInvocationId, verified.inputTokens, verified.outputTokens, verifierModel.costPer1kTokens, 'success');
-                  totalInputTokens += verified.inputTokens;
-                  totalOutputTokens += verified.outputTokens;
-                  totalCost += verified.cost;
-                  runBudget.add({ cost: verified.cost, tokens: verified.inputTokens + verified.outputTokens });
                   verification = {
                     modelId: verifierModel.id,
                     approved: verified.audit.approval,
@@ -625,7 +690,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                   };
                   if (shouldRevise(verified.audit)) {
                     const revisionModel = chooseRevisionModel(executionPlan, executionModel);
-                    const revisionSpan = verificationSpan.child('model', 'revision', { modelId: revisionModel.id, role: decision.strategy === 'escalate' ? 'escalated-reviser' : 'reviser' });
+                    const revisionSpan = verificationSpan.child('model', 'revision', { modelId: revisionModel.id, modelSnapshot: snapshotModel(revisionModel), role: decision.strategy === 'escalate' ? 'escalated-reviser' : 'reviser' });
                     try {
                       runBudget.assertAvailable();
                       modelQuota.reserve(revisionModel);
@@ -643,24 +708,28 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                         );
                         const revisionCost = costOf(revised.inputTokens, revised.outputTokens, revisionModel);
                         observability.recordInvocationEnd(revisionInvocationId, revised.inputTokens, revised.outputTokens, revisionModel.costPer1kTokens, 'success');
-                        totalInputTokens += revised.inputTokens;
-                        totalOutputTokens += revised.outputTokens;
-                        totalCost += revisionCost;
-                        runBudget.add({ cost: revisionCost, tokens: revised.inputTokens + revised.outputTokens });
-                        result = revised;
-                        executionModel = revisionModel;
-                        verification.revised = true;
-                        revisionSpan.end({ status: revised.stopReason === 'tool_limit' ? 'failed' : 'success', error: revised.stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined, inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost, attributes: { stopReason: revised.stopReason } });
+                        const revisionIncomplete = limitedStop(revised.stopReason);
+                        if (revisionIncomplete) {
+                          // The original paid answer remains the usable result when revision stops early.
+                          result = { ...result, stopReason: revised.stopReason };
+                          if (revised.stopReason === 'budget_limit') noteBudgetLimit(limitMessage('budget_limit')!);
+                        } else {
+                          result = revised;
+                          executionModel = revisionModel;
+                          verification.revised = true;
+                        }
+                        revisionSpan.end({ status: revisionIncomplete ? 'failed' : 'success', error: limitMessage(revised.stopReason), inputTokens: revised.inputTokens, outputTokens: revised.outputTokens, cost: revisionCost, attributes: { stopReason: revised.stopReason, retainedOriginalAnswer: revisionIncomplete } });
                       } catch (revisionError) {
                         const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
-                        observability.recordInvocationEnd(revisionInvocationId, 0, 0, revisionModel.costPer1kTokens, 'failure', message);
-                        revisionSpan.end({ status: 'failed', error: message });
-                        if (controller.signal.aborted) throw new Error('任务已取消');
+                        const usage = errorUsage(revisionError);
+                        observability.recordInvocationEnd(revisionInvocationId, usage.inputTokens, usage.outputTokens, revisionModel.costPer1kTokens, 'failure', message);
+                        revisionSpan.end({ status: 'failed', error: message, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cost: costOf(usage.inputTokens, usage.outputTokens, revisionModel) });
+                        if (deps.controller.signal.aborted) throw new Error('任务已取消');
                       }
                     } catch (revisionError) {
                       const message = revisionError instanceof Error ? revisionError.message : String(revisionError);
                       revisionSpan.end({ status: 'failed', error: message });
-                      if (controller.signal.aborted) throw new Error('任务已取消');
+                      if (deps.controller.signal.aborted) throw new Error('任务已取消');
                       if (!(revisionError instanceof BudgetExceededError)) throw revisionError;
                     }
                   }
@@ -673,32 +742,32 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                 const message = error instanceof Error ? error.message : String(error);
                 observability.recordInvocationEnd(verificationInvocationId, 0, 0, verifierModel.costPer1kTokens, 'failure', message);
                 verificationSpan.end({ status: 'failed', error: message });
-                if (controller.signal.aborted) throw new Error('任务已取消');
+                if (deps.controller.signal.aborted) throw new Error('任务已取消');
               }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               verificationSpan.end({ status: 'failed', error: message });
-              if (!(error instanceof BudgetExceededError) && controller.signal.aborted) throw new Error('任务已取消');
+              if (deps.controller.signal.aborted) throw new Error('任务已取消');
             }
           }
         }
         // Static code audit is deterministic and free. It runs only when the
         // answer actually contains code, and its result feeds the same audit log,
         // metrics table and growth profile instead of leaving them empty.
-        const auditSpan = trace.child('audit', 'static-audit', { modelId: executionModel.id });
+        const auditSpan = trace.child('audit', 'static-audit', { modelId: executionModel.id, modelSnapshot: snapshotModel(executionModel) });
         const audit = auditCodeAnswer(result.content, runId, executionModel.id, { auditor: codeAuditor, log: auditLog, metrics: observability });
         auditSpan.end({ attributes: audit ? { passed: audit.passed, score: audit.score, issues: audit.issueCount, auditModelId: audit.auditModelId } : { skipped: 'no-code' } });
         const extractedMemoryIds: string[] = [];
         let autoExtract = false;
         try { autoExtract = memoryStore.getAutoExtract(); } catch { /* memory settings must not fail an answer */ }
-        if (result.stopReason !== 'tool_limit' && autoExtract && !controller.signal.aborted) {
+        if (!['tool_limit', 'budget_limit', 'length'].includes(result.stopReason ?? '') && autoExtract && !controller.signal.aborted) {
           const extractionModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)),
             executionModel.id,
             deps.routingSettings?.utilityModelId,
           );
           if (extractionModel) {
-            const extractionSpan = trace.child('memory', 'memory.extract', { modelId: extractionModel.id, role: 'extractor' });
+            const extractionSpan = trace.child('memory', 'memory.extract', { modelId: extractionModel.id, modelSnapshot: snapshotModel(extractionModel), role: 'extractor' });
             try {
               runBudget.assertAvailable();
               const extractionInvocationId = observability.recordInvocationStart(runId, extractionModel.id);
@@ -712,10 +781,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
                 });
                 const extractionCost = costOf(extraction.inputTokens, extraction.outputTokens, extractionModel);
                 observability.recordInvocationEnd(extractionInvocationId, extraction.inputTokens, extraction.outputTokens, extractionModel.costPer1kTokens, 'success');
-                totalInputTokens += extraction.inputTokens;
-                totalOutputTokens += extraction.outputTokens;
-                totalCost += extractionCost;
-                runBudget.add({ cost: extractionCost, tokens: extraction.inputTokens + extraction.outputTokens });
                 for (const memory of extraction.memories) {
                   try {
                     const scope = projectRoot ? 'project' : 'global';
@@ -737,19 +802,25 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
             }
           }
         }
-        runBudget.assertAvailable();
-        if (controller.signal.aborted) throw cancellationError();
-        if (metrics && result.stopReason !== 'tool_limit') {
+        try { runBudget.assertAvailable(); } catch (error) {
+          if (!(error instanceof BudgetExceededError)) throw error;
+          noteBudgetLimit(error.message); result = { ...result, stopReason: 'budget_limit' };
+        }
+        if (deps.controller.signal.aborted) throw cancellationError();
+        if (deadline.signal.aborted) { noteBudgetLimit(cancellationError().message); result = { ...result, stopReason: 'budget_limit' }; }
+        if (metrics && !['tool_limit', 'budget_limit', 'length'].includes(result.stopReason ?? '')) {
           recordGrowth({ modelId: executionModel.id, taskType: decision.taskType, success: true, completed: true, actualCost: metrics.totalCost, estimatedCost: decision.estimatedCost, actualLatency: metrics.latency, estimatedLatency: decision.estimatedDuration, auditApproval: audit?.passed });
         }
         if (executionModel.id !== model.id) {
           mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: executionModel.id, role: 'execution', planningModelId, fallback: true });
         }
         const stopReason = result.stopReason;
+        if (budgetLimit) budgetLimit.estimatedCost = totalCost;
         const reportedAgents = agentReports.map((report) => report.stopReason === 'tool_limit' ? { ...report, content: `${PARTIAL_AGENT_NOTICE}\n\n${report.content}` } : report);
-        const runMetrics = metrics ? { ...metrics, startTime: new Date(startedAt), endTime: new Date(), inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalCost, latency: Date.now() - startedAt, stopReason } : undefined;
+        const runMetrics = { ...metrics, startTime: new Date(startedAt), endTime: new Date(), inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalCost, latency: Date.now() - startedAt, stopReason, ...(budgetLimit ? { budgetLimit } : {}) };
         const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, stopReason, modelUsed: publicModel(executionModel), modelsUsed: observability.getTaskMetrics(runId).modelsUsed, fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: planningModelId, planningModelId, executorModelId: executionModel.id, synthesizerModelId: executionModel.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics: runMetrics, verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
-        finishTrace(stopReason === 'tool_limit' ? 'failed' : 'success', stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined);
+        Object.assign(output, budgetLimit ? { budgetLimit } : {});
+        finishTrace(limitedStop(stopReason) ? 'failed' : 'success', budgetLimit?.message ?? limitMessage(stopReason));
         mainWindow?.webContents.send('session:completed', output);
         return output;
       } catch (error) {
@@ -769,6 +840,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       finishTrace(traceStatus, traceError);
       throw failure;
     } finally {
+      clearTimeout(deadlineTimer);
       finishTrace(traceStatus, traceError);
     }
 }

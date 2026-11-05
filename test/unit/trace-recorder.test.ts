@@ -104,6 +104,20 @@ describe('TraceRecorder', () => {
     expect(events).toContain('span_start');
     expect(events).toContain('run_end');
   });
+
+  it('preserves structured model identity when other attributes exceed the cap and detaches caller objects', () => {
+    const recorder = new TraceRecorder(new InMemoryTraceStore(), { now: clock() });
+    const root = recorder.startRun({ runId: 'identity-bounds', sessionId: 's' });
+    const modelSnapshot = { configurationId: 'legacy-id', modelId: 'actual-model', name: 'Current model', provider: 'custom', costPer1kTokens: { input: 0.1, output: 0.2 }, configurationUpdatedAt: '2026-11-05T00:00:00Z' };
+    const span = root.child('model', 'execution', { modelId: 'legacy-id', modelSnapshot, notes: '"'.repeat(10000) });
+    modelSnapshot.modelId = 'mutated-after-recording';
+    modelSnapshot.costPer1kTokens.input = 99;
+    span.end({ attributes: { stopReason: 'stop' } });
+    recorder.finishRun('identity-bounds');
+    const saved = recorder.getTrace('identity-bounds')?.spans.find((item) => item.id === span.id)!;
+    expect(saved.attributes).toMatchObject({ truncated: true, modelId: 'legacy-id', modelSnapshot: { modelId: 'actual-model', costPer1kTokens: { input: 0.1 } } });
+    expect(JSON.stringify(saved.attributes).length).toBeLessThanOrEqual(4000);
+  });
 });
 
 describe('TraceStore', () => {

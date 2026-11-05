@@ -118,6 +118,50 @@ describe('workbench task controls', () => {
     expect(save.mock.calls.at(-1)![0].output).toBe('任务完成');
   });
 
+  it('preserves a budget-limited partial response and opens the runtime budget settings', async () => {
+    window.amd!.routingStatus = vi.fn(async () => ({ backend: 'heuristic' as const, available: true }));
+    await click('[aria-label="执行任务"]');
+    const budgetLimit = { code: 'BUDGET_EXCEEDED', message: '本轮预估费用已超过上限', estimatedCost: 0.301, maxCostUsd: 0.25 };
+    const output = '已完成文件分析，尚未实施修改。';
+    await act(async () => {
+      listeners.get('session:completed')!({ sessionId: 's1', output, stopReason: 'budget_limit', budgetLimit, metrics: { inputTokens: 2000, outputTokens: 200, totalCost: 0.301 } });
+    });
+    expect(container.querySelector('[aria-label="任务预算已用尽"]')!.textContent).toContain('任务尚未完成');
+    await act(async () => { resolveRun({ output, stopReason: 'budget_limit', budgetLimit }); });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.output).toBe(output);
+    expect(saved.metrics).toMatchObject({ stopReason: 'budget_limit', inputTokens: 2000, outputTokens: 200, cost: 0.301, budgetLimit });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => { [...container.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === '调整运行预算')!.click(); });
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('运行与权限');
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('[aria-label="任务预算已用尽"]')!.textContent).toContain('$0.3010');
+    expect(container.querySelector('[aria-label="任务预算已用尽"]')!.textContent).toContain('$0.25');
+  });
+
+  it('keeps length-truncated output visibly incomplete after completion and reopening', async () => {
+    await click('[aria-label="执行任务"]');
+    const output = '这是已收到的部分方案，后续步骤尚未输出。';
+    await act(async () => {
+      listeners.get('session:completed')!({ sessionId: 's1', output, stopReason: 'length', metrics: { inputTokens: 300, outputTokens: 16384 } });
+    });
+    const notice = container.querySelector('[aria-label="输出长度已达上限"]')!;
+    expect(notice.textContent).toContain('任务尚未完成');
+    expect(notice.textContent).toContain('最大输出 Token');
+    expect(notice.querySelector('button')).toBeNull();
+    await act(async () => { resolveRun({ output, stopReason: 'length' }); });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.metrics).toMatchObject({ stopReason: 'length', inputTokens: 300, outputTokens: 16384 });
+    expect(saved.output).toBe(output);
+    expect(saved.messages.at(-1).content).toBe(output);
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('[aria-label="输出长度已达上限"]')!.textContent).toContain('任务尚未完成');
+    expect(container.querySelector('.output-content')!.textContent).toContain(output);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it.each(['任务已取消', '模型连接已中断'])('saves final text without transient tool cards when a turn ends: %s', async (reason) => {
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="执行任务"]')!.click(); });
     expect(execute).toHaveBeenCalledOnce();

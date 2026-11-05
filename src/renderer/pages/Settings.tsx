@@ -4,12 +4,13 @@ import type { ModelConfig } from '../types';
 import { RuntimeSettings } from '../components/RuntimeSettings';
 import { routingStatusLabel } from '../components/ModelRoutingSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
+import { hasLegacyPresetRates } from '@core/models/ModelSnapshot';
 import { errorMessage } from '../format';
 import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults, settingsPayload } from '../settingsForm';
 import type { ProviderCategory, SettingsDraft } from '../settingsForm';
 import '../styles/settings.css';
 
-interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; onOpenRouting: () => void; }
+interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; onOpenRouting: () => void; initialTab?: 'models' | 'runtime'; }
 type Busy = 'saving' | 'testing' | 'fetching' | 'refreshing' | null;
 type ConnectionResult = { success: boolean; latency?: number; error?: string; demo?: boolean };
 type TestedEndpoint = { fingerprint: string; result: ConnectionResult };
@@ -26,8 +27,8 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
   return <label className="field"><span className="field-label"><span>{label}</span>{hint && <small>{hint}</small>}</span>{children}</label>;
 }
 
-export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: SettingsProps) {
-  const [tab, setTab] = useState<'models' | 'runtime'>('models');
+export function Settings({ models, onClose, onModelsChanged, onOpenRouting, initialTab = 'models' }: SettingsProps) {
+  const [tab, setTab] = useState<'models' | 'runtime'>(initialTab);
   const firstModel = models.find((model) => model.isPrimary && model.enabled) ?? models[0];
   const [selectedId, setSelectedId] = useState<string | null>(firstModel?.id ?? null);
   const selected = models.find((model) => model.id === selectedId);
@@ -59,6 +60,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
   const sameProvider = selected?.provider === draft.provider && (selected.providerCategory ?? (selected.provider === 'custom' ? 'compatible_gateway' : 'official')) === draft.providerCategory;
   const sameOrigin = Boolean(selected) && endpointOrigin(selected!.provider, selected!.baseURL) === endpointOrigin(draft.provider, draft.baseURL);
   const hasSavedKey = sameProvider && sameOrigin && selected?.hasApiKey;
+  const legacyRates = Boolean(selected && hasLegacyPresetRates({ id: selected.id, provider: draft.provider, modelId: draft.modelId, costPer1kTokens: { input: Number(draft.inputPrice), output: Number(draft.outputPrice) } }));
 
   useEffect(() => {
     if (initialSelectionPending.current && firstModel) {
@@ -224,6 +226,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
             <button className={'button ' + (draft.primary ? 'primary' : 'outline')} disabled={Boolean(busy)} title={draft.primary ? '点击恢复自动路由，保存后生效' : '固定使用此模型执行任务，保存后生效'} onClick={() => { change({ primary: !draft.primary, ...(draft.primary ? {} : { enabled: true }) }); setNotice({ tone: 'success', text: draft.primary ? '保存后恢复自动路由。' : '保存后将此模型设为主力路由。' }); }}><CircleCheck size={14} />{draft.primary ? selected?.isPrimary && !dirty ? '主力路由 / 使用中' : '主力路由 · 待保存' : '设为主力路由'}</button>
           </div>
           <div className="detail-form" ref={scrollRef} aria-busy={Boolean(busy)}>
+            {legacyRates && <div className="settings-pricing-diagnostic" role="status">当前配置沿用旧预设费率，请按服务商价格核对；显示费用为配置估算。这不代表已确认费率错误。</div>}
             <fieldset className="settings-form-fields" disabled={Boolean(busy)}>
               <section className="form-section">
                 <div className="form-section-head"><span><SlidersHorizontal size={15} />核心配置</span><small className="security-caption"><ShieldCheck size={13} />AES-256-GCM 本地加密</small></div>
@@ -256,6 +259,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
                 <Field label="综合智能度（0–100）">{numberInput('intelligenceScore', { min: 0, max: 100, step: 1 })}</Field>
                 <div className="form-grid five">{capabilityLabels.map(({ key, label }) => <Field key={key} label={label}><input className="input mono" type="number" min="0" max="100" step="1" value={draft.capabilities[key]} onChange={(event) => change({ capabilities: { ...draft.capabilities, [key]: event.target.value } })} /></Field>)}</div>
                 <div className="form-grid two"><Field label="输入价格 / 1K Token">{numberInput('inputPrice', { min: 0, step: 0.0001 })}</Field><Field label="输出价格 / 1K Token">{numberInput('outputPrice', { min: 0, step: 0.0001 })}</Field><Field label="每分钟请求数">{numberInput('requestsPerMinute', { min: 0, step: 1 })}</Field><Field label="每日 Token 限额">{numberInput('tokensPerDay', { min: 0, step: 1 })}</Field></div>
+                <p className="settings-draft-note">费用按此处 USD 预估费率计算；切换模型型号后，请按服务商价格核对。</p>
               </div></details>
             </fieldset>
           </div>

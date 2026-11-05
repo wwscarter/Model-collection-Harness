@@ -11,7 +11,7 @@ import { AgentInputBar } from './components/AgentInputBar';
 import { WorkbenchWelcome } from './components/WorkbenchWelcome';
 import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
-import { ModelConfig, ProjectInfo, ProjectRecord, RunTrace, SessionMetrics } from './types';
+import { ModelConfig, ProjectInfo, ProjectRecord, RunTrace, SessionMetrics, type BudgetLimitNotice } from './types';
 import { appendAssistantChunk, ChatAgentMessage, ChatMessage, historyForModel, preparePendingTurn, restoreMessages, setLatestAssistantDuration, settleAssistantTools, stripAssistantProcess, ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from './sessionMessages';
 import { Copy, Pencil, UsersRound } from 'lucide-react';
 import { shouldSubmitPromptKey } from './promptKeyboard';
@@ -57,6 +57,8 @@ export default function App() {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'models' | 'runtime'>('models');
+  const openSettings = (tab: 'models' | 'runtime' = 'models') => { setSettingsInitialTab(tab); setShowSettings(true); };
   const [showRouting, setShowRouting] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [view, setView] = useState<AppView>('workspace');
@@ -255,12 +257,13 @@ export default function App() {
       });
     });
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics };
+      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics; budgetLimit?: BudgetLimitNotice };
       const id = event.sessionId || event.taskId;
       if (!id || deletedSessionIdsRef.current.has(id)) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
       const stopReason = event.stopReason ?? event.metrics?.stopReason ?? sessionsRef.current.find((session) => session.id === id)?.metrics?.stopReason;
-      const metrics = withRunTiming(event.metrics, id, event.decision?.confidence, Boolean(event.output), stopReason);
+      const sourceMetrics = event.metrics ?? sessionsRef.current.find((session) => session.id === id)?.metrics;
+      const metrics = withRunTiming(event.budgetLimit ? { ...sourceMetrics, budgetLimit: event.budgetLimit } : sourceMetrics, id, event.decision?.confidence, Boolean(event.output), stopReason);
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         let messages = updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId);
@@ -481,7 +484,8 @@ export default function App() {
       const raw = result as any;
       const modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed : raw.modelUsed?.id || raw.modelUsed?.name;
       const output = String(raw.output || '');
-      const metrics = withRunTiming(raw.metrics, currentSession.id, raw.decision?.confidence, Boolean(output), raw.stopReason ?? raw.metrics?.stopReason ?? latestSession.metrics?.stopReason);
+      const sourceMetrics = raw.metrics ?? latestSession.metrics;
+      const metrics = withRunTiming(raw.budgetLimit ? { ...sourceMetrics, budgetLimit: raw.budgetLimit } : sourceMetrics, currentSession.id, raw.decision?.confidence, Boolean(output), raw.stopReason ?? raw.metrics?.stopReason ?? latestSession.metrics?.stopReason);
       let completedMessages = updateLatestAssistantContent(latestSession.messages, output, modelUsed, raw.planningModelId);
       const elapsedMs = metrics?.latencyMs ?? (runTimingRef.current?.sessionId === currentSession.id ? performance.now() - runTimingRef.current.startedAt : undefined);
       if (elapsedMs !== undefined) completedMessages = setLatestAssistantDuration(completedMessages, elapsedMs);
@@ -549,7 +553,7 @@ export default function App() {
   };
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${previewOpen && projectDrawerOpen ? 'preview-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view === 'monitoring' ? 'monitoring-shell' : ''}`}>
     <TopBar title={view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
-    <NavRail view={view} onView={(next) => { setView(next); if (next === 'monitoring') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); } }} onSettings={() => setShowSettings(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+    <NavRail view={view} onView={(next) => { setView(next); if (next === 'monitoring') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); } }} onSettings={() => openSettings()} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
     <Sidebar sessions={sessions} currentSessionId={currentSessionId} runningSessionId={runningSessionId} projects={projectList} activeProjectId={currentProject?.id} projectError={projectError} completionNotice={completionNotice} onClearCompletion={() => setCompletionNotice(false)} onNewSession={newSession} onSelectSession={selectSession} onDeleteSession={deleteSession} onNewProject={() => setShowNewProject(true)} onOpenProject={(id) => void openProject(id)} onRemoveProject={(id) => void removeProject(id)} />
     {sidebarOpen && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
     {view === 'monitoring' ? <MonitoringPage liveTrace={liveTrace} /> : <main className="workspace">
@@ -573,11 +577,13 @@ export default function App() {
             </div>;
           }) : <WorkbenchWelcome onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => setShowNewProject(true)} />}
           {currentSession.metrics?.stopReason === 'tool_limit' && <div className="runtime-notice" role="status" aria-label="任务未完成">本轮工具预算已用尽，任务尚未完成。以上为阶段性总结，可继续任务。</div>}
-          {error && <div className="error-banner" role="alert">{error}</div>}
+          {currentSession.metrics?.stopReason === 'length' && <div className="runtime-notice" role="status" aria-label="输出长度已达上限">本轮输出已达到模型长度上限，任务尚未完成。已保留收到的内容，可继续任务或在模型设置中调整最大输出 Token。</div>}
+          {currentSession.metrics?.stopReason === 'budget_limit' && <div className="runtime-notice budget-limit-notice" role="status" aria-label="任务预算已用尽"><span>{(currentSession.metrics.budgetLimit?.message || '本轮已达到预估费用或运行时间上限').replace(/[。.!！?？]+$/, '')}。任务尚未完成，{currentSession.output ? '已保留阶段性输出。' : '当前尚无可展示的输出。'}可调整预算后继续。</span>{currentSession.metrics.budgetLimit && <small>本轮预估费用 {'$'}{currentSession.metrics.budgetLimit.estimatedCost.toFixed(4)} · 费用上限 {'$'}{currentSession.metrics.budgetLimit.maxCostUsd.toFixed(2)}</small>}<button type="button" className="button outline small" onClick={() => openSettings('runtime')}>调整运行预算</button><small>设置 → 运行与权限 → 任务路由与模型分工</small></div>}
+          {error && <div className="error-banner" role="alert"><span>{error}</span>{/成本预算|秒预算|BUDGET_EXCEEDED/.test(error) && <button type="button" className="button outline small" onClick={() => openSettings('runtime')}>调整运行预算</button>}</div>}
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        project={currentProject} activeFilePath={activeFilePath} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => setShowSettings(true)} value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} activeFilePath={activeFilePath} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => openSettings()} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onCancelEdit={cancelMessageEdit}
@@ -590,7 +596,7 @@ export default function App() {
     </main>}
     {view === 'workspace' && projectDrawerOpen && <button className="panel-backdrop inspector-backdrop" aria-label="关闭项目面板" onClick={() => setProjectDrawerOpen(false)} />}
     {view === 'workspace' && projectDrawerOpen && <WorkspacePanel project={currentProject} reloadKey={projectReloadKey} activePath={activeFilePath} onPreview={openFile} onChangeDirectory={() => setShowNewProject(true)} />}
-    {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} onOpenRouting={() => setShowRouting(true)} />}
+    {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={handleModelsChanged} onOpenRouting={() => setShowRouting(true)} initialTab={settingsInitialTab} />}
     {showRouting && <RoutingPanel onClose={() => setShowRouting(false)} />}
     {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreated={handleProjectCreated} />}
   </div>;

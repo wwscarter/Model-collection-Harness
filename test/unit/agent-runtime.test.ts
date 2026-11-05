@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AgentRuntime, trimHistory, type ToolEvent } from '../../src/core/agent/AgentRuntime';
 import { normalizeBaseUrl, toPiModel } from '../../src/core/agent/modelMapping';
 import { buildSystemPrompt } from '../../src/core/agent/systemPrompt';
@@ -10,6 +10,8 @@ import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import { SearchProviderRegistry, type SearchProvider } from '../../src/core/tools/search';
 import { createProjectCommandTools } from '../../src/core/tools/projectCommandTools';
 import { ProjectProcessManager, type ProjectProcessSnapshot } from '../../src/core/tty/ProjectProcessManager';
+import { BudgetExceededError } from '../../src/core/routing/RunBudget';
+import type { ModelUsage } from '../../src/core/routing/ModelUsage';
 
 type Reply = (body: any) => string[] | null;
 let server: http.Server;
@@ -259,6 +261,117 @@ describe('AgentRuntime (Pi SDK)', () => {
     const result = await agent.run({ model: model({ provider: 'custom' }), prompt: 'hello', enableTools: false });
     expect(result.inputTokens).toBe(50);
     expect(result.outputTokens).toBe(5);
+  });
+
+  it('reports each model reply once including cache splits before a later request gate', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'project overview' }), () => sse([{
+      choices: [{ index: 0, delta: { content: 'final reply' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 50, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 } },
+    }])];
+    const { runtime: agent } = runtime();
+    const usage: ModelUsage[] = [];
+    const gate = vi.fn(() => {
+      if (requests.length === 1) expect(usage).toHaveLength(1);
+    });
+    const result = await agent.run({ model: model(), prompt: 'Analyze', onUsage: (value) => usage.push(value), beforeModelRequest: gate });
+    expect(gate).toHaveBeenCalledTimes(2);
+    expect(usage).toEqual([
+      { inputTokens: 40, outputTokens: 8, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      { inputTokens: 50, outputTokens: 5, cacheReadTokens: 30, cacheWriteTokens: 10 },
+    ]);
+    expect(result).toMatchObject({ inputTokens: 90, outputTokens: 13 });
+  });
+
+  it('caps every actual request using the SDK maxTokens option', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'project overview' }), text('final reply')];
+    const { runtime: agent } = runtime();
+    const gate = vi.fn(() => ({ maxOutputTokens: requests.length === 0 ? 12 : 7 }));
+    await agent.run({ model: model({ provider: 'custom' }), prompt: 'Analyze', maxTokens: 100, beforeModelRequest: gate });
+    expect(requests.map((entry) => entry.body.max_tokens)).toEqual([12, 7]);
+    expect(gate.mock.calls.every((args) => (args as unknown[]).length === 1)).toBe(true);
+  });
+
+  it('stops before a second request and preserves streamed work without a paid summary', async () => {
+    requests.length = 0;
+    replies = [(body) => [...sse([{ choices: [{ index: 0, delta: { content: '已确认项目使用 TypeScript。' } }] }]).slice(0, -1), ...toolCall('web_search', { query: 'project overview' })(body)!], text('must not be requested')];
+    const { runtime: agent } = runtime();
+    const onUsage = vi.fn();
+    let checks = 0;
+    const gate = () => { if (++checks > 1) throw new BudgetExceededError('剩余预估费用不足'); };
+    const result = await agent.run({ model: model(), prompt: 'Analyze', onUsage, beforeModelRequest: gate });
+    expect(requests).toHaveLength(1);
+    expect(result).toMatchObject({ inputTokens: 40, outputTokens: 8, toolCalls: 1, stopReason: 'budget_limit' });
+    expect(result.content).toContain('已确认项目使用 TypeScript');
+    expect(result.content).toContain('任务尚未完成');
+    expect(onUsage).toHaveBeenCalledOnce();
+  });
+
+  it('returns an explicit partial notice when the first request cannot fit the budget', async () => {
+    requests.length = 0;
+    replies = [text('must not be requested')];
+    const { runtime: agent } = runtime();
+    const result = await agent.run({ model: model(), prompt: 'Analyze', beforeModelRequest: () => { throw new BudgetExceededError('预算不足'); } });
+    expect(requests).toHaveLength(0);
+    expect(result).toMatchObject({ stopReason: 'budget_limit', inputTokens: 0, outputTokens: 0, toolCalls: 0 });
+    expect(result.content).toContain('预算限制停止');
+  });
+
+  it('blocks pending tools when usage accounting reaches its budget', async () => {
+    requests.length = 0;
+    let searches = 0;
+    replies = [toolCall('web_search', { query: 'must not run' })];
+    const { runtime: agent } = runtime({ search: new SearchProviderRegistry([{ ...fakeSearch, search: async (query) => { searches += 1; return fakeSearch.search(query); } }]) });
+    const result = await agent.run({ model: model(), prompt: 'Analyze', onUsage: () => { throw new BudgetExceededError('实际用量达到预算'); } });
+    expect(result.stopReason).toBe('budget_limit');
+    expect(requests).toHaveLength(1);
+    expect(searches).toBe(0);
+    expect(result.inputTokens).toBe(40);
+  });
+
+  it('preserves prior usage when a model fails after a successful tool reply', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'project overview' }), () => sse([{ error: { message: 'invalid api key' } }])];
+    const { runtime: agent } = runtime();
+    const usage: ModelUsage[] = [];
+    await expect(agent.run({ model: model(), prompt: 'Analyze', onUsage: (value) => usage.push(value) })).rejects.toThrow('invalid api key');
+    expect(usage.reduce((sum, entry) => sum + entry.inputTokens, 0)).toBe(40);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('propagates a non-budget usage callback error without running another tool', async () => {
+    requests.length = 0;
+    replies = [toolCall('web_search', { query: 'must not run' })];
+    let searches = 0;
+    const { runtime: agent } = runtime({ search: new SearchProviderRegistry([{ ...fakeSearch, search: async (query) => { searches += 1; return fakeSearch.search(query); } }]) });
+    await expect(agent.run({ model: model(), prompt: 'Analyze', onUsage: () => { throw new Error('usage persistence failed'); } })).rejects.toThrow('usage persistence failed');
+    expect(searches).toBe(0);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('keeps user cancellation distinct from a budget stop while preserving previous usage', async () => {
+    requests.length = 0;
+    const controller = new AbortController();
+    replies = [toolCall('web_search', { query: 'project overview' }), () => { setTimeout(() => controller.abort(), 20); return null; }];
+    const { runtime: agent } = runtime();
+    const usage: ModelUsage[] = [];
+    await expect(agent.run({ model: model(), prompt: 'Analyze', signal: controller.signal, onUsage: (value) => usage.push(value) })).rejects.toThrow('任务已取消');
+    expect(usage.reduce((sum, entry) => sum + entry.inputTokens, 0)).toBe(40);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('accounts for compaction responses consumed through result without assistant message events', async () => {
+    requests.length = 0;
+    replies = [text('Earlier conversation summary'), text('final reply')];
+    const { runtime: agent } = runtime();
+    const history = Array.from({ length: 12 }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `Turn ${index}: ` + 'context '.repeat(2500) }));
+    const usage: ModelUsage[] = [];
+    const result = await agent.run({ model: model({ contextWindow: 32_000 }), prompt: 'Continue', history, skipHistoryTrim: true, enableTools: false, onUsage: (value) => usage.push(value) });
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    expect(usage).toHaveLength(requests.length);
+    expect(result.inputTokens).toBe(usage.reduce((sum, entry) => sum + entry.inputTokens, 0));
+    expect(result.content).toBe('final reply');
   });
 
   it('lets the tool gate block a call and reports the block to the model', async () => {

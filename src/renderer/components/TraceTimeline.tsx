@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import type { RunTrace, SpanKind, TraceSpan } from '../types';
+import type { RunTrace, SpanKind, TraceSpan, TraceModelSnapshot } from '../types';
 
 const kindLabels: Record<SpanKind, string> = {
   run: '运行', route: '路由', context: '上下文', memory: '记忆', compact: '压缩',
@@ -12,6 +12,14 @@ const tokens = (value: number) => value > 0 ? value.toLocaleString('en-US') : '�
 type Filter = 'all' | 'model' | 'tool' | 'error';
 
 interface Props { trace?: RunTrace; defaultOpen?: boolean; }
+
+export function traceModelSnapshot(span: TraceSpan): TraceModelSnapshot | undefined {
+  const value = span.attributes?.modelSnapshot;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const model = value as Record<string, unknown>;
+  if (!['configurationId', 'modelId', 'name', 'provider'].every((key) => typeof model[key] === 'string' && model[key])) return undefined;
+  return model as unknown as TraceModelSnapshot;
+}
 
 export function TraceTimeline({ trace, defaultOpen = false }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
@@ -62,12 +70,14 @@ export function TraceTimeline({ trace, defaultOpen = false }: Props) {
     const left = runDuration ? Math.min(100, (offset / runDuration) * 100) : 0;
     const width = runDuration && span.durationMs ? Math.max(1, Math.min(100 - left, (span.durationMs / runDuration) * 100)) : 0;
     const open = expandedId === span.id;
+    const model = traceModelSnapshot(span);
+    const modelLabel = model?.modelId ?? (span.modelId ? '配置ID: ' + span.modelId : '—');
     return <React.Fragment key={span.id}>
       <button type="button" className={'trace-row trace-' + (statusClass[span.status] ?? 'idle') + (open ? ' is-expanded' : '')} style={{ paddingLeft: 8 + depth * 15 + 'px' }} onClick={() => setExpandedId(open ? undefined : span.id)} aria-expanded={open}>
         <i className="trace-status-dot" aria-hidden="true" />
         <span className="trace-kind">{kindLabels[span.kind] ?? span.kind}</span>
         <strong className="trace-name" title={span.errorMessage ?? undefined}>{span.name}</strong>
-        {span.modelId && <span className="trace-model mono" title={span.modelId}>{span.modelId}</span>}
+        <span className="trace-model mono" title={model ? model.name + ' · ' + model.provider + ' · 上游ID: ' + model.modelId + ' · 配置ID: ' + model.configurationId : span.modelId ? '历史记录仅保存配置ID: ' + span.modelId : undefined}>{modelLabel}</span>
         <span className="trace-waterfall" aria-hidden="true"><i style={{ marginLeft: left + '%', width: width + '%' }} /></span>
         <span className="trace-metric mono">{duration(span.durationMs)}</span>
         <span className="trace-metric mono">{tokens(span.inputTokens + span.outputTokens)}</span>
@@ -77,6 +87,16 @@ export function TraceTimeline({ trace, defaultOpen = false }: Props) {
       {open && <div className="trace-detail" style={{ marginLeft: 8 + depth * 15 + 'px' }}>
         <span><small>span</small><code>{span.id}</code></span>
         <span><small>状态</small><code>{span.status}</code></span>
+        {model ? <>
+          <span><small>上游模型 ID</small><code>{model.modelId}</code></span>
+          <span><small>配置 ID</small><code>{model.configurationId}</code></span>
+          <span><small>配置名称</small><code>{model.name}</code></span>
+          <span><small>提供商</small><code>{model.provider}</code></span>
+          {model.endpointOrigin && <span><small>端点来源</small><code>{model.endpointOrigin}</code></span>}
+          {model.costPer1kTokens && <span><small>预估费率 USD / 1K Token</small><code>输入 {model.costPer1kTokens.input} / 输出 {model.costPer1kTokens.output}</code></span>}
+          {model.legacyPresetRates && <span className="trace-detail-note">当前调用沿用旧预设费率，请按服务商价格核对；显示费用为配置估算。</span>}
+          {model.configurationUpdatedAt && <span><small>配置快照时间</small><code>{model.configurationUpdatedAt}</code></span>}
+        </> : span.modelId && <><span><small>配置 ID</small><code>{span.modelId}</code></span><span className="trace-detail-note">历史记录未保存实际模型型号，无法由配置 ID 确认当时使用的上游模型。</span></>}
         <span><small>token</small><code>{integer(span.inputTokens)} in / {integer(span.outputTokens)} out</code></span>
         {span.errorMessage && <span className="trace-detail-error"><small>错误</small><code>{span.errorMessage}</code></span>}
         {span.attributes && Object.keys(span.attributes).length > 0 && <pre>{JSON.stringify(span.attributes, null, 2)}</pre>}

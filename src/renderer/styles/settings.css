@@ -146,6 +146,7 @@
 .settings-window .temperature-control .slider-head > .mono { color: var(--text); font-size: 11px; font-weight: 600; }
 .settings-window .settings-title-english { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
 .settings-window .settings-draft-note { margin: 0; color: var(--text-muted); font-size: 10px; line-height: 17px; }
+.settings-window .settings-pricing-diagnostic { padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-low); font-size: 10px; line-height: 1.65; }
 .settings-window .detail-foot { min-height: 64px; flex-shrink: 0; gap: 10px; padding: 12px 22px; background: var(--surface-soft); }
 .settings-window .foot-note { min-width: 0; gap: 5px; color: var(--text-muted); font-size: 10px; line-height: 16px; }
 .settings-window .foot-note svg { width: 13px; height: 13px; flex-shrink: 0; }

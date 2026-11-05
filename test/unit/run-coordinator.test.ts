@@ -274,16 +274,57 @@ describe('RunCoordinator', () => {
     } finally { cleanup(); }
   });
 
-  it('rejects a completed invocation that exceeded the run cost budget while preserving usage', async () => {
+  it('returns a completed paid response as a budget-limited stage with full usage, including nonstreamed content', async () => {
     const expensive = model('m1', { costPer1kTokens: { input: 1, output: 1 } });
     const { deps, traceStore, cleanup } = makeDeps([expensive], async (current, _prompt, _max, onDelta) => {
-      onDelta('partial answer');
       return { content: 'partial answer', inputTokens: 300, outputTokens: 1, modelId: current.id };
     });
     try {
-      await expect(executeRun({ sessionId: 'session-1', runId: 'cost-overrun', prompt: 'hello', includeProjectContext: false }, deps, () => undefined)).rejects.toThrow('成本预算');
+      const events: Array<{ channel: string; payload: any }> = [];
+      const growth = vi.spyOn(deps.growth, 'recordFeedback');
+      const result = await executeRun({ sessionId: 'session-1', runId: 'cost-overrun', prompt: 'hello', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
+      expect(result).toMatchObject({ output: 'partial answer', stopReason: 'budget_limit', budgetLimit: { code: 'BUDGET_EXCEEDED', estimatedCost: 0.301, maxCostUsd: 0.25 }, metrics: { inputTokens: 300, outputTokens: 1, totalCost: 0.301, stopReason: 'budget_limit' } });
+      expect(events.find((event) => event.channel === 'session:completed')?.payload).toMatchObject({ output: 'partial answer', stopReason: 'budget_limit' });
+      expect(growth).not.toHaveBeenCalled();
       expect(deps.observability.getTaskMetrics('cost-overrun').totalCost).toBeCloseTo(0.301);
       expect(traceStore.getTrace('cost-overrun')?.run.status).toBe('failed');
+    } finally { cleanup(); }
+  });
+
+  it('counts per-reply usage exactly once and caps the next actual request before it is sent', async () => {
+    const executor = model('m1', { costPer1kTokens: { input: 1, output: 1 } });
+    const invoke: RunDependencies['invokeStreamed'] = async (current, _prompt, _max, _delta, options) => {
+      const cap = options!.beforeModelRequest!({ estimatedInputTokens: 50, maxOutputTokens: 1000 });
+      expect(cap).toEqual({ maxOutputTokens: 200 });
+      options!.onUsage!({ inputTokens: 100, outputTokens: 140, cacheReadTokens: 20 });
+      expect(options!.beforeModelRequest!({ estimatedInputTokens: 2, maxOutputTokens: 100 })).toEqual({ maxOutputTokens: 8 });
+      expect(() => options!.beforeModelRequest!({ estimatedInputTokens: 20, maxOutputTokens: 100 })).toThrow('剩余预估费用');
+      return { content: '已检查一部分；剩余任务未完成。', inputTokens: 100, outputTokens: 140, modelId: current.id, stopReason: 'budget_limit' };
+    };
+    const { deps, traceStore, cleanup } = makeDeps([executor], invoke);
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'progress-budget', prompt: 'hello', includeProjectContext: false }, deps, () => undefined);
+      expect(output).toMatchObject({ stopReason: 'budget_limit', metrics: { inputTokens: 100, outputTokens: 140, totalCost: 0.24 } });
+      expect(traceStore.getTrace('progress-budget')?.run).toMatchObject({ totalInputTokens: 100, totalOutputTokens: 140, totalCost: 0.24, status: 'failed' });
+    } finally { cleanup(); }
+  });
+
+  it('uses a saved per-run budget and records its configured-estimate basis', async () => {
+    const { deps, traceStore, cleanup } = makeDeps([model('m1', { costPer1kTokens: { input: 1, output: 1 } })], async (current) => ({ content: 'done', inputTokens: 300, outputTokens: 1, modelId: current.id, stopReason: 'stop' }));
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), budget: { maxCostUsd: 1, maxDurationMs: 120_000 } };
+    try {
+      expect(await executeRun({ sessionId: 'session-1', runId: 'configured-budget', prompt: 'hello', includeProjectContext: false }, deps, () => undefined)).toMatchObject({ output: 'done', stopReason: 'stop', metrics: { totalCost: 0.301 } });
+      expect(traceStore.getTrace('configured-budget')?.spans.find((span) => span.kind === 'run')?.attributes?.budget).toEqual({ maxCostUsd: 1, maxDurationMs: 120_000, pricingBasis: 'configured-token-rates' });
+    } finally { cleanup(); }
+  });
+
+  it('marks length-truncated output incomplete while retaining the generated text', async () => {
+    const { deps, traceStore, cleanup } = makeDeps([model('m1')], async (current) => ({ content: 'partial text', inputTokens: 10, outputTokens: 10, modelId: current.id, stopReason: 'length' }));
+    const growth = vi.spyOn(deps.growth, 'recordFeedback');
+    try {
+      expect(await executeRun({ sessionId: 'session-1', runId: 'length-limit', prompt: 'hello', includeProjectContext: false }, deps, () => undefined)).toMatchObject({ output: 'partial text', stopReason: 'length' });
+      expect(traceStore.getTrace('length-limit')?.run).toMatchObject({ status: 'failed', errorMessage: expect.stringContaining('长度上限') });
+      expect(growth).not.toHaveBeenCalled();
     } finally { cleanup(); }
   });
 
