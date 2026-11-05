@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "pack": "npm run prepare:package && electron-builder",
+    "pack:mac:x64": "npm run prepare:package && electron-builder --mac --x64",
     "test:coverage": "node scripts/run-tests.mjs --coverage",
     "postinstall": "node scripts/ensure-electron-binary.mjs",
     "doctor:electron": "node scripts/ensure-electron-binary.mjs",
@@ -72,9 +73,10 @@
     },
     "mac": {
       "target": [
-        "dmg",
-        "zip"
-      ]
+        { "target": "dmg", "arch": ["x64"] },
+        { "target": "zip", "arch": ["x64"] }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "linux": {
       "target": [
