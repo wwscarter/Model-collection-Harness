@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ChevronRight, Clock3, Coins, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { DashboardSnapshot, RunTrace, TraceRun } from '../types';
 import { TraceTimeline } from '../components/TraceTimeline';
+import { RoutingClassificationFeedback } from '../components/RoutingClassificationFeedback';
 
 type Range = '24h' | '7d' | '30d';
 interface MonitoringPageProps { liveTrace?: RunTrace; }
@@ -127,6 +128,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
             <span><small>模型调用</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'model').length}</strong></span>
             <span><small>工具</small><strong>{selectedTrace.spans.filter((span) => span.kind === 'tool').length}</strong></span>
           </div>
+          <RoutingClassificationFeedback trace={selectedTrace} />
           {selectedTrace.run.errorMessage && <div className="monitoring-trace-error">{selectedTrace.run.errorMessage}</div>}
           <TraceTimeline trace={selectedTrace} defaultOpen />
         </> : traceError ? <div className="monitoring-empty" role="alert"><span>{traceError}</span><button className="button outline" onClick={() => setTraceReload((value) => value + 1)}>重试</button></div> : <div className="monitoring-empty"><ChevronRight size={20} /><span>{selectedId ? '正在读取调用链…' : '选择一条运行记录，展开完整调用链。'}</span></div>}

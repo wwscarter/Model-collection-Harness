@@ -7,9 +7,12 @@ const agentPerspectives = ['独立方案与实现路径', '风险、限制与失
  * model that prepares a short plan. This keeps the user's task with the models
  * doing the work and does not turn the prompt into an audit target.
  */
-export function selectPlanningModel(models: ModelConfig[], executionModelId: string): ModelConfig | undefined {
-  return models
-    .filter((model) => model.enabled && hasUsableCredentials(model) && model.id !== executionModelId)
+export function selectPlanningModel(models: ModelConfig[], executionModelId?: string, preferredId?: string): ModelConfig | undefined {
+  const candidates = models
+    .filter((model) => model.enabled && hasUsableCredentials(model) && model.id !== executionModelId);
+  // A configured role must not silently move to a different provider.
+  if (preferredId !== undefined) return candidates.find((model) => model.id === preferredId);
+  return candidates
     .filter((model) => (model.capabilities.find((capability) => capability.type === 'reasoning')?.score ?? 0) > 0)
     .sort((a, b) => {
       const score = (model: ModelConfig) =>
@@ -19,8 +22,9 @@ export function selectPlanningModel(models: ModelConfig[], executionModelId: str
     })[0];
 }
 
-export function selectUtilityModel(models: ModelConfig[], executionModelId?: string): ModelConfig | undefined {
+export function selectUtilityModel(models: ModelConfig[], executionModelId?: string, preferredId?: string): ModelConfig | undefined {
   const usable = models.filter((model) => model.enabled && hasUsableCredentials(model));
+  if (preferredId !== undefined) return usable.find((model) => model.id === preferredId);
   const cost = (model: ModelConfig) => model.costPer1kTokens.input + model.costPer1kTokens.output;
   const sorted = [...usable].sort((a, b) => cost(a) - cost(b) || (b.contextWindow ?? 0) - (a.contextWindow ?? 0) || a.priority - b.priority);
   return sorted.find((model) => model.id !== executionModelId) ?? sorted[0];

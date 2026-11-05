@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react';
 import type { ModelConfig } from '../types';
 import { RuntimeSettings } from '../components/RuntimeSettings';
+import { routingStatusLabel } from '../components/ModelRoutingSettings';
+import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 import { errorMessage } from '../format';
 import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults, settingsPayload } from '../settingsForm';
 import type { ProviderCategory, SettingsDraft } from '../settingsForm';
@@ -38,7 +40,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
   const [modelSource, setModelSource] = useState<'saved' | 'fetched' | 'manual'>('saved');
   const [manualEntry, setManualEntry] = useState(false);
   const [manualModel, setManualModel] = useState('');
-  const [routing, setRouting] = useState<{ backend: string; available: boolean }>();
+  const [routing, setRouting] = useState<RoutingClassifierStatus>();
   const drafts = useRef<Record<string, SettingsDraft>>({});
   const initialSelectionPending = useRef(!firstModel);
   const dialogRef = useRef<HTMLElement>(null);
@@ -192,7 +194,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
         <div className="titlebar-right"><span className="kbd-hint"><kbd>Esc</kbd>关闭</span><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
       <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button></div>
-      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} /> : <div className="settings-body">
+      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">
             <div className="endpoint-list-title"><strong>端点与路由</strong><span className="count-pill accent endpoint-ready-count">{models.filter((model) => model.enabled).length} 个启用</span><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>
@@ -213,7 +215,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting }: Se
             })}
             {!visibleModels.length && <div className="empty-models"><Radio size={24} /><strong>{models.length ? '没有匹配的端点' : '连接你的第一个模型'}</strong><span>{models.length ? '试试模型名称、地址或通道类别' : '点击“添加模型”，配置 API 或本地服务'}</span>{query && <button onClick={() => setQuery('')}>清空搜索</button>}</div>}
           </div>
-          <div className="endpoint-list-foot"><span><i className="live-dot" />{routing?.backend === 'local-model' && routing.available ? '本地路由模型运行中' : routing ? '自动路由引擎运行中' : '正在读取路由状态…'}</span><button className="icon-button endpoint-refresh" aria-label="刷新端点与路由状态" disabled={Boolean(busy)} onClick={() => void refresh()}><RefreshCw size={13} className={busy === 'refreshing' ? 'spinning' : ''} /></button></div>
+          <div className="endpoint-list-foot"><span><i className="live-dot" />{routingStatusLabel(routing)}</span><button className="icon-button endpoint-refresh" aria-label="刷新端点与路由状态" disabled={Boolean(busy)} onClick={() => void refresh()}><RefreshCw size={13} className={busy === 'refreshing' ? 'spinning' : ''} /></button></div>
         </aside>
         <main className="endpoint-detail">
           <div className="detail-head">

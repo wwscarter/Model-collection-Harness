@@ -398,6 +398,7 @@ export class AgentRuntime {
           + '\n\n继续任务时可从上述已检查范围接着分析。';
         request.onTextDelta?.(`${content.trim() ? '\n\n' : ''}${answer}`);
       }
+      if (!answer.trim()) throw new Error('模型返回空文本，未生成可用回答');
       return {
         content: answer,
         inputTokens: stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite,

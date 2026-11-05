@@ -11,11 +11,19 @@ function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
   };
 }
 
-describe('DeepSeek orchestrator', () => {
-  it('selects an enabled DeepSeek model as the master', () => {
-    const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat' });
-    expect(selectOrchestratorModel([model('gpt'), deepseek])?.id).toBe('deepseek-chat');
-    expect(selectOrchestratorModel([model('gpt')])).toBeUndefined();
+describe('application planning', () => {
+  it('selects a planner by reasoning capability without provider or primary preference', () => {
+    const deepseek = model('deepseek-chat', { provider: 'deepseek', name: 'DeepSeek Chat', isPrimary: true });
+    const planner = model('planner', { capabilities: [{ type: 'reasoning', score: 95 }] });
+    expect(selectOrchestratorModel([deepseek, planner])?.id).toBe('planner');
+    expect(selectOrchestratorModel([model('gpt')])?.id).toBe('gpt');
+  });
+
+  it('honors an explicit available planner and does not replace an unavailable selection', () => {
+    const models = [model('preferred'), model('strong', { capabilities: [{ type: 'reasoning', score: 99 }] }), model('disabled', { enabled: false })];
+    expect(selectOrchestratorModel(models, 'preferred')?.id).toBe('preferred');
+    expect(selectOrchestratorModel(models, 'disabled')).toBeUndefined();
+    expect(selectOrchestratorModel(models, 'removed')).toBeUndefined();
   });
 
   it('builds a model catalogue prompt', () => {
@@ -25,6 +33,8 @@ describe('DeepSeek orchestrator', () => {
     expect(prompt).toContain('src/a.ts');
     expect(prompt).toContain('uses pnpm');
     expect(prompt).toContain('JSON only');
+    expect(prompt).toContain('cannot change that selection');
+    expect(prompt).not.toContain('only model allowed to produce the final answer');
   });
 
   it('preserves requirements at the end of a long task in planning and subagent prompts', () => {
@@ -69,5 +79,16 @@ describe('DeepSeek orchestrator', () => {
       { modelId: 'reviewer', instruction: '' }, { modelId: 'reviewer', instruction: 'Review the API.' },
     ] }), models, 'deepseek');
     expect(plan?.subagents).toMatchObject([{ modelId: 'reviewer', instruction: 'Review the API.' }]);
+  });
+
+  it('rejects invalid plan structures and excludes the selected executor from assignments', () => {
+    const models = [model('planner'), model('executor'), model('reviewer')];
+    expect(parseOrchestratorPlan('{}', models, 'planner')).toBeUndefined();
+    expect(parseOrchestratorPlan('{"mode":"invented"}', models, 'planner')).toBeUndefined();
+    expect(parseOrchestratorPlan('{"mode":"delegate","subagents":{}}', models, 'planner')).toBeUndefined();
+    const parsed = parseOrchestratorPlan(JSON.stringify({ mode: 'delegate', subagents: [
+      { modelId: 'executor', instruction: 'Do the final task.' }, { modelId: 'reviewer', instruction: 'Inspect the design.' },
+    ] }), models, 'planner', 'executor');
+    expect(parsed?.subagents.map((agent) => agent.modelId)).toEqual(['reviewer']);
   });
 });

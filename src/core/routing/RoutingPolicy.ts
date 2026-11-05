@@ -160,10 +160,11 @@ function matches(rule: RoutingRule, decision: RoutingDecision, description: stri
 export class RoutingPolicyEngine {
   constructor(private readonly router: AgentRouter, private readonly policy: RoutingPolicy = DEFAULT_ROUTING_POLICY) {}
 
-  async routeTask(context: TaskContext, models: ModelConfig[], guard?: RoutingGuard): Promise<RoutingDecision> {
+  async routeTask(context: TaskContext, models: ModelConfig[], guard?: RoutingGuard, options: import('./AgentRouter').RoutingOptions = {}): Promise<RoutingDecision> {
+    options.signal?.throwIfAborted();
     const usable = models.filter((model) => model.enabled && hasUsableCredentials(model) && (guard?.isAvailable(model.id) ?? true));
     if (!usable.length) throw new Error('没有满足凭据、配额与上下文约束的可用模型');
-    const base = await this.router.routeTask(context, usable);
+    const base = await this.router.routeTask(context, usable, options);
     const available = new Set(usable.map((model) => model.id));
     const appliedRule = [...this.policy.rules]
       .filter((candidate) => candidate.enabled && matches(candidate, base, context.description)

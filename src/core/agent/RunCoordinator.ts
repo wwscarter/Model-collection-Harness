@@ -3,6 +3,8 @@ import type { ModelConfig } from '@core/models/ModelConfig';
 import { hasUsableCredentials } from '@core/models/ModelConfig';
 import type { ModelRegistry } from '@core/models/ModelRegistry';
 import type { RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
+import type { RoutingDecision } from '@core/routing/AgentRouter';
+import type { RoutingSettings } from '@core/routing/RoutingSettings';
 import type { ModelQuota } from '@core/routing/ModelQuota';
 import { RunBudget, BudgetExceededError } from '@core/routing/RunBudget';
 import { shouldFallback } from '@core/routing/Fallback';
@@ -11,6 +13,7 @@ import type { TraceRecorder, TraceSpanHandle } from '@core/trace/TraceRecorder';
 import type { RunStatus } from '@core/trace/types';
 import type { ModelInvocation, ObservabilityEngine } from '@core/observability/ObservabilityEngine';
 import type { GrowthEngine, RoutingFeedback } from '@core/growth/GrowthEngine';
+import type { RoutingObservation } from '@core/growth/RoutingLearningStore';
 import { auditCodeAnswer } from '@core/audit/AuditService';
 import type { AuditLog } from '@core/audit/AuditLog';
 import type { CodeAuditor } from '@core/audit/CodeAuditor';
@@ -22,7 +25,7 @@ import type { ProjectContextResult } from '@core/project/ProjectContext';
 import { assembleContext, type ContextToolDigest, type ContextTurn } from '@core/context/ContextAssembler';
 import { summarizeContext } from '@core/context/SummaryService';
 import { createProvider as createProviderImpl, type ModelProvider, type ModelResponse } from '@core/providers/ModelProvider';
-import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel, selectUtilityModel } from '@core/routing/ModelCollaboration';
+import { buildParallelAgentPrompt, buildSynthesisPrompt, runParallelAgents, selectUtilityModel } from '@core/routing/ModelCollaboration';
 import { buildOrchestratedFinalPrompt, buildOrchestratorPrompt, buildSubagentInstruction, parseOrchestratorPlan, selectOrchestratorModel, type OrchestrationPlan } from '@core/routing/Orchestrator';
 import { buildRevisionPrompt, hasCode, shouldRevise, verifyCodeAnswer } from './VerificationService';
 import type { ToolEvent } from './AgentRuntime';
@@ -71,6 +74,8 @@ export type InvokeStreamed = (
 export interface RunDependencies {
   models: ModelRegistry;
   routing: RoutingPolicyEngine;
+  routingSettings?: RoutingSettings;
+  onClassification?: (observation: RoutingObservation) => void;
   quota: ModelQuota;
   traces: TraceRecorder;
   observability: ObservabilityEngine;
@@ -119,6 +124,28 @@ function sanitizeHistory(value: unknown): ContextTurn[] {
       : [];
     return [{ role: candidate.role, content: candidate.content.slice(0, 40_000), ...(tools.length ? { tools } : {}) }];
   });
+}
+
+/** Keep recent references visible within the classifier's 250-character context allowance. */
+function routingPriorContext(value: unknown, summary?: string): string | undefined {
+  const snippet = (content: string, limit: number): string => {
+    const clean = content.trim();
+    if (clean.length <= limit) return clean;
+    const marker = '…[截断]…';
+    const head = Math.floor((limit - marker.length) / 2);
+    return clean.slice(0, head) + marker + clean.slice(-(limit - marker.length - head));
+  };
+  const recent: string[] = [];
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0 && recent.length < 2; index -= 1) {
+      const turn = value[index] as Partial<ContextTurn> | null;
+      if (!turn || (turn.role !== 'user' && turn.role !== 'assistant') || typeof turn.content !== 'string' || !turn.content.trim()) continue;
+      // Read the original turn so sanitizing long execution history cannot discard its closing options.
+      recent.unshift(`${turn.role}: ${snippet(turn.content, 100)}`);
+    }
+  }
+  if (recent.length) return recent.join('\n');
+  return summary?.trim() ? `summary: ${snippet(summary, 240)}` : undefined;
 }
 
 /**
@@ -260,89 +287,92 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       // local classifier then infers low/medium/high from the actual task text.
       // Classify the user's request, not the project snapshot: a large context
       // used to make almost every project conversation look "high complexity".
-      const routeSpan = trace.child('route', 'route', { requestedTaskType: payload.taskType, requestedComplexity: payload.complexity });
-      let decision = await routingPolicy.routeTask(
-        { id: runId, type: (payload.taskType || 'general') as any, description: payload.prompt, complexity: payload.complexity },
-        registry.getAllModels(),
-        { isAvailable: (modelId) => { const candidate = registry.getModel(modelId); return Boolean(candidate && modelQuota.isAvailable(candidate)); } },
-      );
-      routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId } });
-      if (controller.signal.aborted) throw new Error('任务已取消');
-      mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
+      const storedSummary = sessionStorage.getSummary(sessionId);
+      const priorContext = routingPriorContext(payload.history, storedSummary?.text);
       const pinnedCandidate = payload.pinnedModelId ? registry.getModel(payload.pinnedModelId) : undefined;
       const pinned = pinnedCandidate && pinnedCandidate.enabled && hasUsableCredentials(pinnedCandidate) && modelQuota.isAvailable(pinnedCandidate) ? pinnedCandidate : undefined;
       if (payload.pinnedModelId && !pinned) throw new Error('所选固定模型当前不可用，请检查模型配置与配额');
-      let model = pinned ?? registry.getModel(decision.modelId);
-      if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
-      if (pinned) {
-        collaboratorModels.splice(0, collaboratorModels.length);
-        decision = { ...decision, modelId: pinned.id, strategy: 'single', reason: 'Session model override', alternativeModels: [], fallbackModels: [], collaboratorModelIds: [] };
-        routeSpan.setAttributes({ modelId: pinned.id, strategy: 'single', reason: decision.reason, pinned: true });
+      const routeSpan = trace.child('route', 'route', { requestedTaskType: payload.taskType, requestedComplexity: payload.complexity });
+      let decision: RoutingDecision;
+      try {
+        decision = await awaitWithSignal(routingPolicy.routeTask(
+          { id: runId, type: (payload.taskType || 'general') as any, description: payload.prompt, complexity: payload.complexity, priorContext },
+          pinned ? [pinned] : registry.getAllModels(),
+          { isAvailable: (modelId) => { const candidate = registry.getModel(modelId); return Boolean(candidate && modelQuota.isAvailable(candidate)); } },
+          { signal: controller.signal, skipSemantic: Boolean(pinned) },
+        ), controller.signal);
+        if (pinned) {
+          collaboratorModels.splice(0, collaboratorModels.length);
+          decision = { ...decision, modelId: pinned.id, strategy: 'single' as const, reason: 'Session model override', alternativeModels: [], fallbackModels: [], collaboratorModelIds: [], ruleId: undefined };
+        }
+        routeSpan.end({ attributes: { modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, confidence: decision.confidence, classification: decision.classification, alternatives: decision.alternativeModels, fallbackModels: decision.fallbackModels, strategy: decision.strategy, ruleId: decision.ruleId, pinned: Boolean(pinned) } });
+      } catch (error) {
+        const failure = controller.signal.aborted ? cancellationError() : error;
+        routeSpan.end({ status: controller.signal.aborted ? 'cancelled' : 'failed', error: failure instanceof Error ? failure.message : String(failure) });
+        throw failure;
       }
+      if (controller.signal.aborted) throw cancellationError();
+      if (decision.classification) {
+        try { deps.onClassification?.({ runId, sessionId, description: payload.prompt, priorContext, classification: decision.classification }); }
+        catch (error) { console.error('Routing observation failed', error); }
+      }
+      mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, role: 'routing' });
+      const model = pinned ?? registry.getModel(decision.modelId);
+      if (!model) throw new Error(`Routed model not found: ${decision.modelId}`);
       let orchestration: OrchestrationPlan | undefined;
-      let orchestrated = false;
-      const plannerModels = registry.getAllModels().filter((candidate) => modelQuota.isAvailable(candidate));
-      const configuredPrimary = registry.getEnabledModels().find((candidate) => candidate.isPrimary);
-      const orchestrator = pinned || decision.ruleId ? undefined : selectOrchestratorModel(plannerModels.filter((candidate) => !configuredPrimary || candidate.id === configuredPrimary.id));
-      if (orchestrator) {
-        const planSpan = trace.child('plan', 'orchestrator-plan', { modelId: orchestrator.id, role: 'orchestrator' });
-        const planModelSpan = planSpan.child('model', 'orchestrator-plan-model', { modelId: orchestrator.id, role: 'orchestrator' });
+      let planningModelId: string | undefined;
+      const plannerModels = registry.getAllModels().filter((candidate) => candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate));
+      const explicitSingle = Boolean(decision.ruleId && decision.strategy === 'single');
+      const needsPlanning = !pinned && !explicitSingle && deps.routingSettings?.planning.mode !== 'off'
+        && (decision.complexity === 'high' || ['plan', 'plan+verify', 'parallel', 'escalate'].includes(decision.strategy ?? 'single'));
+      const planner = needsPlanning ? selectOrchestratorModel(plannerModels, deps.routingSettings?.planning.modelId) : undefined;
+      if (planner) {
+        const planSpan = trace.child('plan', 'planning', { modelId: planner.id, role: 'planner', executorModelId: model.id });
+        const planModelSpan = planSpan.child('model', 'planning-model', { modelId: planner.id, role: 'planner' });
+        const planInvocationId = observability.recordInvocationStart(runId, planner.id);
+        let invocationEnded = false;
         try {
           runBudget.assertAvailable();
-          const planInvocationId = observability.recordInvocationStart(runId, orchestrator.id);
-          try {
-            const planResponse = await createProvider(orchestrator).invoke(buildOrchestratorPrompt({
-              prompt: payload.prompt,
-              availableModels: plannerModels,
-              orchestratorId: orchestrator.id,
-              projectRoot,
-              files: projectContext?.files.map((file) => file.path),
-              memory: memory?.text,
-            }), { maxTokens: 1_500, temperature: 0.2, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]) });
-            const planCost = costOf(planResponse.inputTokens, planResponse.outputTokens, orchestrator);
-            observability.recordInvocationEnd(planInvocationId, planResponse.inputTokens, planResponse.outputTokens, orchestrator.costPer1kTokens, 'success');
-            totalInputTokens += planResponse.inputTokens;
-            totalOutputTokens += planResponse.outputTokens;
-            totalCost += planCost;
-            runBudget.add({ cost: planCost, tokens: planResponse.inputTokens + planResponse.outputTokens });
-            planModelSpan.end({ inputTokens: planResponse.inputTokens, outputTokens: planResponse.outputTokens, cost: planCost });
-            const parsed = parseOrchestratorPlan(planResponse.content, plannerModels, orchestrator.id);
-            if (parsed) {
-              orchestration = parsed;
-              orchestrated = true;
-              model = orchestrator;
-              collaboratorModels.splice(0, collaboratorModels.length, ...parsed.subagents
+          const planningBudget = modelContextBudget([planner], 1500);
+          const planningPrompt = fitPromptParts((parts) => buildOrchestratorPrompt({
+            prompt: payload.prompt, availableModels: plannerModels, orchestratorId: planner.id, executionModelId: model.id,
+            priorContext: parts[1], projectRoot, files: parts[2] ? parts[2].split('\n') : [], memory: parts[0],
+          }), [memory?.text ?? '', priorContext ?? '', projectContext?.files.slice(0, 60).map((file) => file.path).join('\n') ?? ''], planningBudget.maxInputTokens);
+          mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: planner.id, role: 'planning', reason: '为任务生成结构化执行建议', confidence: decision.confidence });
+          // createProvider reserves planner quota immediately before the request.
+          const response = await createProvider(planner).invoke(planningPrompt, { maxTokens: planningBudget.maxOutputTokens, temperature: 0.2, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]) });
+          const cost = costOf(response.inputTokens, response.outputTokens, planner);
+          observability.recordInvocationEnd(planInvocationId, response.inputTokens, response.outputTokens, planner.costPer1kTokens, 'success');
+          invocationEnded = true;
+          totalInputTokens += response.inputTokens;
+          totalOutputTokens += response.outputTokens;
+          totalCost += cost;
+          runBudget.add({ cost, tokens: response.inputTokens + response.outputTokens });
+          planModelSpan.end({ inputTokens: response.inputTokens, outputTokens: response.outputTokens, cost });
+          const parsed = parseOrchestratorPlan(response.content, plannerModels, planner.id, model.id);
+          if (parsed) {
+            orchestration = parsed;
+            planningModelId = planner.id;
+            // Explicit collaborators and execution choices belong to the scheduler.
+            if (!collaboratorModels.length && !decision.collaboratorModelIds?.length) {
+              collaboratorModels.push(...parsed.subagents
                 .map((subagent) => registry.getModel(subagent.modelId))
-                .filter((candidate): candidate is ModelConfig => Boolean(candidate && candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate))) );
-              decision = {
-                ...decision,
-                modelId: orchestrator.id,
-                taskType: parsed.taskType,
-                complexity: parsed.complexity,
-                strategy: parsed.verify ? 'plan+verify' : parsed.mode === 'delegate' ? 'parallel' : 'single',
-                reason: 'DeepSeek orchestrator: ' + (parsed.reason || parsed.mode),
-                alternativeModels: decision.alternativeModels,
-                fallbackModels: decision.fallbackModels ?? decision.alternativeModels,
-                collaboratorModelIds: parsed.subagents.map((subagent) => subagent.modelId),
-              };
-              routeSpan.setAttributes({ modelId: decision.modelId, taskType: decision.taskType, complexity: decision.complexity, strategy: decision.strategy, reason: decision.reason, fallbackModels: decision.fallbackModels, orchestrator: orchestrator.id });
-              mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: orchestrator.id, role: 'orchestrator', mode: parsed.mode, taskType: parsed.taskType, complexity: parsed.complexity, subagents: parsed.subagents, reason: parsed.reason });
-              planSpan.end({ attributes: { mode: parsed.mode, taskType: parsed.taskType, complexity: parsed.complexity, subagents: parsed.subagents.map((subagent) => subagent.modelId), verify: parsed.verify } });
-            } else {
-              planSpan.end({ attributes: { valid: false, fallback: 'normal-routing' } });
+                .filter((candidate): candidate is ModelConfig => Boolean(candidate && candidate.enabled && hasUsableCredentials(candidate) && modelQuota.isAvailable(candidate))));
             }
-          } catch (planError) {
-            const message = planError instanceof Error ? planError.message : String(planError);
-            observability.recordInvocationEnd(planInvocationId, 0, 0, orchestrator.costPer1kTokens, 'failure', message);
-            planModelSpan.end({ status: 'failed', error: message });
-            planSpan.end({ status: 'failed', error: message });
-            if (planError instanceof BudgetExceededError) throw planError;
-            if (controller.signal.aborted) throw new Error('任务已取消');
+            if (!decision.ruleId && parsed.verify && decision.strategy !== 'escalate') decision = { ...decision, strategy: 'plan+verify' };
+            routeSpan.setAttributes({ planningModelId: planner.id });
+            planSpan.end({ attributes: { valid: true, mode: parsed.mode, suggestedTaskType: parsed.taskType, suggestedComplexity: parsed.complexity, subagents: parsed.subagents.map((subagent) => subagent.modelId), verify: parsed.verify } });
+          } else {
+            planSpan.end({ attributes: { valid: false, fallback: 'normal-routing' } });
           }
-        } catch (planError) {
-          if (planError instanceof BudgetExceededError) throw planError;
-          if (controller.signal.aborted) throw new Error('任务已取消');
-          // Planning is optional: fall back to the normal routing path.
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!invocationEnded) observability.recordInvocationEnd(planInvocationId, 0, 0, planner.costPer1kTokens, 'failure', message);
+          planModelSpan.end({ status: 'failed', error: message });
+          planSpan.end({ status: controller.signal.aborted ? 'cancelled' : 'failed', error: message });
+          if (error instanceof BudgetExceededError) throw error;
+          if (controller.signal.aborted) throw cancellationError();
+          // An unavailable or malformed optional plan leaves normal routing intact.
         }
       }
       const executionPlan = buildExecutionPlan({
@@ -365,7 +395,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         ? Math.min(maxInputTokens, Math.max(estimateTokens(basePrompt) + 16, Math.floor(maxInputTokens * 0.6)))
         : maxInputTokens;
       contextPrompt = fitPromptParts(buildTaskPrompt, taskParts, promptAllowance(payload.prompt, executionContextBudget.maxInputTokens));
-      const storedSummary = sessionStorage.getSummary(sessionId);
       const contextAssembly = assembleContext({
         history,
         summary: storedSummary?.text,
@@ -377,7 +406,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       const compactSpan = trace.child('compact', 'context.compact', { historyTurns: history.length });
       let summarySource: 'none' | 'existing' | 'deterministic' | 'llm' = contextAssembly.summary ? (contextAssembly.compacted ? 'deterministic' : 'existing') : 'none';
       const summaryModel = contextAssembly.compacted && contextAssembly.summaryCovers > contextAssembly.previousCovers
-        ? selectUtilityModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id)
+        ? selectUtilityModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id, deps.routingSettings?.utilityModelId)
         : undefined;
       if (summaryModel) {
         runBudget.assertAvailable();
@@ -434,52 +463,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         estimatedTokens: contextAssembly.estimatedTokens,
         summaryModelId: summaryModel?.id,
       } });
-      let planningText = '';
-      let planningModelId: string | undefined;
-      // High-complexity tasks can use a second model for planning, then pass the
-      // verified plan to the execution model. Ordinary prompts (including "你好")
-      // remain a single call so they do not incur an unnecessary second request.
-      const needsPlanning = decision.ruleId
-        ? decision.strategy === 'plan' || decision.strategy === 'plan+verify'
-        : decision.complexity === 'high' || decision.strategy === 'plan' || decision.strategy === 'plan+verify';
-      if (!pinned && !orchestrated && needsPlanning) {
-        const planningModel = selectPlanningModel(registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)), model.id);
-        if (planningModel) {
-          planningModelId = planningModel.id;
-          runBudget.assertAvailable();
-          mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, modelId: planningModel.id, role: 'planning', reason: '为高复杂度任务生成执行计划', confidence: decision.confidence });
-          const planningSpan = trace.child('plan', 'planning', { modelId: planningModel.id });
-          const planningModelSpan = planningSpan.child('model', 'planning-model', { modelId: planningModel.id, role: 'planner' });
-          const planningInvocationId = observability.recordInvocationStart(runId, planningModel.id);
-          try {
-            const planningBudget = modelContextBudget([planningModel], 1200);
-            const priorConversation = [contextAssembly.summary, ...agentHistory.map((turn) => `${turn.role}: ${turn.content}`)].filter(Boolean).join('\n\n');
-            const planningPrompt = fitPromptParts((parts) => buildPlanningPrompt([
-              parts[2] ? `Conversation so far:\n${parts[2]}` : '',
-              `Current task:\n${buildTaskPrompt(parts)}`,
-            ].filter(Boolean).join('\n\n')), [...taskParts, priorConversation], planningBudget.maxInputTokens);
-            const planningSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)]);
-            const plan = await createProvider(planningModel).invoke(planningPrompt, { maxTokens: planningBudget.maxOutputTokens, temperature: 0.2, signal: planningSignal });
-            observability.recordInvocationEnd(planningInvocationId, plan.inputTokens, plan.outputTokens, planningModel.costPer1kTokens, 'success');
-            const cost = costOf(plan.inputTokens, plan.outputTokens, planningModel);
-            totalInputTokens += plan.inputTokens;
-            totalOutputTokens += plan.outputTokens;
-            totalCost += cost;
-            runBudget.add({ cost, tokens: plan.inputTokens + plan.outputTokens });
-            planningModelSpan.end({ inputTokens: plan.inputTokens, outputTokens: plan.outputTokens, cost });
-            planningSpan.end({ attributes: { status: 'ok' } });
-            planningText = plan.content;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            observability.recordInvocationEnd(planningInvocationId, 0, 0, planningModel.costPer1kTokens, 'failure', message);
-            planningModelSpan.end({ status: 'failed', error: message });
-            planningSpan.end({ status: 'failed', error: message });
-            if (error instanceof BudgetExceededError) throw error;
-            if (controller.signal.aborted) throw new Error('任务已取消');
-            planningModelId = undefined;
-          }
-        }
-      }
       mainWindow?.webContents.send('session:model-switched', { sessionId, taskId, runId, ...decision, modelId: model.id, role: 'execution', planningModelId });
       if (!executionCandidates.length) throw new Error('没有可执行的模型，请检查凭据与配额');
       let executionModel = model;
@@ -553,13 +536,13 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           failedAgentCount = agentResults.length - agentReports.length;
         }
         const buildFinalPrompt = (parts: string[]) => {
-          const task = parts[2] ? buildPlannedTask(buildTaskPrompt(parts), parts[2]) : buildTaskPrompt(parts);
-          const reports = agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + 5]}` : parts[index + 5] }));
+          const task = buildTaskPrompt(parts);
+          const reports = agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + 4]}` : parts[index + 4] }));
           return orchestration
-            ? buildOrchestratedFinalPrompt(task, { ...orchestration, plan: parts[3], reason: parts[4] }, reports, failedAgentCount)
+            ? buildOrchestratedFinalPrompt(task, { ...orchestration, plan: parts[2], reason: parts[3] }, reports, failedAgentCount)
             : collaboratorModels.length ? buildSynthesisPrompt(task, reports, failedAgentCount) : task;
         };
-        const finalParts = [...taskParts, planningText, orchestration?.plan ?? '', orchestration?.reason ?? '', ...agentReports.map((report) => report.content)];
+        const finalParts = [...taskParts, orchestration?.plan ?? '', orchestration?.reason ?? '', ...agentReports.map((report) => report.content)];
         const protectedPrompt = buildFinalPrompt(finalParts.map(() => ''));
         executionCandidates = executionCandidates.filter((candidate) => estimateTokens(protectedPrompt) <= modelContextBudget([candidate]).maxInputTokens);
         if (!executionCandidates.length) throw new Error('任务与执行指令超过模型输入预算，请缩短任务或选择更大上下文的模型');
@@ -615,6 +598,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           const verifierModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => candidate.id !== executionModel.id && modelQuota.isAvailable(candidate)),
             executionModel.id,
+            deps.routingSettings?.utilityModelId,
           );
           if (verifierModel) {
             const verificationSpan = trace.child('audit', 'model-verify', { modelId: verifierModel.id });
@@ -711,6 +695,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
           const extractionModel = selectUtilityModel(
             registry.getEnabledModels().filter((candidate) => modelQuota.isAvailable(candidate)),
             executionModel.id,
+            deps.routingSettings?.utilityModelId,
           );
           if (extractionModel) {
             const extractionSpan = trace.child('memory', 'memory.extract', { modelId: extractionModel.id, role: 'extractor' });
@@ -763,7 +748,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
         const stopReason = result.stopReason;
         const reportedAgents = agentReports.map((report) => report.stopReason === 'tool_limit' ? { ...report, content: `${PARTIAL_AGENT_NOTICE}\n\n${report.content}` } : report);
         const runMetrics = metrics ? { ...metrics, startTime: new Date(startedAt), endTime: new Date(), inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalCost, latency: Date.now() - startedAt, stopReason } : undefined;
-        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, stopReason, modelUsed: publicModel(executionModel), modelsUsed: observability.getTaskMetrics(runId).modelsUsed, fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: model.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics: runMetrics, verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
+        const output = { sessionId, taskId, runId, assistantMessageId, output: result.content, stopReason, modelUsed: publicModel(executionModel), modelsUsed: observability.getTaskMetrics(runId).modelsUsed, fallbackAttempts, planningModelId, pinnedModelId: pinned?.id, decision, orchestration: orchestration ? { orchestratorModelId: planningModelId, planningModelId, executorModelId: executionModel.id, synthesizerModelId: executionModel.id, mode: orchestration.mode, taskType: orchestration.taskType, complexity: orchestration.complexity, reason: orchestration.reason, plan: orchestration.plan, subagents: orchestration.subagents, verify: orchestration.verify } : undefined, metrics: runMetrics, verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages, toolCalls: toolCalls.map(({ details: _details, ...call }) => call), project: projectContext ? { root: projectContext.root, files: projectContext.files.map((file) => file.path), tokenCount: projectContext.tokenCount, truncated: projectContext.truncated, skippedFiles: projectContext.skippedFiles } : undefined };
         finishTrace(stopReason === 'tool_limit' ? 'failed' : 'success', stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined);
         mainWindow?.webContents.send('session:completed', output);
         return output;

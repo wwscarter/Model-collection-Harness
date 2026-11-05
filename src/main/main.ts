@@ -14,6 +14,9 @@ import { inspectProject } from '@core/project/ProjectInspector';
 import { ModelRegistry } from '@core/models/ModelRegistry';
 import { credentialOrigin, hasUsableCredentials, type ModelConfig, type ModelConfigInput } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
+import { LocalRoutingModel } from '@core/routing/LocalRoutingModel';
+import { RoutingService } from '@core/routing/RoutingService';
+import { validateRoutingSettings } from '@core/routing/RoutingSettings';
 import { DEFAULT_ROUTING_POLICY, loadRoutingPolicy, RoutingPolicyEngine, validateRoutingPolicy } from '@core/routing/RoutingPolicy';
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { shouldFallback } from '@core/routing/Fallback';
@@ -30,6 +33,7 @@ import { auditCodeAnswer } from '@core/audit/AuditService';
 import { TraceRecorder, type TraceSpanHandle } from '@core/trace/TraceRecorder';
 import type { RunStatus } from '@core/trace/types';
 import { GrowthEngine, type RoutingFeedback } from '@core/growth/GrowthEngine';
+import { RoutingLearningStore } from '@core/growth/RoutingLearningStore';
 import { TtyManager } from '@core/tty/TtyManager';
 import { ProjectManager } from '@core/project/ProjectManager';
 import { createRunProjectContext } from '@core/project/RunProjectContext';
@@ -54,6 +58,8 @@ let sessionStorage: SessionStorage;
 let projectStorage: ProjectStorage;
 let registry: ModelRegistry;
 let router: AgentRouter;
+let routingService: RoutingService;
+let routingLearning: RoutingLearningStore;
 let routingPolicy: RoutingPolicyEngine;
 let routingRulesPath = '';
 let routingHistoryDir = '';
@@ -268,6 +274,8 @@ function createRunDependencies(controller: AbortController, projectContext: RunD
   return {
     models: registry,
     routing: routingPolicy,
+    routingSettings: routingService.getConfiguration().settings,
+    onClassification: (observation) => routingLearning.observe(observation),
     quota: modelQuota,
     traces: traceRecorder,
     observability,
@@ -357,7 +365,24 @@ function registerHandlers(): void {
     if (!model) throw new Error(`Model not found: ${id}`);
     return { ...await testModelConnection({ id, provider: model.provider }, registry), model: publicModel(model) };
   });
-  handle('routing:status', () => router.getLocalModelStatus());
+  handle('routing:status', () => routingService.getStatus());
+  handle('routing:config:get', () => routingService.getConfiguration());
+  handle('routing:config:set', (_event, input: unknown) => {
+    const next = validateRoutingSettings(input);
+    for (const id of [next.planning.mode === 'auto' ? next.planning.modelId : undefined, next.utilityModelId]) {
+      if (!id) continue;
+      const model = registry.getModel(id);
+      if (!model?.enabled || !hasUsableCredentials(model)) throw new Error('指定的分工模型不可用，请选择已启用且有可用凭据的模型');
+    }
+    const saved = routingService.save(next);
+    void routingService.warmup();
+    return saved;
+  });
+  handle('routing:config:probe', (_event, input?: unknown) => routingService.probe(input));
+  handle('routing:learning:get', (_event, runId: unknown) => routingLearning.getObservation(requireString(runId, '运行 ID', 200)));
+  handle('routing:learning:correct', (_event, input: unknown) => routingLearning.correct(input as Parameters<RoutingLearningStore['correct']>[0]));
+  handle('routing:learning:export', () => routingLearning.exportData());
+  handle('routing:learning:clear', () => { routingLearning.clear(); return { success: true }; });
   handle('routing:rules:get', () => ({
     path: routingRulesPath,
     text: fs.existsSync(routingRulesPath) ? fs.readFileSync(routingRulesPath, 'utf8') : `${JSON.stringify(DEFAULT_ROUTING_POLICY, null, 2)}\n`,
@@ -649,7 +674,9 @@ async function bootstrap(): Promise<void> {
     if (usable) registry.updateModel(usable.id, { enabled: true });
   }
   growth = new GrowthEngine({ storagePath: path.join(app.getPath('userData'), 'growth-profiles.json') });
-  router = new AgentRouter(registry, growth);
+  routingLearning = new RoutingLearningStore(path.join(app.getPath('userData'), 'routing-corrections.json'));
+  routingService = new RoutingService(path.join(app.getPath('userData'), 'routing-settings.json'), { getExamples: (context) => routingLearning.getExamples(context) });
+  router = new AgentRouter(registry, growth, new LocalRoutingModel({ classifier: routingService }));
   preferencesPath = path.join(app.getPath('userData'), 'preferences.json');
   approvalMode = loadApprovalMode(preferencesPath);
   routingRulesPath = path.join(app.getPath('userData'), 'routing-rules.json');
@@ -692,6 +719,7 @@ async function bootstrap(): Promise<void> {
   app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
   registerHandlers();
   createWindow();
+  void routingService.warmup();
   app.on('activate', () => { if (!mainWindow) createWindow(); });
   if (!process.env.AMD_ENCRYPTION_KEY && !safeStorage.isEncryptionAvailable()) {
     const options = {
@@ -728,4 +756,4 @@ if (!app.requestSingleInstanceLock()) {
   bootstrap().catch(reportStartupFailure);
 }
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => { for (const controller of runningTasks.values()) controller.abort(); tty?.dispose(); commandExecutor?.dispose(); projectProcesses?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); memoryStore?.close(); });
+app.on('before-quit', () => { for (const controller of runningTasks.values()) controller.abort(); routingService?.dispose(); tty?.dispose(); commandExecutor?.dispose(); projectProcesses?.dispose(); storage?.close(); sessionStorage?.close(); projectStorage?.close(); observability?.close(); memoryStore?.close(); });

@@ -1,3 +1,7 @@
+import type { RoutingSettings } from '@core/routing/RoutingSettings';
+import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
+import type { RoutingCorrection, RoutingObservation } from '@core/growth/RoutingLearningStore';
+
 export interface ModelCapability { type: string; score: number; }
 
 export interface ModelConfig {
@@ -165,7 +169,18 @@ export interface AgentResourceSummary {
 }
 
 export interface AmdApi {
-  routingStatus: () => Promise<{ backend: 'heuristic' | 'local-model'; modelPath?: string; available: boolean }>;
+  routingStatus: () => Promise<RoutingClassifierStatus>;
+  routingConfig: {
+    get: () => Promise<{ settings: RoutingSettings; status: RoutingClassifierStatus }>;
+    set: (settings: RoutingSettings) => Promise<{ settings: RoutingSettings; status: RoutingClassifierStatus }>;
+    probe: (settings?: RoutingSettings) => Promise<{ status: RoutingClassifierStatus; models: string[] }>;
+  };
+  routingLearning: {
+    get: (runId: string) => Promise<{ observation?: RoutingObservation; correction?: RoutingCorrection } | undefined>;
+    correct: (input: { runId: string; taskType: RoutingCorrection['expected']['taskType']; complexity: RoutingCorrection['expected']['complexity'] }) => Promise<RoutingCorrection>;
+    export: () => Promise<{ version: 1; source: 'user-corrections'; samples: RoutingCorrection[] }>;
+    clear: () => Promise<{ success: boolean }>;
+  };
   project: {
     current: () => Promise<ProjectInfo | undefined>;
     select: (root?: string) => Promise<ProjectInfo | undefined>;

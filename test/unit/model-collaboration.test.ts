@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
-import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel } from '../../src/core/routing/ModelCollaboration';
+import { buildParallelAgentPrompt, buildPlannedTask, buildPlanningPrompt, buildSynthesisPrompt, runParallelAgents, selectPlanningModel, selectUtilityModel } from '../../src/core/routing/ModelCollaboration';
 
 function model(id: string, reasoning: number, intelligenceScore = 70, priority = 0): ModelConfig {
   return {
@@ -41,6 +41,14 @@ describe('model collaboration', () => {
   it('never picks a planning model that has no credentials', () => {
     const keyless = { ...model('keyless', 100, 99), provider: 'openai' as const, baseURL: undefined };
     expect(selectPlanningModel([keyless, model('planner', 90)], 'executor')?.id).toBe('planner');
+  });
+
+  it('keeps configured planner and utility roles on the requested available model', () => {
+    const candidates = [model('preferred', 0), model('strong', 99), { ...model('disabled', 90), enabled: false }];
+    expect(selectPlanningModel(candidates, undefined, 'preferred')?.id).toBe('preferred');
+    expect(selectPlanningModel(candidates, undefined, 'disabled')).toBeUndefined();
+    expect(selectUtilityModel(candidates, undefined, 'preferred')?.id).toBe('preferred');
+    expect(selectUtilityModel(candidates, undefined, 'missing')).toBeUndefined();
   });
 
   it('keeps the original user task while adding a separate planning prompt', () => {
