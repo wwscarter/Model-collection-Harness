@@ -25,7 +25,7 @@ export class ProjectStorage {
   }
 
   list(): ProjectRecord[] {
-    return (this.db.prepare('SELECT * FROM workspace_projects ORDER BY last_opened_at DESC').all() as ProjectRow[]).map(fromRow);
+    return (this.db.prepare('SELECT * FROM workspace_projects ORDER BY created_at ASC, rowid ASC').all() as ProjectRow[]).map(fromRow);
   }
 
   get(id: string): ProjectRecord | undefined {

@@ -54,7 +54,7 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
       <div className="sidebar-groups">
         <section className="sidebar-group" aria-label="本地项目">
           <div className="group-header">
-            <button className="group-toggle" aria-expanded={projectsOpen} onClick={() => setProjectsOpen((open) => !open)}><ChevronRight size={12} className={projectsOpen ? 'open' : ''} /><span>本地项目</span><span className="count-pill">{projects.length}</span></button>
+            <button className="group-toggle" aria-expanded={projectsOpen} onClick={() => setProjectsOpen((open) => !open)}><ChevronRight size={12} className={projectsOpen ? 'open' : ''} /><span>本地项目</span></button>
             <button className="group-action" title="新建项目" onClick={onNewProject}><Plus size={12} />新建</button>
           </div>
           {projectsOpen && <div className="group-list">
@@ -73,7 +73,7 @@ export function Sidebar({ sessions, currentSessionId, runningSessionId, projects
           </div>}
         </section>
         <section className="sidebar-group" aria-label="最近会话">
-          <div className="group-header"><button className="group-toggle" aria-expanded={sessionsOpen} onClick={() => setSessionsOpen((open) => !open)}><ChevronRight size={12} className={sessionsOpen ? 'open' : ''} /><span>最近会话</span><span className="count-pill">{sessions.length}</span></button></div>
+          <div className="group-header"><button className="group-toggle" aria-expanded={sessionsOpen} onClick={() => setSessionsOpen((open) => !open)}><ChevronRight size={12} className={sessionsOpen ? 'open' : ''} /><span>最近会话</span></button></div>
           {sessionsOpen && <div className="group-list">
             {filtered.length === 0 && <div className="empty-side">还没有匹配的会话</div>}
             {filtered.map((session) => {

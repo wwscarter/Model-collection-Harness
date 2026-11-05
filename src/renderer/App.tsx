@@ -69,6 +69,7 @@ export default function App() {
   const [currentProject, setCurrentProject] = useState<ProjectInfo>();
   const currentProjectRef = useRef<ProjectInfo | undefined>(undefined);
   const projectRequestIdRef = useRef(0);
+  const pendingProjectSelectionRef = useRef<{ requestId: number; projectId?: string; sessionId: string | null } | undefined>(undefined);
   const projectQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [projectError, setProjectError] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
@@ -299,11 +300,12 @@ export default function App() {
   };
   const selectProject = (id: string | undefined, sessionId: string | null, bind = false, reveal = false) => {
     const requestId = ++projectRequestIdRef.current;
+    pendingProjectSelectionRef.current = { requestId, projectId: id, sessionId };
     applyProject(undefined);
     return queueProjectOperation(async () => {
       const isCurrent = () => requestId === projectRequestIdRef.current && sessionId === currentSessionIdRef.current;
-      if (!isCurrent() || !window.amd) return;
       try {
+        if (!isCurrent() || !window.amd) return;
         // Serialize mutations of the main-process selection. A late open must
         // finish before the next session clears or replaces that selection.
         await window.amd.project.clear();
@@ -315,11 +317,13 @@ export default function App() {
         if (reveal) { setView('workspace'); setProjectDrawerOpen(true); }
         void refreshProjects();
       } catch (cause) {
-        await window.amd.project.clear().catch(() => undefined);
+        await window.amd?.project.clear().catch(() => undefined);
         if (!isCurrent()) return;
         applyProject(undefined);
         const message = errorMessage(cause);
         setProjectError(message.includes('不存在') ? `${message}，可将其从列表移除` : message);
+      } finally {
+        if (pendingProjectSelectionRef.current?.requestId === requestId) pendingProjectSelectionRef.current = undefined;
       }
     });
   };
@@ -336,7 +340,12 @@ export default function App() {
       void refreshProjects();
     } catch (cause) { setProjectError(errorMessage(cause)); }
   };
-  const handleProjectCreated = (project: ProjectInfo) => { setShowNewProject(false); void selectProject(project.id, currentSessionIdRef.current, true, true); };
+  const handleProjectCreated = (project: ProjectInfo) => {
+    if (!project.id) throw new Error('新建项目未返回有效的项目 ID');
+    setShowNewProject(false);
+    const session = startSession(project, true);
+    void selectProject(project.id, session.id, false, true);
+  };
   const initGit = async () => {
     if (!window.amd || !currentProject) return;
     const requestId = projectRequestIdRef.current;
@@ -352,7 +361,9 @@ export default function App() {
     finally { setGitBusy(false); }
   };
   useEffect(() => {
-    if (currentSession?.projectId && currentProjectRef.current?.id === currentSession.projectId) return;
+    const pending = pendingProjectSelectionRef.current;
+    if (pending && pending.sessionId === currentSessionId && pending.projectId === currentSession?.projectId) return;
+    if (!pending && currentSession?.projectId && currentProjectRef.current?.id === currentSession.projectId) return;
     void selectProject(currentSession?.projectId, currentSessionId);
   }, [currentSessionId, currentSession?.projectId]);
 
@@ -376,18 +387,22 @@ export default function App() {
     setEditingMessageId(null);
   };
   const selectSession = (id: string) => { if (editingMessageId) cancelMessageEdit(); currentSessionIdRef.current = id; setCurrentSessionId(id); setView('workspace'); };
-  const newSession = () => {
+  const startSession = (project?: { id?: string; root?: string }, reveal = false): Session => {
     if (editingMessageId) cancelMessageEdit();
-    const session: Session = { ...starterSession(), projectId: currentSession?.projectId ?? currentProject?.id, projectRoot: currentSession?.projectRoot ?? currentProject?.root };
+    const session: Session = { ...starterSession(), projectId: project?.id, projectRoot: project?.root };
     setSessions((existing) => [session, ...existing]);
     currentSessionIdRef.current = session.id;
     setCurrentSessionId(session.id);
     setView('workspace');
-    setProjectDrawerOpen(false);
+    setProjectDrawerOpen(reveal);
     setOpenFiles([]);
     setActiveFilePath(undefined);
     setSessionError(null);
     persistSession({ ...session, updatedAt: new Date() });
+    return session;
+  };
+  const newSession = () => {
+    startSession({ id: currentSession?.projectId ?? currentProject?.id, root: currentSession?.projectRoot ?? currentProject?.root });
   };
   const enabledModelOptions = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
   const defaultSessionModelId = enabledModelOptions.find((model) => model.isPrimary)?.id ?? enabledModelOptions[0]?.id;

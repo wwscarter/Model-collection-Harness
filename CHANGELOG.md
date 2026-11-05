@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-11-05
+
+- Keep local projects in stable creation order when opened or renamed, including after a restart.
+- Use compact 30px project and conversation rows with 2px gaps and preserve long-name truncation and remove controls.
+- Open a fresh, empty conversation when creating or binding a project, preserving the previous conversation and its project association. Serialize project selection safely when older requests finish late or the user immediately starts another conversation.
+- Remove decorative project, conversation and model configuration totals, the cost-chart point count and the settings header Esc hint. The close button and Escape key remain available.
+
 ## 0.1.1 — 2026-11-05
 
 - Made per-run estimated cost and duration limits configurable in runtime settings, with legacy settings migration.

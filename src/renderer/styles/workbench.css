@@ -22,12 +22,12 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .search-box { min-height: 34px; padding: 0 10px; background: var(--surface-low); }
 .sidebar-groups { gap: 24px; padding: 2px 12px 14px; }
 .group-toggle { font-size: 11px; font-weight: 600; letter-spacing: 0; color: var(--text-muted); }
-.group-list { gap: 4px; padding-left: 0; margin-top: 8px; }
-.item-main { gap: 9px; padding: 9px 29px 9px 10px; }
+.group-list { gap: 2px; padding-left: 0; margin-top: 2px; align-content: start; align-items: start; grid-auto-rows: max-content; }
+.item-main { min-height: 30px; gap: 8px; padding: 4px 32px 4px 8px; }
 .project-item.active, .session-item.active { border-color: var(--line); background: var(--surface-low); box-shadow: none; }
 .item-title { line-height: 19px; font-size: 12px; }
 .item-meta { margin-top: 3px; line-height: 16px; font-size: 10px; }
-.project-icon { width: 25px; height: 25px; flex-basis: 25px; border-radius: 7px; color: var(--text-muted); background: var(--surface-low); }
+.project-icon { width: 22px; height: 22px; flex-basis: 22px; border-radius: 7px; color: var(--text-muted); background: var(--surface-low); }
 .project-item.active .project-icon { color: var(--text-secondary); background: var(--surface-low); }
 .sidebar-footer { min-height: 61px; padding: 14px 17px; border-top-color: var(--line); }
 .settings-link { gap: 9px; }
@@ -156,7 +156,7 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 }
 
 /* Keep long project and session names inside the sidebar's single grid track. */
-.sidebar-group { min-width: 0; max-width: 100%; }
+.sidebar-group { min-width: 0; max-width: 100%; flex: 0 0 auto; }
 .group-list { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .group-list > * { min-width: 0; max-width: 100%; }
 .item-main { max-width: 100%; }
@@ -328,7 +328,7 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .new-session { min-height: 34px; border: 0; border-radius: 7px; color: var(--text); background: transparent; box-shadow: none; font-weight: 500; }
 .new-session:hover { background: var(--surface-low); }
 .new-session kbd { display: none; }
-.sidebar-groups { padding: 2px 8px 14px; gap: 18px; }
+.sidebar-groups { padding: 2px 8px 14px; gap: 10px; justify-content: flex-start; align-items: stretch; }
 .project-item, .session-item { border: 0; border-radius: 7px; background: transparent; box-shadow: none; }
 .project-item:hover, .session-item:hover { border: 0; background: var(--surface-low); }
 .project-item.active, .session-item.active { border: 0; background: transparent; box-shadow: none; }
@@ -339,6 +339,7 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 .session-ring.on { border-color: var(--text); background: var(--text); }
 .count-pill { border: 0; color: var(--text-faint); background: transparent; }
 .group-toggle, .group-action { color: var(--text-muted); }
+.group-toggle { min-height: 24px; padding: 2px 8px; }
 .item-remove { opacity: 0; }
 .project-item:hover .item-remove, .session-item:hover .item-remove { opacity: 1; }
 
@@ -462,11 +463,11 @@ html, body, #root { height: 100%; min-width: 360px; overflow: hidden; }
 }
 
 
-/* Compact session rows without timestamps. */
-.session-item .item-main { min-height: 30px; padding: 5px 8px; }
-.session-item .item-copy { gap: 0; }
-.session-item .item-title { line-height: 19px; }
-.session-item .session-ring { margin-top: 4px; }
+/* Both lists use intrinsic compact rows; grid tracks never absorb spare space. */
+.project-item .item-main, .session-item .item-main { min-height: 30px; padding: 4px 32px 4px 8px; }
+.project-item .item-copy, .session-item .item-copy { gap: 0; }
+.project-item .item-title, .session-item .item-title { line-height: 19px; }
+.session-item .session-ring { align-self: center; margin-top: 0; }
 
 /* New-project dialog: no gray blocks, readable in both themes. */
 .new-project-window .dialog-icon { color: var(--text); background: var(--surface-low); border: 1px solid var(--line); box-shadow: none; }

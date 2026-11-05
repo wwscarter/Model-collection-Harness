@@ -8,7 +8,7 @@ import { inspectProject, readGitInfo } from '@core/project/ProjectInspector';
 const tempDir = (prefix: string) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
 describe('ProjectStorage', () => {
-  it('upserts by root, keeps custom names and orders by last opened', () => {
+  it('upserts by root and keeps custom names and creation order', () => {
     const storage = new ProjectStorage(':memory:');
     const first = storage.recordOpened('/work/alpha', 'Alpha', new Date('2026-01-01T00:00:00Z'));
     storage.recordOpened('/work/beta', undefined, new Date('2026-01-02T00:00:00Z'));
@@ -16,6 +16,7 @@ describe('ProjectStorage', () => {
     expect(reopened.id).toBe(first.id);
     expect(reopened.name).toBe('Alpha');
     expect(reopened.createdAt).toEqual(new Date('2026-01-01T00:00:00Z'));
+    expect(reopened.lastOpenedAt).toEqual(new Date('2026-01-03T00:00:00Z'));
     expect(storage.list().map((project) => project.name)).toEqual(['Alpha', 'beta']);
     expect(storage.recordOpened('/work/alpha', 'Renamed').name).toBe('Renamed');
     expect(storage.remove(first.id)).toBe(true);
@@ -23,6 +24,46 @@ describe('ProjectStorage', () => {
     expect(storage.get(first.id)).toBeUndefined();
     expect(storage.list()).toHaveLength(1);
     storage.close();
+  });
+
+  it('keeps middle and last projects in place when they are reopened or renamed', () => {
+    const storage = new ProjectStorage(':memory:');
+    try {
+      for (const [index, name] of ['Alpha', 'Beta', 'Gamma'].entries()) {
+        storage.recordOpened('/work/' + name.toLowerCase(), name, new Date(`2026-01-0${index + 1}T00:00:00Z`));
+      }
+      const ids = storage.list().map((project) => project.id);
+      storage.recordOpened('/work/beta', undefined, new Date('2026-02-01T00:00:00Z'));
+      expect(storage.list().map((project) => project.id)).toEqual(ids);
+      storage.recordOpened('/work/gamma', undefined, new Date('2026-02-02T00:00:00Z'));
+      expect(storage.list().map((project) => project.id)).toEqual(ids);
+      const renamed = storage.recordOpened('/work/beta', 'Beta renamed', new Date('2026-02-03T00:00:00Z'));
+      expect(storage.list().map((project) => project.id)).toEqual(ids);
+      expect(storage.list().map((project) => project.name)).toEqual(['Alpha', 'Beta renamed', 'Gamma']);
+      expect(renamed.lastOpenedAt).toEqual(new Date('2026-02-03T00:00:00Z'));
+      storage.recordOpened('/work/delta', 'Delta', new Date('2026-02-04T00:00:00Z'));
+      expect(storage.list().map((project) => project.name)).toEqual(['Alpha', 'Beta renamed', 'Gamma', 'Delta']);
+    } finally { storage.close(); }
+  });
+
+  it('preserves insertion order for equal creation times after closing and reopening the database', () => {
+    const directory = tempDir('newai-project-order-');
+    const database = path.join(directory, 'projects.db');
+    let storage = new ProjectStorage(database);
+    const created = new Date('2026-01-01T00:00:00Z');
+    try {
+      for (const name of ['Gamma', 'Alpha', 'Beta']) storage.recordOpened('/work/' + name.toLowerCase(), name, created);
+      const original = storage.list();
+      expect(original.map((project) => project.name)).toEqual(['Gamma', 'Alpha', 'Beta']);
+      storage.recordOpened('/work/alpha', 'Alpha renamed', new Date('2026-03-01T00:00:00Z'));
+      storage.recordOpened('/work/beta', undefined, new Date('2026-03-02T00:00:00Z'));
+      storage.close();
+      storage = new ProjectStorage(database);
+      expect(storage.list().map((project) => project.id)).toEqual(original.map((project) => project.id));
+      expect(storage.list().map((project) => project.name)).toEqual(['Gamma', 'Alpha renamed', 'Beta']);
+      expect(storage.getByRoot('/work/alpha')?.createdAt).toEqual(created);
+      expect(storage.getByRoot('/work/alpha')?.lastOpenedAt).toEqual(new Date('2026-03-01T00:00:00Z'));
+    } finally { storage.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
 });
 

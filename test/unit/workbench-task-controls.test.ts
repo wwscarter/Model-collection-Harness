@@ -57,7 +57,7 @@ beforeEach(async () => {
       save, execute, cancel, delete: remove,
     },
     projects: { list: listProjects, open: openProject, remove: removeProject },
-    project: { current: async () => undefined, clear: clearProject },
+    project: { current: async () => undefined, clear: clearProject, tree: async () => ({ name: 'project', path: '.', kind: 'directory', children: [] }) },
     on: (channel: string, listener: (payload: unknown) => void) => {
       listeners.set(channel, listener);
       return () => { listeners.delete(channel); };
@@ -307,6 +307,86 @@ describe('workbench task controls', () => {
 });
 
 describe('conversation project selection', () => {
+  it('creates a fresh project conversation without rebinding or copying the previous conversation', async () => {
+    const old = { ...sessionRecord('s1', 'p1'), output: '旧项目的历史回答', messages: [{ id: 'old-user', role: 'user', content: '旧项目的问题' }, { id: 'old-answer', role: 'assistant', content: '旧项目的历史回答' }] };
+    listSessions.mockResolvedValue([old]);
+    let created = false;
+    listProjects.mockImplementation(async () => created ? [projectInfo('p1'), projectInfo('p2')] : [projectInfo('p1')]);
+    window.amd!.projects.pickDirectory = vi.fn(async () => ({ ...projectInfo('p2'), existing: false }));
+    window.amd!.projects.create = vi.fn(async () => { created = true; return projectInfo('p2'); });
+    await remount();
+    expect(container.querySelector('.output-content')!.textContent).toContain(old.output);
+    await click('[title="新建项目"]');
+    await click('.directory-picker');
+    await click('.new-project-window .button.primary');
+    expect(container.querySelector('.new-project-window')).toBeNull();
+    expect(container.querySelector('.output-content')).toBeNull();
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).not.toBeNull();
+    expect(container.querySelector('.workspace-panel')).not.toBeNull();
+    const fresh = save.mock.calls.find(([session]) => session.id !== 's1' && session.projectId === 'p2')?.[0];
+    expect(fresh).toMatchObject({ projectId: 'p2', projectRoot: '/projects/p2', messages: [], output: '', prompt: '' });
+    expect(save.mock.calls.some(([session]) => session.id === 's1' && session.projectId === 'p2')).toBe(false);
+    const input = container.querySelector<HTMLTextAreaElement>('[aria-label="描述任务"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '分析新项目');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click('[aria-label="执行任务"]');
+    expect(execute.mock.calls[0][0]).toMatchObject({ sessionId: fresh.id, projectId: 'p2', history: [] });
+    await act(async () => { resolveRun({ output: '新项目回答' }); });
+    await selectSession('s1');
+    expect(container.querySelector('.output-content')!.textContent).toContain(old.output);
+    expect(container.querySelector('[aria-label="当前项目：Project p1"]')).not.toBeNull();
+  });
+
+  it('keeps the new empty conversation and project when an older project open finishes late', async () => {
+    listSessions.mockResolvedValue([{ ...sessionRecord('s1', 'p1'), output: '旧回答', messages: [{ id: 'old', role: 'assistant', content: '旧回答' }] }]);
+    let finishOld!: (project: ProjectInfo) => void;
+    openProject.mockImplementationOnce(() => new Promise<ProjectInfo>((resolve) => { finishOld = resolve; }));
+    listProjects.mockResolvedValue([projectInfo('p1'), projectInfo('p2')]);
+    window.amd!.projects.pickDirectory = vi.fn(async () => ({ ...projectInfo('p2'), existing: false }));
+    window.amd!.projects.create = vi.fn(async () => projectInfo('p2'));
+    await remount();
+    await click('[title="新建项目"]');
+    await click('.directory-picker');
+    await click('.new-project-window .button.primary');
+    expect(container.querySelector('.output-content')).toBeNull();
+    await act(async () => { finishOld(projectInfo('p1')); });
+    expect(openProject.mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).not.toBeNull();
+    expect(container.querySelector('.workspace-panel')).not.toBeNull();
+    expect(container.querySelector('.output-content')).toBeNull();
+    expect(save.mock.calls.find(([session]) => session.projectId === 'p2')?.[0].messages).toEqual([]);
+  });
+
+  it('finishes selecting a newly created project after another empty conversation replaces its pending selection', async () => {
+    listSessions.mockResolvedValue([{ ...sessionRecord('s1', 'p1'), output: '旧回答', messages: [{ id: 'old', role: 'assistant', content: '旧回答' }] }]);
+    let finishOld!: (project: ProjectInfo) => void;
+    let mainProject: ProjectInfo | undefined;
+    clearProject.mockImplementation(async () => { mainProject = undefined; return { success: true }; });
+    openProject.mockImplementation(async (id: string) => { mainProject = projectInfo(id); return mainProject; });
+    openProject.mockImplementationOnce(() => new Promise<ProjectInfo>((resolve) => { finishOld = (project) => { mainProject = project; resolve(project); }; }));
+    listProjects.mockResolvedValue([projectInfo('p1'), projectInfo('p2')]);
+    window.amd!.projects.pickDirectory = vi.fn(async () => ({ ...projectInfo('p2'), existing: false }));
+    window.amd!.projects.create = vi.fn(async () => { mainProject = projectInfo('p2'); return mainProject; });
+    await remount();
+    await click('[title="新建项目"]');
+    await click('.directory-picker');
+    await click('.new-project-window .button.primary');
+    const projectSession = save.mock.calls.find(([session]) => session.projectId === 'p2')![0];
+    await click('.new-session');
+    const fresh = save.mock.calls.at(-1)![0];
+    expect(fresh).toMatchObject({ projectId: 'p2', projectRoot: '/projects/p2', messages: [], output: '', prompt: '' });
+    expect(fresh.id).not.toBe(projectSession.id);
+    await act(async () => { finishOld(projectInfo('p1')); });
+    expect(openProject.mock.calls.map(([id]) => id)).toEqual(['p1', 'p2']);
+    expect(mainProject?.id).toBe('p2');
+    expect(container.querySelector('[aria-label="当前项目：Project p2"]')).not.toBeNull();
+    expect(container.querySelector('.output-content')).toBeNull();
+    expect(container.querySelector('.session-item.active')?.textContent).toContain('新的工作会话');
+    expect(save.mock.calls.some(([session]) => session.id === 's1' && session.projectId === 'p2')).toBe(false);
+  });
+
   it('clears the main selection when opening an unassociated conversation and sends explicit null', async () => {
     listSessions.mockResolvedValue([sessionRecord('s1', 'p1'), sessionRecord('s2')]);
     await remount();

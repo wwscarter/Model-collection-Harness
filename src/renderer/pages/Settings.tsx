@@ -127,7 +127,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
       if (!ids.length) throw new Error('端点未返回可用模型，可手动添加模型 ID');
       setDraft((value) => ({ ...value, availableModels: ids, modelId: ids.includes(value.modelId) ? value.modelId : ids[0] }));
       setModelSource('fetched');
-      setNotice({ tone: 'success', text: '已从端点获取 ' + ids.length + ' 个模型，保存配置后生效。' });
+      setNotice({ tone: 'success', text: '已从端点获取模型列表，保存配置后生效。' });
     } catch (cause) { setNotice({ tone: 'error', text: '获取模型失败：' + errorMessage(cause) }); }
     finally { setBusy(null); }
   };
@@ -193,13 +193,13 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
     <section ref={dialogRef} className="modal-window settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
       <header className="settings-titlebar">
         <div className="titlebar-left"><span className="titlebar-symbol"><SlidersHorizontal size={14} /></span><h2 id="settings-title">设置 <span className="settings-title-english">(Settings)</span></h2></div>
-        <div className="titlebar-right"><span className="kbd-hint"><kbd>Esc</kbd>关闭</span><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
+        <div className="titlebar-right"><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
       <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button></div>
       {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">
-            <div className="endpoint-list-title"><strong>端点与路由</strong><span className="count-pill accent endpoint-ready-count">{models.filter((model) => model.enabled).length} 个启用</span><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>
+            <div className="endpoint-list-title"><strong>端点与路由</strong><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>
             <label className="search-box"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型、URL 或通道…" aria-label="搜索模型、URL 或通道" /></label>
           </div>
           <div className="endpoint-items">
@@ -211,7 +211,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
                 <span className="endpoint-copy">
                   <span className="endpoint-name"><strong>{model.name}</strong>{result?.success && !result.demo ? <span className="latency mono"><Zap size={10} />{result.latency ?? 0}ms</span> : result && !result.success ? <span className="latency bad">失败</span> : <i className={'state-dot ' + (model.enabled ? 'on' : '')} />}</span>
                   <span className="endpoint-url mono">{model.baseURL || providerDefaults[model.provider] || '自定义端点'}</span>
-                  <span className="endpoint-tags">{model.isPrimary && model.enabled && (model.hasApiKey || model.provider === 'custom') && <span className="tag solid">● 使用中</span>}<span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.credentialError ? <span className="tag solid">凭据需重新输入</span> : !model.hasApiKey && model.provider !== 'custom' ? <span className="tag">未配置 Key · 不参与路由</span> : model.availableModels?.length ? <span className="endpoint-model-count">{model.availableModels.length} 个模型</span> : !model.enabled ? <span className="endpoint-model-count">未启用</span> : null}</span>
+                  <span className="endpoint-tags">{model.isPrimary && model.enabled && (model.hasApiKey || model.provider === 'custom') && <span className="tag solid">● 使用中</span>}<span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.credentialError ? <span className="tag solid">凭据需重新输入</span> : !model.hasApiKey && model.provider !== 'custom' ? <span className="tag">未配置 Key · 不参与路由</span> : !model.enabled ? <span className="tag">未启用</span> : null}</span>
                 </span>
               </button>;
             })}
@@ -238,7 +238,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
                 <Field label="API Key 密钥" hint={hasSavedKey ? '已安全保存 · 留空保留现有密钥' : draft.provider === 'custom' ? '本地或免密服务可留空' : '密钥仅保存在本机'}><span className="input-with-action"><input className="input mono" type={showKey ? 'text' : 'password'} value={draft.apiKey} onChange={(event) => change({ apiKey: event.target.value })} placeholder={hasSavedKey ? '已保存，输入新值可替换' : '输入 API Key'} autoComplete="new-password" spellCheck={false} /><button type="button" className="input-action" aria-label={showKey ? '隐藏密钥' : '显示密钥'} onClick={() => setShowKey((value) => !value)}>{showKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></span></Field>
               </section>
               <section className="form-section">
-                <div className="form-section-head"><span><Radio size={15} />模型列表</span><small className="model-sync-status">{draft.availableModels.length ? <><CloudDownload size={12} />{modelSource === 'fetched' ? '已从 API 获取' : modelSource === 'manual' ? '含手动添加' : '已配置'} {draft.availableModels.length} 个模型</> : '获取在线列表，或手动添加模型'}</small></div>
+                <div className="form-section-head"><span><Radio size={15} />模型列表</span><small className="model-sync-status">{draft.availableModels.length ? <><CloudDownload size={12} />{modelSource === 'fetched' ? '已从 API 获取' : modelSource === 'manual' ? '含手动添加' : '已配置'}</> : '获取在线列表，或手动添加模型'}</small></div>
                 <div className="model-actions"><button className="button soft small" onClick={() => void fetchModels()}>{busy === 'fetching' ? <LoaderCircle size={13} className="spinning" /> : <RefreshCw size={13} />}{busy === 'fetching' ? '正在获取…' : '获取模型 (Fetch Models)'}</button><button className="button outline small" aria-expanded={manualEntry} onClick={() => setManualEntry((value) => !value)}><Plus size={13} />添加模型</button><span className="model-sync-hint">同步端点支持的模型标识</span></div>
                 {manualEntry && <div className="manual-model-entry"><input ref={manualRef} className="input mono" aria-label="手动添加模型 ID" placeholder="输入模型 ID，例如 deepseek-chat" value={manualModel} onChange={(event) => setManualModel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addManualModel(); } }} /><button className="button primary small" disabled={!manualModel.trim()} onClick={addManualModel}>添加</button><button className="icon-button" aria-label="取消添加模型 ID" onClick={() => setManualEntry(false)}><X size={14} /></button></div>}
                 <div className="model-list-label"><span>当前选用模型 (Model ID)</span><span>点击卡片快速切换</span></div>
