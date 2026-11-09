@@ -31,6 +31,16 @@ function cspPlugin() {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          main: resolve('src/main/main.ts'),
+          'index-worker': resolve('src/core/codebase/IndexWorker.ts'),
+          'symbol-extractor': resolve('src/core/codebase/SymbolExtractor.ts'),
+        },
+        output: { entryFileNames: '[name].js' },
+      },
+    },
     resolve: { alias: { '@core': resolve('src/core'), '@utils': resolve('src/utils'), '@main': resolve('src/main') } }
   },
   preload: {
