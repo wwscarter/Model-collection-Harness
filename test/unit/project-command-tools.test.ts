@@ -25,6 +25,17 @@ function writeServer(name = 'server.cjs'): string {
   return `${quote(process.execPath)} ${quote(file)}`;
 }
 
+async function waitForReadyServer(snapshot: ProjectProcessSnapshot): Promise<ProjectProcessSnapshot> {
+  // Startup observation is a time window, not a readiness guarantee. A loaded
+  // machine can need longer to start the wrapper and its HTTP child.
+  await vi.waitFor(() => {
+    const current = manager.status(snapshot.processId);
+    expect(current.running).toBe(true);
+    expect(current.urls).toHaveLength(1);
+  }, { timeout: 5_000, interval: 25 });
+  return manager.status(snapshot.processId);
+}
+
 beforeEach(() => {
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-project-command-'));
   manager = new ProjectProcessManager();
@@ -63,7 +74,7 @@ describe('project command tools', () => {
   it('keeps a real HTTP server across tool instances, then queries and stops it', async () => {
     const turn = new AbortController();
     const started = await call('run_command', { command: writeServer(), background: true, timeoutMs: 500 }, turn.signal);
-    const process = started.details as ProjectProcessSnapshot;
+    const process = await waitForReadyServer(started.details as ProjectProcessSnapshot);
     expect(started.isError).toBe(false);
     expect(process).toMatchObject({ status: 'running', running: true, background: true, cwd: fs.realpathSync(projectRoot) });
     expect(process.pid).toBeGreaterThan(0);
@@ -113,7 +124,7 @@ describe('project command tools', () => {
     const wrapper = path.join(projectRoot, 'wrapper.cjs');
     fs.writeFileSync(wrapper, `require('node:child_process').spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(path.join(projectRoot, 'server.cjs'))}], { stdio: 'inherit' }); setInterval(() => {}, 1000);`);
     const result = await call('run_command', { command: `${quote(process.execPath)} ${quote(wrapper)}`, background: true, timeoutMs: 500 });
-    const serverInfo = result.details as ProjectProcessSnapshot;
+    const serverInfo = await waitForReadyServer(result.details as ProjectProcessSnapshot);
     expect(serverInfo.urls).toHaveLength(1);
     expect((await fetch(serverInfo.urls[0])).ok).toBe(true);
     await manager.stop(serverInfo.processId);
@@ -121,7 +132,7 @@ describe('project command tools', () => {
   });
 
   it('terminates managed web servers when the app disposes the manager', async () => {
-    const process = await manager.run({ projectRoot, command: writeServer(), background: true, timeoutMs: 500 });
+    const process = await waitForReadyServer(await manager.run({ projectRoot, command: writeServer(), background: true, timeoutMs: 500 }));
     expect((await fetch(process.urls[0])).ok).toBe(true);
     manager.dispose();
     await vi.waitFor(() => expect(manager.status(process.processId).running).toBe(false));
