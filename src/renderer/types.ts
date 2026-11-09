@@ -2,6 +2,7 @@ import type { RoutingSettings } from '@core/routing/RoutingSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 import type { RoutingCorrection, RoutingObservation } from '@core/growth/RoutingLearningStore';
 import type { CodebaseApi } from './codebaseTypes';
+import type { SandboxApi } from './sandboxTypes';
 
 export interface ModelCapability { type: string; score: number; }
 
@@ -186,6 +187,7 @@ export interface AgentResourceSummary {
 }
 
 export interface AmdApi {
+  sandbox: SandboxApi;
   codebase: CodebaseApi;
   routingStatus: () => Promise<RoutingClassifierStatus>;
   routingConfig: {

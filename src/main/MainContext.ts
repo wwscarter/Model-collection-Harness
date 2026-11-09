@@ -23,6 +23,7 @@ import type { MemoryStore } from '@core/memory/MemoryStore';
 import type { CodebaseIndex } from '@core/codebase/CodebaseIndex';
 import type { SemanticSearch } from '@core/codebase/SemanticSearch';
 import type { CodeSearchConfig } from '@core/codebase/CodeSearchConfig';
+import type { SandboxSettings } from '@core/security/SandboxSettings';
 
 export interface MainContext {
   getWindow(): BrowserWindow | null;
@@ -53,6 +54,8 @@ export interface MainContext {
   semanticSearch: SemanticSearch;
   codeSearchConfigPath: string;
   codeSearch: { config: CodeSearchConfig };
+  sandboxSettingsPath: string;
+  commandSandbox: { settings: SandboxSettings };
   workspaceRoot: string;
   preferencesPath: string;
   preferences: { approvalMode: ApprovalMode };

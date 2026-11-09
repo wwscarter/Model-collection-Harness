@@ -42,6 +42,19 @@ function setup(models: ModelConfig[], invokeStreamed: RunDependencies['invokeStr
 }
 
 describe('RunCoordinator trace identities and tool failures', () => {
+  it('persists command sandbox and approval metadata on the tool span', async () => {
+    const sandbox = { enabled: true, profileHash: 'synthetic-test-profile', network: 'allow' };
+    const policy = { category: 'read', decision: 'allow', outsideProject: false };
+    const { deps, store, cleanup } = setup([model('executor')], async (current, _prompt, _maxTokens, _onDelta, options) => {
+      options?.onToolEvent?.({ toolCallId: 'command-fixture', toolName: 'run_command', status: 'running', args: { command: 'echo hello' } });
+      options?.onToolEvent?.({ toolCallId: 'command-fixture', toolName: 'run_command', status: 'completed', details: { sandbox, policy }, summary: 'hello' });
+      return { content: 'hello', inputTokens: 10, outputTokens: 4, modelId: current.id };
+    });
+    try {
+      await executeRun({ sessionId: 's', runId: 'sandbox-trace', prompt: 'hello', includeProjectContext: false }, deps, () => undefined);
+      expect(store.getTrace('sandbox-trace')?.spans.find((span) => span.kind === 'tool')?.attributes).toMatchObject({ sandbox, policy });
+    } finally { cleanup(); }
+  });
   it('keeps the original route snapshot and attributes successful fallback usage to the actual attempted configuration', async () => {
     const primary = model('google-gemini-pro', { isPrimary: true, modelId: 'first-actual-model' });
     const fallback = model('anthropic-claude-3-sonnet', { modelId: 'fallback-actual-model' });

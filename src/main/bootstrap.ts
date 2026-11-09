@@ -31,6 +31,9 @@ import { CodebaseIndex } from '@core/codebase/CodebaseIndex';
 import { SemanticSearch } from '@core/codebase/SemanticSearch';
 import { loadCodeSearchConfig } from '@core/codebase/CodeSearchConfig';
 import { createCodebaseTools } from '@core/tools/codebaseTools';
+import { createSandboxPolicy } from '@core/security/Sandbox';
+import { loadSandboxSettings } from '@core/security/SandboxSettings';
+import { evaluateCommandApproval } from '@core/security/ApprovalPolicy';
 import { approveToolCall } from './approvalPrompt';
 import type { MainContext } from './MainContext';
 
@@ -74,8 +77,11 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
     for (const diagnostic of routingPolicyState.diagnostics) console.warn('[routing]', diagnostic);
     const tty = track(new TtyManager({ defaultCwd: workspaceRoot }), (resource) => resource.dispose());
     const projects = new ProjectManager();
-    const commandExecutor = track(new CommandExecutor(), (resource) => resource.dispose());
-    const projectProcesses = track(new ProjectProcessManager(), (resource) => resource.dispose());
+    const sandboxSettingsPath = path.join(dataDir, 'sandbox-settings.json');
+    const commandSandbox = { settings: loadSandboxSettings(sandboxSettingsPath) };
+    const sandboxPolicy = (root: string) => createSandboxPolicy(root, commandSandbox.settings);
+    const commandExecutor = track(new CommandExecutor({ sandboxPolicy }), (resource) => resource.dispose());
+    const projectProcesses = track(new ProjectProcessManager({ sandboxPolicy }), (resource) => resource.dispose());
     const codebase = track(new CodebaseIndex(dataDir), (resource) => resource.dispose());
     const codeSearchConfigPath = path.join(dataDir, 'code-search.json');
     const codeSearch = { config: loadCodeSearchConfig(codeSearchConfigPath) };
@@ -89,7 +95,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
       agentDir: path.join(dataDir, 'agent'), defaultCwd: workspaceRoot,
       toolGate: (request) => approveToolCall(ctx, request), enableMcp: true,
       extraTools: ({ projectRoot }) => [
-        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses) : []),
+        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot) }) : []),
         ...(projectRoot ? createCodebaseTools(projectRoot, codebase, semanticSearch, codeSearch.config.enabled, { config: structuredClone(codeSearch.config), baseURL: routingService.getConfiguration().settings.classifier.baseURL }) : []),
         ...createMemoryTools(memoryStore, { projectRoot }),
       ],
@@ -118,6 +124,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
       auditLog, codeAuditor, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(),
       runningTasks: new Map(), pickedProjectRoots: new Set(),
       codebase, semanticSearch, codeSearchConfigPath, codeSearch,
+      sandboxSettingsPath, commandSandbox,
     };
     return ctx;
   } catch (error) {

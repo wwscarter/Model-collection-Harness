@@ -227,10 +227,16 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     }
     else {
       const span = ctx.toolSpans.get(event.toolCallId);
+      const metadata = event.toolName === 'run_command' && event.details && typeof event.details === 'object'
+        ? event.details as { sandbox?: Record<string, unknown>; policy?: { category?: string; decision?: string; outsideProject?: boolean } } : undefined;
       span?.end({
         status: event.status === 'failed' ? 'failed' : 'success',
         error: event.status === 'failed' ? event.summary?.slice(0, 500) || 'Tool failed without an available failure summary' : undefined,
-        attributes: { tool: event.toolName, durationMs: event.durationMs, summaryChars: event.summary?.length ?? 0 },
+        attributes: {
+          tool: event.toolName, durationMs: event.durationMs, summaryChars: event.summary?.length ?? 0,
+          ...(metadata?.sandbox ? { sandbox: metadata.sandbox } : {}),
+          ...(metadata?.policy ? { policy: { category: metadata.policy.category, decision: metadata.policy.decision, outsideProject: metadata.policy.outsideProject } } : {}),
+        },
       });
       ctx.toolSpans.delete(event.toolCallId);
     }

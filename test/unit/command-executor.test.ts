@@ -29,7 +29,7 @@ describe('CommandExecutor', () => {
     const result = await executor.run({ command: `${process.execPath} -e "process.stdout.write(process.cwd() + ':' + process.env.AMD_SANDBOX);"`, projectRoot: root, approved: true });
     expect(result.exitCode).toBe(0);
     const canonicalRoot = fs.realpathSync(root);
-    expect(result.output).toContain(`${canonicalRoot}:1`);
+    expect(result.output).toContain(`${canonicalRoot}:${result.sandbox.enabled ? '1' : '0'}`);
     expect(result.cwd).toBe(canonicalRoot);
   });
 

@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createSandboxPolicy, sandboxFailureNotice, wrapCommand, type SandboxMetadata, type SandboxPolicyResolver } from '../security/Sandbox';
 
 export interface ProjectCommandRequest {
   projectRoot: string;
@@ -32,6 +33,7 @@ export interface ProjectProcessSnapshot {
   cancelled: boolean;
   truncated: boolean;
   durationMs: number;
+  sandbox: SandboxMetadata;
 }
 
 interface ProcessState {
@@ -79,12 +81,15 @@ function commandEnvironment(cwd: string): NodeJS.ProcessEnv {
 
 /**
  * Owns approved project commands across agent turns. The cwd is the selected
- * project; commands still run with the desktop user's normal OS permissions.
+ * project; OS sandbox policy is applied whenever the platform supports it.
  * POSIX process groups (Windows taskkill /T) keep shell children in cleanup.
  */
 export class ProjectProcessManager {
   private readonly processes = new Map<string, ProcessState>();
   private disposed = false;
+  private readonly sandboxPolicy?: SandboxPolicyResolver;
+
+  constructor(options: { sandboxPolicy?: SandboxPolicyResolver } = {}) { this.sandboxPolicy = options.sandboxPolicy; }
 
   async run(request: ProjectCommandRequest): Promise<ProjectProcessSnapshot> {
     if (this.disposed) throw new Error('进程管理器已关闭');
@@ -155,12 +160,13 @@ export class ProjectProcessManager {
     const id = randomUUID();
     const windows = process.platform === 'win32';
     const shell = windows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
-    const child = spawn(shell, windows ? ['/d', '/s', '/c', command] : ['-c', command], {
-      cwd, env: commandEnvironment(cwd), detached: !windows, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    const wrapped = wrapCommand(shell, windows ? ['/d', '/s', '/c', command] : ['-c', command], (this.sandboxPolicy ?? createSandboxPolicy)(cwd), commandEnvironment(cwd));
+    const child = spawn(wrapped.command, wrapped.args, {
+      cwd, env: wrapped.env, detached: !windows, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     });
     let finish!: () => void;
     const completion = new Promise<void>((resolve) => { finish = resolve; });
-    const info: ProjectProcessSnapshot = { id, processId: id, pid: child.pid, command, cwd, background, status: 'running', running: true, stdout: '', stderr: '', output: '', urls: [], exitCode: null, timedOut: false, cancelled: false, truncated: false, durationMs: 0 };
+    const info: ProjectProcessSnapshot = { id, processId: id, pid: child.pid, command, cwd, background, status: 'running', running: true, stdout: '', stderr: '', output: '', urls: [], exitCode: null, timedOut: false, cancelled: false, truncated: false, durationMs: 0, sandbox: wrapped.sandbox };
     const state: ProcessState = { info, child, startedAt: Date.now(), completion, finish, stopRequested: false, urlTail: '' };
     this.processes.set(id, state);
     child.stdout?.setEncoding('utf8');
@@ -197,6 +203,8 @@ export class ProjectProcessManager {
 
   private finish(state: ProcessState, exitCode: number | null, signal?: string): void {
     if (!state.info.running) return;
+    const notice = sandboxFailureNotice(state.info.stderr, state.info.sandbox);
+    if (notice) this.append(state, 'stderr', '\n' + notice);
     state.finishedAt = Date.now();
     state.info.running = false;
     state.info.exitCode = exitCode;
@@ -233,7 +241,7 @@ export class ProjectProcessManager {
   }
 
   private snapshot(state: ProcessState): ProjectProcessSnapshot {
-    return { ...state.info, urls: [...state.info.urls], durationMs: (state.finishedAt ?? Date.now()) - state.startedAt };
+    return { ...state.info, sandbox: { ...state.info.sandbox }, urls: [...state.info.urls], durationMs: (state.finishedAt ?? Date.now()) - state.startedAt };
   }
 
   private prune(): void {

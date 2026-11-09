@@ -15,6 +15,11 @@ function unsubscribe(channel: string, listener: Listener, handler: IpcListener):
 }
 
 const amdApi = {
+  sandbox: {
+    get: () => ipcRenderer.invoke('sandbox:get'),
+    set: (input: unknown) => ipcRenderer.invoke('sandbox:set', input),
+    pickDirectory: () => ipcRenderer.invoke('sandbox:pick-directory'),
+  },
   codebase: {
     get: () => ipcRenderer.invoke('codebase:get'),
     set: (input: unknown) => ipcRenderer.invoke('codebase:set', input),

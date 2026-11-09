@@ -3,6 +3,7 @@ import type { CommandExecutionRequest } from '@core/tty/CommandExecutor';
 import { confirmCommand } from '../approvalPrompt';
 import type { MainContext } from '../MainContext';
 import { handle } from './register';
+import { evaluateCommandApproval } from '@core/security/ApprovalPolicy';
 
 export function register(ctx: MainContext): void {
   const { tty, ttyUnsubscribers, projects, workspaceRoot, commandExecutor, commandUnsubscribers } = ctx;
@@ -37,7 +38,7 @@ export function register(ctx: MainContext): void {
     const execution = commandExecutor.start({ command: request.command, cwd: requestedCwd, timeoutMs: request.timeoutMs, maxOutputBytes: request.maxOutputBytes, projectRoot: selectedProjectRoot, approved: true });
     const unsubscribe = commandExecutor.onData(execution.id, (event) => ctx.emit('execution:data', { executionId: execution.id, ...event }));
     commandUnsubscribers.set(execution.id, unsubscribe);
-    try { return await execution.promise; }
+    try { return { ...await execution.promise, policy: evaluateCommandApproval(ctx.preferences.approvalMode, request.command, selectedProjectRoot, requestedCwd) }; }
     finally { unsubscribe(); commandUnsubscribers.delete(execution.id); }
   });
   handle('execution:cancel', (_event, id: unknown) => typeof id === 'string' ? commandExecutor.cancel(id) : false);

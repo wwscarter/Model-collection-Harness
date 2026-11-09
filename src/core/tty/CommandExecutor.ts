@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { createSandboxPolicy, sandboxFailureNotice, wrapCommand, type SandboxMetadata, type SandboxPolicyResolver } from '../security/Sandbox';
 
 export interface CommandExecutionRequest {
   /** The command is run by the platform shell only after `approved` is true. */
@@ -29,6 +30,7 @@ export interface CommandExecutionResult {
   cancelled: boolean;
   truncated: boolean;
   durationMs: number;
+  sandbox: SandboxMetadata;
 }
 
 export interface CommandExecutionData {
@@ -60,10 +62,12 @@ export class CommandExecutor {
   private readonly executions = new Map<string, ExecutionState>();
   private readonly injectedSpawn?: SpawnFunction;
   private readonly defaultProjectRoot?: string;
+  private readonly sandboxPolicy?: SandboxPolicyResolver;
 
-  constructor(options: { spawn?: SpawnFunction; defaultProjectRoot?: string } = {}) {
+  constructor(options: { spawn?: SpawnFunction; defaultProjectRoot?: string; sandboxPolicy?: SandboxPolicyResolver } = {}) {
     this.injectedSpawn = options.spawn;
     this.defaultProjectRoot = options.defaultProjectRoot;
+    this.sandboxPolicy = options.sandboxPolicy;
   }
 
   run(request: CommandExecutionRequest): Promise<CommandExecutionResult> {
@@ -80,9 +84,10 @@ export class CommandExecutor {
     const shellArgs = windows ? ['/d', '/s', '/c', normalized.command] : ['-c', normalized.command];
     const environment = this.buildEnvironment(normalized.env);
     environment.PWD = normalized.cwd;
-    const child = (this.injectedSpawn ?? spawnProcess)(shell, shellArgs, {
+    const wrapped = wrapCommand(shell, shellArgs, (this.sandboxPolicy ?? createSandboxPolicy)(normalized.projectRoot), environment);
+    const child = (this.injectedSpawn ?? spawnProcess)(wrapped.command, wrapped.args, {
       cwd: normalized.cwd,
-      env: environment,
+      env: wrapped.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       // A POSIX process group lets cancellation kill shell children too. Windows
@@ -114,7 +119,13 @@ export class CommandExecutor {
       if (killTimer) clearTimeout(killTimer);
       if (settleTimer) clearTimeout(settleTimer);
       this.executions.delete(id);
-      resolveResult({ id, command: normalized.command, cwd: normalized.cwd, stdout, stderr, output, exitCode, signal: signal ? String(signal) : undefined, timedOut, cancelled, truncated, durationMs: Date.now() - startedAt });
+      const notice = sandboxFailureNotice(stderr, wrapped.sandbox);
+      if (notice) {
+        const suffix = new TextDecoder().decode(Buffer.from('\n' + notice).subarray(0, Math.max(0, normalized.maxOutputBytes - totalBytes)), { stream: true });
+        stderr += suffix;
+        output += suffix;
+      }
+      resolveResult({ id, command: normalized.command, cwd: normalized.cwd, stdout, stderr, output, exitCode, signal: signal ? String(signal) : undefined, timedOut, cancelled, truncated, durationMs: Date.now() - startedAt, sandbox: wrapped.sandbox });
     };
 
     const killTree = (signal: NodeJS.Signals) => {
@@ -231,7 +242,6 @@ export class CommandExecutor {
     const env: NodeJS.ProcessEnv = {};
     for (const key of allow) if (process.env[key] !== undefined) env[key] = process.env[key];
     for (const [key, value] of Object.entries(overrides ?? {})) if (allow.has(key) && value !== undefined) env[key] = value;
-    env.AMD_SANDBOX = '1';
     // Keep deterministic behavior for shells that inspect a home directory.
     env.HOME ||= os.homedir();
     return env;

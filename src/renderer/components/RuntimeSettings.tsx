@@ -3,6 +3,7 @@ import { Check, Palette, Route, ShieldCheck } from 'lucide-react';
 import { errorMessage } from '../format';
 import { ModelRoutingSettings } from './ModelRoutingSettings';
 import { CodeSearchSettings } from './CodeSearchSettings';
+import { SandboxSettings } from './SandboxSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 
 type ApprovalMode = 'ask' | 'auto' | 'full';
@@ -11,7 +12,7 @@ interface RuntimeSettingsProps { onOpenRouting: () => void; onRoutingStatusChang
 const modes: Array<{ id: ApprovalMode; title: string; detail: string }> = [
   { id: 'ask', title: '请求批准', detail: '每次写入、编辑或执行命令都会弹出系统确认。' },
   { id: 'auto', title: '帮我批准', detail: '自动批准常规项目操作；危险命令仍会确认。' },
-  { id: 'full', title: '完全控制', detail: '不再弹出工具/命令确认；项目读写边界仍然保留。' },
+  { id: 'full', title: '完全控制', detail: '自动批准常规工具与命令；系统管理或提权操作仍需确认。' },
 ];
 
 export function RuntimeSettings({ onOpenRouting, onRoutingStatusChange }: RuntimeSettingsProps) {
@@ -40,9 +41,10 @@ export function RuntimeSettings({ onOpenRouting, onRoutingStatusChange }: Runtim
           <span><strong>{item.title}</strong><small>{item.detail}</small></span>
         </button>)}
       </div>
-      <p className="runtime-hint">完全控制只关闭确认弹窗，不会扩大项目目录之外的文件访问范围。</p>
+      <p className="runtime-hint">命令沙箱与项目文件访问边界在完全控制模式下仍然生效。</p>
       {notice && <div className="runtime-notice" role="status">{notice}</div>}
     </section>
+    <SandboxSettings />
     <ModelRoutingSettings onRoutingStatusChange={onRoutingStatusChange} />
     <CodeSearchSettings />
     <section className="runtime-card">
