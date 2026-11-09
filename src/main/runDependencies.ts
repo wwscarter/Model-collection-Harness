@@ -3,6 +3,7 @@ import { hasUsableCredentials } from '@core/models/ModelConfig';
 import type { ModelResponse } from '@core/providers/ModelProvider';
 import type { RunDependencies } from '@core/agent/RunCoordinator';
 import type { MainContext } from './MainContext';
+import { createProjectVerification } from './projectVerification';
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
 
@@ -31,6 +32,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
       options.onToolEvent?.(event);
     },
     beforeModelRequest: options.beforeModelRequest, onUsage: options.onUsage,
+    afterTurn: options.afterTurn,
   });
   return { content: result.content, inputTokens: result.inputTokens ?? estimateTokens(prompt), outputTokens: result.outputTokens ?? estimateTokens(result.content), modelId: model.id, stopReason: result.stopReason, budgetLimitReason: result.budgetLimitReason };
 }
@@ -51,6 +53,7 @@ export function createRunDependencies(ctx: MainContext, controller: AbortControl
     memory: memoryStore,
     summaries: sessionStorage,
     projectContext,
+    createProjectVerification: (input) => createProjectVerification(ctx, input),
     invokeStreamed: (model, prompt, maxTokens, onDelta, options) => invokeStreamed(ctx, model, prompt, maxTokens, onDelta, options),
     controller,
   };

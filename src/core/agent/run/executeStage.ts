@@ -5,6 +5,7 @@ import { shouldFallback } from '@core/routing/Fallback';
 import { buildSynthesisPrompt } from '@core/routing/ModelCollaboration';
 import { buildOrchestratedFinalPrompt } from '@core/routing/Orchestrator';
 import { BudgetExceededError } from '@core/routing/RunBudget';
+import { ProjectVerificationSession } from './projectVerification';
 import type { RunContext } from './RunContext';
 import { costOf, errorUsage, estimateTokens, limitedStop, limitMessage, PARTIAL_AGENT_NOTICE } from './runHelpers';
 
@@ -27,6 +28,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
   if (ctx.finalContext.summary && ctx.finalContext.summaryChanged)
     ctx.deps.summaries.saveSummary(ctx.sessionId, { text: ctx.finalContext.summary, coversTo: ctx.finalContext.summaryCovers, hash: ctx.finalContext.summaryHash, tokens: estimateTokens(ctx.finalContext.summary) });
   let chunkIndex = 0;
+  const projectVerification = new ProjectVerificationSession(ctx);
   for (let index = 0; index < ctx.executionCandidates.length; index += 1) {
     const candidate = ctx.executionCandidates[index];
     ctx.runBudget.assertAvailable();
@@ -41,6 +43,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
     let emittedText = false;
     let emittedTool = false;
     try {
+      ctx.executionModel = candidate;
       const attemptResult = await ctx.invokeStreamed(candidate, finalPrompt, ctx.executionContextBudget.maxOutputTokens, (delta) => {
         emittedText = true;
         chunkIndex += 1;
@@ -49,8 +52,9 @@ export async function executeStage(ctx: RunContext): Promise<void> {
         history: ctx.finalContext.history, summary: ctx.finalContext.summary, skipHistoryTrim: true, enableTools: ctx.enableTools, projectRoot: ctx.projectRoot, signal: ctx.controller.signal, onToolEvent: (event) => {
           if (event.status === 'running')
             emittedTool = true; ctx.emitToolEvent(undefined, event);
-        }
+        }, afterTurn: projectVerification.afterTurn,
       });
+      projectVerification.finish();
       ctx.metrics = ctx.deps.observability.recordInvocationEnd(attemptInvocationId, attemptResult.inputTokens, attemptResult.outputTokens, candidate.costPer1kTokens, attemptResult.stopReason === 'budget_limit' ? 'failure' : 'success', attemptResult.budgetLimitReason);
       ctx.result = attemptResult;
       if (attemptResult.stopReason === 'budget_limit')
@@ -72,6 +76,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
       break;
     }
     catch (error) {
+      projectVerification.finish(error);
       const message = error instanceof Error ? error.message : String(error);
       const usage = errorUsage(error);
       ctx.traceAttempts.push({ index, status: 'failed', modelSnapshot: snapshotModel(candidate), error: message.slice(0, 500), ...usage, estimatedCost: costOf(usage.inputTokens, usage.outputTokens, candidate) });

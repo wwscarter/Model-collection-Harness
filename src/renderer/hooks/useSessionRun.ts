@@ -6,6 +6,7 @@ import { errorMessage } from '../format';
 import { shouldSubmitPromptKey } from '../promptKeyboard';
 import type { Session } from './sessionState';
 import { useSessionState } from './useSessionState';
+import type { SessionVerificationEvent, VerificationMode } from '../verificationTypes';
 
 /** Owns one active run and folds its IPC events into the session snapshots. */
 export function useSessionRun() {
@@ -23,6 +24,9 @@ export function useSessionRun() {
   const includeProjectContext = true;
   const runTimingRef = useRef<SessionRunTiming | null>(null);
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+  const [verificationMode, setVerificationModeState] = useState<VerificationMode>('quick');
+  const [verificationEvents, setVerificationEvents] = useState<Record<string, SessionVerificationEvent>>({});
+  const setVerificationMode = (mode: VerificationMode) => { if (!isLoading) setVerificationModeState(mode); };
   const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean, stopReason?: string): SessionMetrics | undefined => {
     const timing = runTimingRef.current;
     const source = stopReason === undefined ? metrics : { ...metrics, stopReason };
@@ -41,6 +45,19 @@ export function useSessionRun() {
   }, [runningSessionId]);
 
   useEffect(() => {
+    const unsubscribeVerification = window.amd?.on('session:verification', (payload) => {
+      const event = payload as SessionVerificationEvent;
+      if (!event.sessionId || !['checking', 'repair', 'completed'].includes(event.phase) || deletedSessionIdsRef.current.has(event.sessionId)) return;
+      const session = sessionsRef.current.find((candidate) => candidate.id === event.sessionId);
+      const latest = session?.messages.slice().reverse().find((message) => message.role === 'assistant');
+      if (!session || !latest || (event.assistantMessageId && latest.id !== event.assistantMessageId)) return;
+      setVerificationEvents((existing) => ({ ...existing, [event.sessionId]: event }));
+      if (event.phase === 'repair') {
+        setSessions((existing) => existing.map((candidate) => candidate.id !== event.sessionId ? candidate : {
+          ...candidate, output: '', messages: candidate.messages.map((message) => message.id === latest.id ? { ...message, content: '' } : message),
+        }));
+      }
+    });
     const unsubscribeChunk = window.amd?.on('session:chunk', (payload) => {
       const event = payload as { sessionId?: string; taskId?: string; delta?: string };
       const id = event.sessionId || event.taskId;
@@ -126,7 +143,7 @@ export function useSessionRun() {
       }));
       setCompletionNotice(true);
     });
-    return () => { unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
+    return () => { unsubscribeVerification?.(); unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
   }, []);
 
   const execute = async () => {
@@ -149,6 +166,7 @@ export function useSessionRun() {
     cancelRequestedRef.current = false;
     runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
     setLiveElapsedMs(0);
+    setVerificationEvents((existing) => { const next = { ...existing }; delete next[currentSession.id]; return next; });
     promptBeforeEditingRef.current = '';
     setEditingMessageId(null);
     setSessionError(null);
@@ -170,6 +188,7 @@ export function useSessionRun() {
         taskType: 'general',
         stream: true,
         includeProjectContext,
+        verificationMode,
         pinnedModelId,
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
         history: historyForModel(messages.slice(0, -2)),
@@ -191,6 +210,10 @@ export function useSessionRun() {
       await saveSession(completedSession);
     } catch (cause) {
       if (deletedSessionIdsRef.current.has(currentSession.id)) return;
+      setVerificationEvents((existing) => {
+        const event = existing[currentSession.id];
+        return !event || event.phase === 'completed' ? existing : { ...existing, [currentSession.id]: { ...event, phase: 'completed', status: /取消/.test(errorMessage(cause)) ? 'cancelled' : 'failed', summary: errorMessage(cause) } };
+      });
       setSessionError({ sessionId: currentSession.id, message: errorMessage(cause) });
       const latestSession = sessionsRef.current.find((session) => session.id === currentSession.id);
       if (latestSession) {
@@ -226,6 +249,7 @@ export function useSessionRun() {
   return {
     ...state, completionNotice, setCompletionNotice, projectReloadKey, setProjectReloadKey,
     liveTrace, liveElapsedMs, execute, cancelRun, handleKeyDown,
+    verificationMode, setVerificationMode, currentVerification: state.currentSessionId ? verificationEvents[state.currentSessionId] : undefined,
   };
 }
 

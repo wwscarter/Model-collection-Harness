@@ -16,13 +16,14 @@ export async function approveToolCall(ctx: MainContext, { toolName, input, proje
   return response === 1 ? undefined : '用户拒绝了这次工具调用';
 }
 
-export async function confirmCommand(ctx: MainContext, command: string, cwd: string): Promise<boolean> {
-  const decision = evaluateCommandApproval(ctx.preferences.approvalMode, command, ctx.projects.getRoot() ?? cwd, cwd);
+export async function confirmCommand(ctx: MainContext, command: string, cwd: string, signal?: AbortSignal, projectRoot = ctx.projects.getRoot() ?? cwd): Promise<boolean> {
+  signal?.throwIfAborted();
+  const decision = evaluateCommandApproval(ctx.preferences.approvalMode, command, projectRoot, cwd);
   if (decision.decision === 'allow') return true;
   if (decision.decision === 'deny') return false;
   const mainWindow = ctx.getWindow();
   const options = {
-    type: 'warning' as const,
+    type: 'warning' as const, signal,
     buttons: ['取消', '执行命令'],
     defaultId: 0,
     cancelId: 0,
@@ -32,6 +33,7 @@ export async function confirmCommand(ctx: MainContext, command: string, cwd: str
     noLink: true,
   };
   const { response } = mainWindow ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+  signal?.throwIfAborted();
   return response === 1;
 }
 

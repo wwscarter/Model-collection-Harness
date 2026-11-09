@@ -31,7 +31,7 @@ export function register(ctx: MainContext): void {
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Working directory must stay inside the project root');
     // `approved` from the renderer is intentionally ignored. Authorization is a
     // user decision made in this process, not a boolean supplied by the page.
-    if (!(await confirmCommand(ctx, request.command, requestedCwd))) throw new Error('用户取消了命令执行');
+    if (!(await confirmCommand(ctx, request.command, requestedCwd, undefined, selectedProjectRoot))) throw new Error('用户取消了命令执行');
     // The main process is the authority for the sandbox boundary: commands run in
     // the selected project, with a filtered environment, and without renderer
     // supplied `env`/`approved` fields.

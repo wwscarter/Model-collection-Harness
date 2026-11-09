@@ -17,6 +17,7 @@ import { BudgetExceededError, RunBudget } from '@core/routing/RunBudget';
 import { awaitWithSignal } from '@core/tools/awaitWithSignal';
 import type { TraceSpanHandle } from '@core/trace/TraceRecorder';
 import type { RunStatus } from '@core/trace/types';
+import type { VerificationOutcome } from '@core/verify/VerificationTypes';
 import { randomUUID } from 'node:crypto';
 import type { ToolEvent } from '../AgentRuntime';
 import type { buildExecutionPlan } from '../RunOrchestrator';
@@ -34,6 +35,7 @@ export interface RunContext {
   history: ContextTurn[];
   enableTools: boolean;
   toolCalls: ToolEvent[];
+  successfulFileWrites: string[];
   traceFinished: boolean;
   traceStatus: RunStatus;
   traceError?: string;
@@ -86,6 +88,7 @@ export interface RunContext {
   agentMessages: Array<{ id: string; modelId: string; modelName: string; status: 'queued' | 'running' | 'completed' | 'failed'; content: string; error?: string; stopReason?: string }>;
   finalContext: ReturnType<typeof assembleContext>;
   verification?: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string };
+  projectVerification?: VerificationOutcome;
   invokeStreamed: InvokeStreamed;
   createProvider(model: ModelConfig): ModelProvider;
   recordGrowth(feedback: RoutingFeedback): void;
@@ -191,6 +194,8 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     throw new Error('会话 ID 无效');
   if (ctx.request.runId !== undefined && typeof ctx.request.runId !== 'string')
     throw new Error('运行 ID 无效');
+  if (ctx.request.verificationMode !== undefined && !['off', 'quick', 'full'].includes(ctx.request.verificationMode))
+    throw new Error('项目验证模式无效');
   ctx.sessionId = ctx.request.sessionId || ctx.request.taskId || randomUUID();
   ctx.runId = ctx.request.runId || randomUUID();
   ctx.taskId = ctx.request.taskId || ctx.sessionId;
@@ -198,6 +203,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   ctx.history = sanitizeHistory(ctx.request.history);
   ctx.enableTools = ctx.request.enableTools !== false;
   ctx.toolCalls = [];
+  ctx.successfulFileWrites = [];
   ctx.traceFinished = false;
   ctx.traceStatus = 'success';
   ctx.totalInputTokens = 0;
@@ -219,6 +225,11 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
         ctx.toolCalls[index] = merged;
       else
         ctx.toolCalls.push(merged);
+      // Some compatible providers reuse IDs across turns; verification needs
+      // an append-only record independent of the merged display entries.
+      const file = (merged.args as { path?: unknown } | undefined)?.path;
+      if (merged.status === 'completed' && ['write', 'edit'].includes(merged.toolName) && typeof file === 'string' && file)
+        ctx.successfulFileWrites.push(file);
     }
     if (event.status === 'running') {
       const parent = agentId ? ctx.agentSpans.get(agentId) : ctx.executionSpan;

@@ -1,5 +1,8 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import type { ModelConfig } from '@core/models/ModelConfig';
+import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
+import { SearchProviderRegistry } from '@core/tools/search';
+import { ToolRuntime } from '@core/tools/ToolRuntime';
+import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -9,138 +12,21 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type AgentSession,
-  type AgentSessionEvent,
   type InlineExtension,
-  type ToolDefinition,
+  type ToolDefinition
 } from '@earendil-works/pi-coding-agent';
-import { createAssistantMessageEventStream, InMemoryCredentialStore, type AssistantMessage, type Usage } from '@earendil-works/pi-ai';
-import type { ModelConfig } from '@core/models/ModelConfig';
+import fs from 'node:fs';
+import path from 'node:path';
 import { toPiModel } from './modelMapping';
 import { buildSystemPrompt } from './systemPrompt';
-import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
-import { ToolRuntime } from '@core/tools/ToolRuntime';
-import { SearchProviderRegistry } from '@core/tools/search';
-import { BudgetExceededError } from '@core/routing/RunBudget';
-import type { ModelRequestEstimate, ModelUsage } from '@core/routing/ModelUsage';
 
-export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
+import { trimHistory } from './AgentHistory';
+import { RUN_TIMEOUT_MS, type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type ChatTurn, type ResourceSummary } from './AgentRuntimeTypes';
+import { driveAgentSession } from './AgentSessionDriver';
+import { installUsageAccounting } from './AgentUsage';
 
-export interface ToolEvent {
-  toolCallId: string;
-  toolName: string;
-  status: 'running' | 'completed' | 'failed';
-  args?: unknown;
-  summary?: string;
-  details?: unknown;
-  durationMs?: number;
-}
-
-export interface AgentRunRequest {
-  model: ModelConfig;
-  prompt: string;
-  history?: ChatTurn[];
-  /** Hidden summary of older turns, injected as a non-displayed custom message. */
-  summary?: string;
-  /** The caller already applied its token budget; skip the 20-turn/60k-char trim. */
-  skipHistoryTrim?: boolean;
-  projectRoot?: string;
-  /** Analysis subagents can inspect a project without modifying it or running commands. */
-  projectAccess?: 'read' | 'write';
-  /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */
-  enableTools?: boolean;
-  maxTokens?: number;
-  signal?: AbortSignal;
-  onTextDelta?: (delta: string) => void;
-  onToolEvent?: (event: ToolEvent) => void;
-  onUsage?: (usage: ModelUsage) => void;
-  beforeModelRequest?: (request: ModelRequestEstimate) => { maxOutputTokens: number } | void;
-}
-
-export interface AgentRunResult {
-  content: string;
-  inputTokens: number;
-  outputTokens: number;
-  toolCalls: number;
-  stopReason: string;
-  budgetLimitReason?: string;
-}
-
-interface RunUsageState {
-  usage: Required<ModelUsage>;
-  seen: WeakSet<object>;
-  budgetError?: BudgetExceededError;
-  callbackError?: unknown;
-  report(usage: Usage): void;
-}
-
-/** Decide whether a tool call may run. Returning a string blocks it with that reason. */
-export type ToolGate = (call: { toolName: string; input: Record<string, unknown>; projectRoot?: string }) => Promise<string | undefined> | string | undefined;
-
-export interface AgentRuntimeOptions {
-  /** Directory owned by newAi for Pi resources: skills/, extensions/, mcp.json. Never ~/.pi. */
-  agentDir: string;
-  /** Working directory used when no project is selected. */
-  defaultCwd: string;
-  search?: SearchProviderRegistry;
-  /** Extra tools contributed by plugins. */
-  extraTools?: (context: { cwd: string; projectRoot?: string }) => ToolDefinition[];
-  /** Extra Pi extensions (inline factories). */
-  extensions?: InlineExtension[];
-  toolGate?: ToolGate;
-  /** Load agentDir/mcp.json servers through Pi's MCP extension. */
-  enableMcp?: boolean;
-  /** Load agentDir/extensions/* code. Off by default: extensions run with full app permissions. */
-  enableFileExtensions?: boolean;
-  /** Maximum duration of a run, including model requests and tools. Default five minutes. */
-  runTimeoutMs?: number;
-  /** Maximum turns that execute tools before a final text-only summary. Default 32. */
-  maxToolRounds?: number;
-  /** Maximum tool invocations in one run. Default 80. */
-  maxToolCalls?: number;
-  /** Maximum model-facing tool output characters in one run. Default 320k. */
-  maxToolResultChars?: number;
-  /** Test seam. */
-  now?: () => Date;
-}
-
-export interface ResourceSummary {
-  agentDir: string;
-  skills: Array<{ name: string; description: string; path: string }>;
-  tools: string[];
-  searchProviders: Array<{ id: string; label: string; active: boolean }>;
-  diagnostics: string[];
-}
-
-const MAX_HISTORY_TURNS = 20;
-const MAX_HISTORY_CHARS = 60_000;
-const RUN_TIMEOUT_MS = 5 * 60_000;
-const MAX_TOOL_ROUNDS = 32;
-
-/** Keep the newest turns that fit the budget; always start the window on a user turn. */
-export function trimHistory(history: ChatTurn[] = [], maxTurns = MAX_HISTORY_TURNS, maxChars = MAX_HISTORY_CHARS): ChatTurn[] {
-  const clean = history.filter((turn) => (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string' && turn.content.trim());
-  const kept: ChatTurn[] = [];
-  let chars = 0;
-  for (let index = clean.length - 1; index >= 0 && kept.length < maxTurns; index -= 1) {
-    chars += clean[index].content.length;
-    if (chars > maxChars) break;
-    kept.unshift(clean[index]);
-  }
-  while (kept.length && kept[0].role !== 'user') kept.shift();
-  return kept;
-}
-
-function textOf(message: { content?: unknown }): string {
-  if (typeof message.content === 'string') return message.content;
-  if (!Array.isArray(message.content)) return '';
-  return message.content.map((part: { type?: string; text?: string }) => part?.type === 'text' ? part.text ?? '' : '').join('');
-}
-
-function summarizeToolResult(result: unknown): string | undefined {
-  const text = textOf((result ?? {}) as { content?: unknown }).trim();
-  return text ? text.slice(0, 280) : undefined;
-}
+export { trimHistory } from './AgentHistory';
+export type { AgentRunRequest, AgentRunResult, AgentRuntimeOptions, AgentTurnContinuation, ChatTurn, ResourceSummary, ToolEvent, ToolGate } from './AgentRuntimeTypes';
 
 /**
  * Runs newAi turns through the Pi SDK. newAi keeps ownership of model credentials (encrypted
@@ -315,196 +201,8 @@ export class AgentRuntime {
       settingsManager,
       resourceLoader,
     });
-    const usageState: RunUsageState = {
-      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, seen: new WeakSet(),
-      report: (usage) => {
-        if (usageState.seen.has(usage)) return;
-        usageState.seen.add(usage);
-        const count = (value: number) => Number.isFinite(value) && value > 0 ? value : 0;
-        const next: Required<ModelUsage> = {
-          inputTokens: count(usage.input) + count(usage.cacheRead) + count(usage.cacheWrite), outputTokens: count(usage.output),
-          cacheReadTokens: count(usage.cacheRead), cacheWriteTokens: count(usage.cacheWrite),
-        };
-        for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) usageState.usage[key] += next[key];
-        try { request.onUsage?.(next); } catch (error) { stopAfterCallback(error); }
-      },
-    };
-    const stopAfterCallback = (error: unknown) => {
-      if (error instanceof BudgetExceededError) usageState.budgetError = error;
-      else usageState.callbackError = error instanceof Error ? error : new Error(String(error));
-      session.setAutoRetryEnabled(false);
-      session.setActiveToolsByName([]);
-    };
-    const stream = session.agent.streamFunction;
-    session.agent.streamFunction = async (requestModel, context, options) => {
-      request.signal?.throwIfAborted();
-      if (usageState.callbackError) throw usageState.callbackError;
-      if (usageState.budgetError) throw usageState.budgetError;
-      const requested = options?.maxTokens ?? requestModel.maxTokens;
-      let maxTokens = requested;
-      try {
-        const gate = request.beforeModelRequest?.({ estimatedInputTokens: Math.max(1, Math.ceil(JSON.stringify(context).length / 4)), maxOutputTokens: requested });
-        if (gate) {
-          if (!Number.isSafeInteger(gate.maxOutputTokens) || gate.maxOutputTokens < 1) throw new Error('模型请求输出上限必须是正整数');
-          maxTokens = Math.min(requested, gate.maxOutputTokens);
-        }
-      } catch (error) { stopAfterCallback(error); throw error; }
-      request.signal?.throwIfAborted();
-      const source = await stream(requestModel, context, {
-        ...options, maxTokens,
-        ...(mapping.temperature !== undefined ? { temperature: mapping.temperature } : {}),
-        timeoutMs: Math.min(options?.timeoutMs ?? RUN_TIMEOUT_MS, this.options.runTimeoutMs ?? RUN_TIMEOUT_MS),
-      });
-      const forwarded = createAssistantMessageEventStream();
-      // Compaction consumes .result() without message_end; record every actual response here too.
-      void (async () => {
-        let partial: AssistantMessage | undefined;
-        let ended = false;
-        try {
-          for await (const event of source) {
-            if ('partial' in event) partial = event.partial;
-            if (event.type === 'done' || event.type === 'error') {
-              const message = event.type === 'done' ? event.message : event.error;
-              usageState.report(message.usage);
-              ended = true;
-            }
-            forwarded.push(event);
-          }
-          if (!ended) {
-            const message = await source.result();
-            usageState.report(message.usage);
-            forwarded.end(message);
-          }
-        } catch (error) {
-          const message: AssistantMessage = {
-            role: 'assistant', content: partial?.content ?? [], api: requestModel.api, provider: requestModel.provider, model: requestModel.id,
-            timestamp: Date.now(), stopReason: request.signal?.aborted ? 'aborted' : 'error', errorMessage: error instanceof Error ? error.message : String(error),
-            usage: partial?.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-          };
-          usageState.report(message.usage);
-          forwarded.push({ type: 'error', reason: message.stopReason === 'aborted' ? 'aborted' : 'error', error: message });
-        }
-      })();
-      return forwarded;
-    };
-    return this.drive(session, request, toolRuntime, usageState);
-  }
-
-  private async drive(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime, usageState: RunUsageState): Promise<AgentRunResult> {
-    let content = '';
-    let toolCalls = 0;
-    let toolRounds = 0;
-    let toolLimitReached = false;
-    let summaryCompleted = false;
-    let limitDescription = '';
-    const toolLabels = new Map<string, string>();
-    const completedTools: string[] = [];
-    const maxToolRounds = Math.max(1, this.options.maxToolRounds ?? MAX_TOOL_ROUNDS);
-    const finishTurn = session.agent.finishTurn;
-    const beforeToolCall = session.agent.beforeToolCall;
-    session.agent.beforeToolCall = async (call, signal) => {
-      if (usageState.budgetError || usageState.callbackError) return { block: true, reason: '本轮模型请求已停止，不再执行工具。', terminate: true };
-      if (toolLimitReached) return { block: true, reason: '工具额度已用尽，请只基于现有结果生成阶段性总结。', terminate: true };
-      return beforeToolCall?.(call, signal);
-    };
-    // Keep the accumulated tool results and reserve one logical answer turn.
-    // This does not reset tool counts or the existing run deadline.
-    session.agent.finishTurn = async (turn, signal) => {
-      if (usageState.budgetError || usageState.callbackError) return { action: 'end' };
-      const decision = await finishTurn?.(turn, signal);
-      if (signal?.aborted || request.signal?.aborted || turn.message.stopReason === 'error' || turn.message.stopReason === 'aborted') return { action: 'end' };
-      if (toolLimitReached) {
-        summaryCompleted = !turn.toolResults.length && Boolean(textOf(turn.message).trim());
-        return { action: 'end' };
-      }
-      if (decision?.action === 'end') return decision;
-      if (turn.toolResults.length) toolRounds += 1;
-      const budget = toolRuntime.getBudgetState();
-      if (turn.toolResults.length && (toolRounds >= maxToolRounds || toolCalls >= budget.maxCalls || budget.exhaustedBy)) {
-        toolLimitReached = true;
-        limitDescription = toolRounds >= maxToolRounds ? `${maxToolRounds} 轮工具调用`
-          : budget.exhaustedBy === 'output' ? `${budget.maxResultChars} 字符工具结果` : `${budget.maxCalls} 次工具调用`;
-        session.setActiveToolsByName([]);
-        session.setAutoRetryEnabled(false);
-        await session.sendCustomMessage({
-          customType: 'newai-tool-budget-summary', display: false,
-          content: `本轮工具额度已用尽（${limitDescription}），工具现已关闭。请立即根据本轮已经获取的资料，用用户的语言给出阶段性分析。明确列出已确认的结论、已检查的文件或范围、仍未验证或未完成的事项，以及下一步最值得继续的内容。不要再次请求工具，不要只说“继续读取”，不要把未完成的项目分析称为已全部完成。如果资料不足，说明具体缺少什么，不要编造结论。`,
-        }, { deliverAs: 'steer' });
-        return { action: 'continue' };
-      }
-      return decision || undefined;
-    };
-    const onAbort = () => { void session.abort(); };
-    request.signal?.addEventListener('abort', onAbort, { once: true });
-    const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-      if (event.type === 'message_end' && (event.message.role === 'assistant' || event.message.role === 'toolResult') && event.message.usage) {
-        const usage = event.message.usage;
-        // A rejected request gate creates a synthetic zero-usage error message in Pi.
-        if ((!usageState.budgetError && !usageState.callbackError) || usage.input || usage.output || usage.cacheRead || usage.cacheWrite) usageState.report(usage);
-      } else if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-        content += event.assistantMessageEvent.delta;
-        request.onTextDelta?.(event.assistantMessageEvent.delta);
-      } else if (event.type === 'message_start' && (event.message as { role?: string }).role === 'assistant' && content && !content.endsWith('\n')) {
-        // A new assistant message after tool calls: keep paragraphs apart in the streamed text.
-        content += '\n\n';
-        request.onTextDelta?.('\n\n');
-      } else if (event.type === 'tool_execution_start') {
-        if (toolLimitReached) return;
-        toolCalls += 1;
-        const args = event.args as { path?: unknown; query?: unknown } | undefined;
-        const label = typeof args?.path === 'string' ? args.path : typeof args?.query === 'string' ? args.query : '';
-        toolLabels.set(event.toolCallId, `${event.toolName}${label ? `：${label.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`);
-        request.onToolEvent?.({ toolCallId: event.toolCallId, toolName: event.toolName, status: 'running', args: event.args });
-      } else if (event.type === 'tool_execution_end') {
-        if (toolLimitReached) return;
-        if (!event.isError) completedTools.push(toolLabels.get(event.toolCallId) ?? event.toolName);
-        toolLabels.delete(event.toolCallId);
-        request.onToolEvent?.({ toolCallId: event.toolCallId, toolName: event.toolName, status: event.isError ? 'failed' : 'completed', summary: summarizeToolResult(event.result), details: (event.result as { details?: unknown })?.details, durationMs: event.durationMs });
-      }
-    });
-    try {
-      await session.bindExtensions({ mode: 'print' });
-      if (request.signal?.aborted) throw new Error('任务已取消');
-      let summaryFailed = false;
-      try { await session.prompt(request.prompt, { expandPromptTemplates: false }); }
-      catch (error) {
-        if (request.signal?.aborted) throw error;
-        if (!usageState.budgetError) {
-          if (!toolLimitReached) throw error;
-          summaryFailed = true;
-        }
-      }
-      const stats = session.getSessionStats();
-      const last = [...session.messages].reverse().find((message) => (message as { role?: string }).role === 'assistant') as { stopReason?: string; errorMessage?: string } | undefined;
-      if (last?.stopReason === 'aborted' || request.signal?.aborted) throw new Error('任务已取消');
-      if (usageState.callbackError) throw usageState.callbackError;
-      if (last?.stopReason === 'error' && !toolLimitReached && !usageState.budgetError) throw new Error(last.errorMessage || '模型调用失败');
-      const finalText = session.getLastAssistantText() ?? '';
-      let answer = finalText.trim() ? finalText : content;
-      if (usageState.budgetError) {
-        const notice = `本轮已因预算限制停止，任务尚未完成；已保留现有输出。${usageState.budgetError.message}`;
-        answer = (answer.trim() ? answer.trimEnd() + '\n\n' : '') + notice;
-        request.onTextDelta?.(`${content.trim() ? '\n\n' : ''}${notice}`);
-      } else if (toolLimitReached && (!summaryCompleted || summaryFailed || last?.stopReason === 'error')) {
-        answer = `工具额度已用尽（${limitDescription}）。阶段总结未能生成，本轮分析尚未完成。\n\n`
-          + (completedTools.length ? `已完成 ${completedTools.length} 次工具操作，最近的操作包括：\n${completedTools.slice(-12).map((label) => `- ${label}`).join('\n')}` : '本轮没有获得可用的工具结果。')
-          + '\n\n继续任务时可从上述已检查范围接着分析。';
-        request.onTextDelta?.(`${content.trim() ? '\n\n' : ''}${answer}`);
-      }
-      if (!answer.trim()) throw new Error('模型返回空文本，未生成可用回答');
-      return {
-        content: answer,
-        inputTokens: Math.max(usageState.usage.inputTokens, stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite),
-        outputTokens: Math.max(usageState.usage.outputTokens, stats.tokens.output),
-        toolCalls,
-        stopReason: usageState.budgetError ? 'budget_limit' : toolLimitReached ? 'tool_limit' : last?.stopReason ?? 'stop',
-        ...(usageState.budgetError ? { budgetLimitReason: usageState.budgetError.message } : {}),
-      };
-    } finally {
-      request.signal?.removeEventListener('abort', onAbort);
-      unsubscribe();
-      session.dispose();
-    }
+    const usageState = installUsageAccounting(session, request, mapping, this.options.runTimeoutMs);
+    return driveAgentSession(session, request, toolRuntime, usageState, { maxToolRounds: this.options.maxToolRounds });
   }
 
   /** Describe what the agent can use, for the settings UI. */

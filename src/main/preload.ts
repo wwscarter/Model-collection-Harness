@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:trace', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:trace', 'tty:data', 'execution:data']);
 type Listener = (payload: unknown) => void;
 type IpcListener = (_event: IpcRendererEvent, payload: unknown) => void;
 const subscriptions = new Map<string, Map<Listener, Set<IpcListener>>>();

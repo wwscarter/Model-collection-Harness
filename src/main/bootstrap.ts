@@ -117,7 +117,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
     const auditLog = new AuditLog(path.join(dataDir, 'audit.jsonl'));
     const codeAuditor = new CodeAuditor();
     const ctx: MainContext = {
-      getWindow, emit, workspaceRoot, storage, sessionStorage, projectStorage, registry,
+      dataDir, getWindow, emit, workspaceRoot, storage, sessionStorage, projectStorage, registry,
       growth, routingLearning, routingService, router, preferencesPath, preferences,
       routingRulesPath, routingHistoryDir, routingPolicy, tty, projects, commandExecutor,
       projectProcesses, agentRuntime, observability, modelQuota, memoryStore, traceRecorder,

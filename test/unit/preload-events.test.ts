@@ -22,6 +22,16 @@ beforeAll(async () => { await import('../../src/main/preload'); });
 const emit = (channel: string, payload: unknown) => { for (const handler of state.handlers.get(channel) ?? []) handler({}, payload); };
 
 describe('preload subscriptions', () => {
+  it('forwards project verification progress and supports its cleanup', () => {
+    const listener = vi.fn();
+    const stop = state.api.on('session:verification', listener);
+    const event = { sessionId: 'fixture', phase: 'checking' };
+    emit('session:verification', event);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(event);
+    stop();
+    emit('session:verification', event);
+    expect(listener).toHaveBeenCalledOnce();
+  });
   it('removes wrapped listeners through the public off API without affecting other channels', () => {
     const listener = vi.fn();
     state.api.on('session:chunk', listener);

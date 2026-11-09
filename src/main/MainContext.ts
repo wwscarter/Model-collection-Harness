@@ -26,6 +26,7 @@ import type { CodeSearchConfig } from '@core/codebase/CodeSearchConfig';
 import type { SandboxSettings } from '@core/security/SandboxSettings';
 
 export interface MainContext {
+  dataDir: string;
   getWindow(): BrowserWindow | null;
   emit(channel: string, payload: unknown): void;
   storage: ModelStorage;

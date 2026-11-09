@@ -1,6 +1,6 @@
 export type RunStatus = 'running' | 'success' | 'failed' | 'cancelled';
 export type SpanStatus = 'running' | 'success' | 'failed' | 'cancelled';
-export type SpanKind = 'run' | 'route' | 'context' | 'memory' | 'compact' | 'plan' | 'model' | 'tool' | 'synthesis' | 'audit';
+export type SpanKind = 'run' | 'route' | 'context' | 'memory' | 'compact' | 'plan' | 'model' | 'tool' | 'synthesis' | 'audit' | 'verify' | 'verify-command' | 'verify-repair';
 
 export interface TraceRunRecord {
   id: string;

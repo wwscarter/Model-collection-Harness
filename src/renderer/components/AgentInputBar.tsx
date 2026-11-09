@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, X } from 'lucide-react';
 import type { ModelConfig, ProjectInfo, ProjectRecord } from '../types';
+import type { VerificationMode } from '../verificationTypes';
 
 interface AgentInputBarProps {
   value: string;
@@ -19,6 +20,8 @@ interface AgentInputBarProps {
   gitBusy: boolean;
   onInitGit: () => void;
   approvalMode: 'ask' | 'auto' | 'full';
+  verificationMode: VerificationMode;
+  onVerificationModeChange: (mode: VerificationMode) => void;
   onOpenSettings: () => void;
   onToggleMultiModel: () => void;
   onSelectModel: (id: string) => void;
@@ -36,7 +39,7 @@ const QUICK_COMMANDS = [
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -69,6 +72,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
         </div>
         {project && (project.git ? <span className="composer-git-state" title={project.git.branch || project.git.head || 'Git'}><GitBranch size={12} strokeWidth={1.7} />{project.git.branch || 'Git'}</span>
           : <button className="composer-git-create" disabled={gitBusy} onClick={onInitGit}>{gitBusy ? <LoaderCircle size={12} className="spinning" /> : null}{gitBusy ? '创建中…' : '创建 Git 存储库'}</button>)}
+        <label className="composer-git-state">验证 <select className="composer-git-create" aria-label="项目验证模式" title="快速检查 lint 与类型；完整检查再运行测试" value={verificationMode} disabled={busy} onChange={(event) => onVerificationModeChange(event.target.value as VerificationMode)}><option value="off">关闭</option><option value="quick">快速</option><option value="full">完整</option></select></label>
       </div>
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <footer>

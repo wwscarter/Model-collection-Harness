@@ -109,6 +109,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
       <div><span><ChevronRight size={13} />调用成功率</span><strong>{summary?.successRate === undefined ? '—' : Math.round(summary.successRate * 100) + '%'}</strong><small>最近 {runs.length} 轮中 {totals.failures} 个失败</small></div>
       <div><span><Clock3 size={13} />平均调用耗时</span><strong>{duration(summary?.avgLatency)}</strong><small>最近 {runs.length} 轮 · {integer(totals.totalTokens)} tok</small></div>
       <div><span><Coins size={13} />预估成本</span><strong>{money(summary?.totalCost)}</strong><small>{models.length ? '配置ID: ' + models[0].modelId : '暂无模型数据'}</small></div>
+      <div><span><ChevronRight size={13} />验证通过率</span><strong>{summary?.verificationPassRate === undefined ? '—' : Math.round(summary.verificationPassRate * 100) + '%'}</strong><small>{summary?.verificationCount ?? 0} 轮已验证 · {summary?.verificationUnverified ?? 0} 轮未验证</small></div>
     </div>
 
     <div className="monitoring-grid">

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { RunTrace, TraceRunRecord, TraceSpanRecord, TraceStore } from '../trace/types';
+import { VerificationMetrics, type VerificationMetric, type VerificationSummary } from './VerificationMetrics';
 
 export type InvocationStatus = 'running' | 'success' | 'failure' | 'timeout';
 export interface ModelInvocation { id: string; taskId: string; modelId: string; startTime: Date; endTime?: Date; inputTokens: number; outputTokens: number; totalCost: number; status: InvocationStatus; errorMessage?: string; latency?: number; }
@@ -9,7 +10,7 @@ export interface MetricsTimeRange { from?: Date | string; to?: Date | string; }
 export interface ModelMetrics { modelId: string; invocations: number; successfulInvocations: number; successRate: number; inputTokens: number; outputTokens: number; totalTokens: number; totalCost: number; avgLatency: number; share: number; }
 export interface CostTrendPoint { bucket: string; invocations: number; totalTokens: number; totalCost: number; }
 export interface AuditMetric { id: string; taskId: string; modelId?: string; approved: boolean; score?: number; createdAt: Date; }
-export interface MetricsSummary { totalInvocations: number; totalTasks: number; totalTokens: number; totalCost: number; successRate: number; avgLatency: number; auditCount: number; auditPassRate: number; }
+export interface MetricsSummary extends VerificationSummary { totalInvocations: number; totalTasks: number; totalTokens: number; totalCost: number; successRate: number; avgLatency: number; auditCount: number; auditPassRate: number; }
 export interface ObservabilityReport { generatedAt: Date; range: { from?: Date; to?: Date }; summary: MetricsSummary; models: ModelMetrics[]; costTrend: CostTrendPoint[]; recent: ModelInvocation[]; }
 export interface DashboardSnapshot { generatedAt: Date; range: { from?: Date; to?: Date }; summary: MetricsSummary; modelUsage: ModelMetrics[]; costTrend: CostTrendPoint[]; recent: ModelInvocation[]; }
 
@@ -21,10 +22,12 @@ interface TraceSpanRow { id: string; run_id: string; parent_span_id: string | nu
 /** SQLite-backed metrics collection and reporting. Writes are atomic and all read APIs accept an optional UTC time range. */
 export class ObservabilityEngine implements TraceStore {
   private readonly db: Database.Database;
+  private readonly verificationMetrics: VerificationMetrics;
   private readonly running = new Map<string, ModelInvocation>();
 
   constructor(dbPath = ':memory:') {
     this.db = new Database(dbPath);
+    this.verificationMetrics = new VerificationMetrics(this.db);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS invocations (
@@ -260,9 +263,11 @@ export class ObservabilityEngine implements TraceStore {
     const audits = this.db.prepare(`SELECT COUNT(*) AS auditCount, COALESCE(AVG(approved), 0) AS auditPassRate
       FROM audit_results${auditRange.where}`).get(...auditRange.params) as Pick<MetricsSummary, 'auditCount' | 'auditPassRate'>;
     return {
-      ...totals, ...audits,
+      ...totals, ...audits, ...this.verificationMetrics.summary(range),
     };
   }
+
+  recordVerification(input: VerificationMetric): void { this.verificationMetrics.record(input); }
 
   getModelTokenUsage(modelId: string, range: MetricsTimeRange = {}): number {
     const { where, params } = this.rangeQuery(range);

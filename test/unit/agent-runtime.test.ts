@@ -413,8 +413,10 @@ describe('AgentRuntime (Pi SDK)', () => {
       expect(created.toolCalls).toBe(3);
       expect(events.filter((event) => event.status !== 'running').map((event) => [event.toolName, event.status])).toEqual([['write', 'completed'], ['edit', 'completed'], ['run_command', 'completed']]);
       expect(requests[0].body.tools.map((tool: any) => tool.function.name)).toEqual(expect.arrayContaining(['write', 'edit', 'run_command', 'process_status', 'stop_process']));
-      const started = events.find((event) => event.toolName === 'run_command' && event.status === 'completed')?.details as ProjectProcessSnapshot;
-      expect(started).toMatchObject({ running: true, status: 'running', background: true, cwd: fs.realpathSync(cwd) });
+      const startup = events.find((event) => event.toolName === 'run_command' && event.status === 'completed')?.details as ProjectProcessSnapshot;
+      expect(startup).toMatchObject({ running: true, status: 'running', background: true, cwd: fs.realpathSync(cwd) });
+      await vi.waitFor(() => expect(manager.status(startup.processId, cwd).urls).toHaveLength(1), { timeout: 5_000, interval: 25 });
+      const started = manager.status(startup.processId, cwd);
       expect(started.urls).toHaveLength(1);
       const response = await fetch(started.urls[0]);
       expect(response.ok).toBe(true);

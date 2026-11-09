@@ -4,6 +4,7 @@ import type { RunTrace, SpanKind, TraceSpan, TraceModelSnapshot } from '../types
 const kindLabels: Record<SpanKind, string> = {
   run: '运行', route: '路由', context: '上下文', memory: '记忆', compact: '压缩',
   plan: '规划', model: '模型', tool: '工具', synthesis: '合成', audit: '审计',
+  verify: '项目验证', 'verify-command': '检查命令', 'verify-repair': '检查修复',
 };
 const statusClass: Record<string, string> = { success: 'ok', failed: 'bad', cancelled: 'warn', running: 'live' };
 const duration = (value?: number) => value === undefined ? '—' : value < 1000 ? Math.round(value) + 'ms' : (value / 1000).toFixed(1) + 's';

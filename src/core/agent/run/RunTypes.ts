@@ -15,7 +15,8 @@ import type { RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import type { RoutingSettings } from '@core/routing/RoutingSettings';
 import type { SessionStorage } from '@core/storage/SessionStorage';
 import type { TraceRecorder } from '@core/trace/TraceRecorder';
-import type { ToolEvent } from '../AgentRuntime';
+import type { VerificationEvent, VerificationOutcome, VerificationTurn, VerificationTurnDecision, VerifyMode } from '@core/verify/VerificationTypes';
+import type { AgentRunRequest, ToolEvent } from '../AgentRuntime';
 
 export interface RunRequest {
   sessionId?: string;
@@ -35,6 +36,7 @@ export interface RunRequest {
   contextMaxTokens?: number;
   history?: unknown;
   enableTools?: boolean;
+  verificationMode?: VerifyMode;
 }
 
 export type RunEmit = (channel: string, payload: unknown) => void;
@@ -55,6 +57,7 @@ export type InvokeStreamed = (
     onToolEvent?: (event: ToolEvent) => void;
     onUsage?: (usage: ModelUsage) => void;
     beforeModelRequest?: (request: ModelRequestEstimate) => { maxOutputTokens: number } | void;
+    afterTurn?: AgentRunRequest['afterTurn'];
   },
 ) => Promise<ModelResponse>;
 
@@ -78,4 +81,16 @@ export interface RunDependencies {
   invokeStreamed: InvokeStreamed;
   controller: AbortController;
   createProvider?: (model: ModelConfig) => ModelProvider;
+  createProjectVerification?: (input: {
+    projectRoot: string;
+    mode: 'quick' | 'full';
+    runId: string;
+    assertBudget(): void;
+    onEvent(event: VerificationEvent): void;
+  }) => {
+    afterTurn(turn: VerificationTurn, changedFiles: string[], signal?: AbortSignal): Promise<VerificationTurnDecision>;
+    resumeAfterReview(feedback: string): VerificationTurnDecision;
+    endReview(status: 'failed' | 'unverified' | 'budget_limit' | 'cancelled', summary: string, reason?: string): VerificationTurnDecision;
+    readonly outcome: VerificationOutcome | undefined;
+  };
 }
