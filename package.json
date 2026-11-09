@@ -40,6 +40,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "refractor": "^5.0.0",
+    "shell-quote": "1.12.0",
     "tree-sitter-wasms": "0.1.13",
     "typebox": "1.3.27",
     "uuid": "^13.0.0",
@@ -75,8 +76,27 @@
       "!node_modules/tree-sitter-wasms/out/**/*"
     ],
     "extraResources": [
-      { "from": "node_modules/@vscode", "to": "ripgrep", "filter": ["ripgrep-*/bin/rg", "ripgrep-*/bin/rg.exe"] },
-      { "from": "node_modules/tree-sitter-wasms/out", "to": "codebase-grammars", "filter": ["tree-sitter-typescript.wasm", "tree-sitter-tsx.wasm", "tree-sitter-javascript.wasm", "tree-sitter-python.wasm", "tree-sitter-go.wasm", "tree-sitter-rust.wasm", "tree-sitter-java.wasm"] }
+      {
+        "from": "node_modules/@vscode",
+        "to": "ripgrep",
+        "filter": [
+          "ripgrep-*/bin/rg",
+          "ripgrep-*/bin/rg.exe"
+        ]
+      },
+      {
+        "from": "node_modules/tree-sitter-wasms/out",
+        "to": "codebase-grammars",
+        "filter": [
+          "tree-sitter-typescript.wasm",
+          "tree-sitter-tsx.wasm",
+          "tree-sitter-javascript.wasm",
+          "tree-sitter-python.wasm",
+          "tree-sitter-go.wasm",
+          "tree-sitter-rust.wasm",
+          "tree-sitter-java.wasm"
+        ]
+      }
     ],
     "directories": {
       "buildResources": "public",

@@ -1,15 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { classifyCommand, type CommandCategory } from './CommandPolicy';
 
 export type ApprovalMode = 'ask' | 'auto' | 'full';
-export interface ApprovalDecision { decision: 'allow' | 'confirm' | 'deny'; reason: string }
+export interface ApprovalDecision { decision: 'allow' | 'confirm' | 'deny'; reason: string; category?: CommandCategory; outsideProject?: boolean }
 export interface ToolApprovalRequest { toolName: string; input: Record<string, unknown>; projectRoot?: string }
 
 export const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'process_status', 'process_list', 'remember', 'recall']);
 
-export function isDangerousCommand(command: string): boolean {
-  return /(^|[;&|]\s*)(sudo|su|shutdown|reboot|diskutil|mkfs|dd\s+if=|rm\s+-rf\s+\/|chmod\s+-R\s+777|:?\(\)\s*\{)/i.test(command)
-    || /(curl|wget)[^|]*\|\s*(ba|z|da)?sh/i.test(command);
+export function isDangerousCommand(command: string, projectRoot?: string): boolean {
+  const assessment = classifyCommand(command, projectRoot);
+  return ['escalate', 'opaque', 'network'].includes(assessment.category) || (assessment.category === 'write' && assessment.outsideProject);
 }
 
 export function loadApprovalMode(file: string): ApprovalMode {
@@ -32,16 +33,20 @@ export function savePreferences(preferencesPath: string, nextApprovalMode: Appro
 }
 
 /** The native host owns confirmation; this module only chooses the policy result. */
-export function evaluateCommandApproval(mode: ApprovalMode, command: string): ApprovalDecision {
-  if (mode === 'full' || (mode === 'auto' && !isDangerousCommand(command))) {
-    return { decision: 'allow', reason: '当前权限模式允许本次命令' };
-  }
-  return { decision: 'confirm', reason: '本次命令需要用户确认' };
+export function evaluateCommandApproval(mode: ApprovalMode, command: string, projectRoot?: string, cwd?: string): ApprovalDecision {
+  const assessment = classifyCommand(command, projectRoot, cwd);
+  const administrative = assessment.category === 'escalate';
+  const automatic = ['read', 'build'].includes(assessment.category) || (assessment.category === 'write' && !assessment.outsideProject);
+  const allow = !administrative && (mode === 'full' || (mode === 'auto' && automatic));
+  return {
+    decision: allow ? 'allow' : 'confirm', category: assessment.category, outsideProject: assessment.outsideProject,
+    reason: administrative ? '行政或系统级命令始终需要确认' : allow ? '当前权限模式允许本次命令' : '本次命令需要用户确认：' + assessment.reasons.join('；'),
+  };
 }
 
 export function evaluateToolApproval(mode: ApprovalMode, request: ToolApprovalRequest): ApprovalDecision {
   if (SAFE_TOOLS.has(request.toolName)) return { decision: 'allow', reason: '只读或安全工具' };
-  if (request.toolName === 'run_command') return evaluateCommandApproval(mode, String(request.input.command ?? ''));
+  if (request.toolName === 'run_command') return evaluateCommandApproval(mode, String(request.input.command ?? ''), request.projectRoot);
   return mode === 'ask'
     ? { decision: 'confirm', reason: '本次工具调用需要用户确认' }
     : { decision: 'allow', reason: '当前权限模式允许本次工具调用' };

@@ -39,7 +39,7 @@ describe('approval decisions', () => {
   it('retains native confirmation for an administrative command in auto mode', () => {
     expect(evaluateCommandApproval('auto', 'sudo --version').decision).toBe('confirm');
     expect(evaluateToolApproval('auto', { toolName: 'run_command', input: { command: 'sudo --version' } }).decision).toBe('confirm');
-    expect(evaluateCommandApproval('full', 'sudo --version').decision).toBe('allow');
+    expect(evaluateCommandApproval('full', 'sudo --version').decision).toBe('confirm');
   });
 });
 
