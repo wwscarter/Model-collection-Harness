@@ -7,10 +7,14 @@ import { shouldSubmitPromptKey } from '../promptKeyboard';
 import type { Session } from './sessionState';
 import { useSessionState } from './useSessionState';
 import type { SessionVerificationEvent, VerificationMode } from '../verificationTypes';
+import type { PlanningMode } from '@core/planning/PlanTypes';
+import { useSessionPlans } from './useSessionPlans';
 
 /** Owns one active run and folds its IPC events into the session snapshots. */
 export function useSessionRun() {
   const state = useSessionState();
+  const plans = useSessionPlans(state.currentSessionId ?? undefined);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>();
   const {
     sessionsRef, setSessions, deletedSessionIdsRef, saveSession, cancelRequestedRef,
     currentSession, isLoading, selectedSessionModelId, editingMessageId, setEditingMessageId,
@@ -197,6 +201,7 @@ export function useSessionRun() {
         stream: true,
         includeProjectContext,
         verificationMode,
+        planningMode,
         sessionRules: sessionRules.trim() ? sessionRules : undefined,
         pinnedModelId,
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
@@ -260,6 +265,7 @@ export function useSessionRun() {
     liveTrace, liveElapsedMs, execute, cancelRun, handleKeyDown,
     verificationMode, setVerificationMode, currentVerification: state.currentSessionId ? verificationEvents[state.currentSessionId] : undefined,
     sessionRules, setSessionRules,
+    ...plans, planningMode, setPlanningMode,
   };
 }
 

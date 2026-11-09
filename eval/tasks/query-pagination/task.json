@@ -1,0 +1,26 @@
+{
+  "id": "query-pagination",
+  "tags": [
+    "code",
+    "fix",
+    "collections"
+  ],
+  "prompt": "Implement paginate(items,page,size): 1-based pages of positive integer size; return [] when past the last page. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

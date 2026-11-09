@@ -12,6 +12,7 @@ import { WorkbenchWelcome } from './components/WorkbenchWelcome';
 import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
 import { VerificationStatus } from './components/VerificationStatus';
+import { PlanCard } from './components/PlanCard';
 import { Copy, Pencil, UsersRound } from 'lucide-react';
 import { useSessionRun } from './hooks/useSessionRun';
 import { useWorkspace } from './hooks/useWorkspace';
@@ -32,7 +33,7 @@ export default function App() {
     updateCurrent, startMessageEdit, editingMessageId, handleKeyDown, execute, cancelRun,
     cancelMessageEdit, selectedSessionModelId, enabledModelOptions, toggleMultiModel, selectSessionModel,
     verificationMode, setVerificationMode, currentVerification,
-    sessionRules, setSessionRules,
+    sessionRules, setSessionRules, sessionPlans, planError, decidePlan, planningMode, setPlanningMode,
   } = run;
   const {
     view, setView, openFiles, setOpenFiles, activeFilePath, setActiveFilePath, previewOpen,
@@ -55,7 +56,8 @@ export default function App() {
             const live = isCurrentRunning && index === currentSession.messages.length - 1;
             if (message.role === 'user') return <div key={message.id} className="user-message-row"><div className="user-message-bubble"><div className="user-message-text">{message.content}</div><div className="user-message-footer"><button className="message-icon-button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button><button className="message-icon-button" title="编辑消息" aria-label="编辑消息" disabled={isLoading} onClick={() => startMessageEdit(message)}><Pencil size={14} strokeWidth={1.8} /></button></div></div></div>;
             return <div key={message.id} className="assistant-turn">
-              {live && !message.content && !currentVerification && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
+              {live && !message.content && !currentVerification && !sessionPlans.some((plan) => plan.assistantMessageId === message.id) && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
+              {sessionPlans.filter((plan) => plan.assistantMessageId === message.id).map((plan) => <PlanCard key={plan.runId} record={plan} active={live} onDecision={decidePlan} />)}
               <article className="assistant-card">
                 <header className="assistant-card-header">
                   <span className="assistant-title"><i className={live ? 'live-dot pulse' : 'live-dot'} /><strong>{modelLabel(message.modelUsed) ?? (live ? '正在选择执行模型' : 'newAi')}</strong>{message.planningModelId && <small className="planning-attribution">规划：{modelLabel(message.planningModelId)}</small>}{formatDuration(live ? liveElapsedMs : message.durationMs) && <small className="assistant-duration">{formatDuration(live ? liveElapsedMs : message.durationMs)}</small>}</span>
@@ -68,6 +70,7 @@ export default function App() {
             </div>;
           }) : <WorkbenchWelcome projectName={projectList.find((project) => project.id === currentSession.projectId)?.name} onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => currentSession.projectId && projectList.some((project) => project.id === currentSession.projectId) ? setProjectDrawerOpen(true) : setShowNewProject(true)} />}
           <VerificationStatus event={currentVerification} />
+          {planError && <div className="runtime-notice" role="alert">计划历史读取失败：{planError}</div>}
           {currentSession.metrics?.stopReason === 'tool_limit' && <div className="runtime-notice" role="status" aria-label="任务未完成">本轮工具预算已用尽，任务尚未完成。以上为阶段性总结，可继续任务。</div>}
           {currentSession.metrics?.stopReason === 'length' && <div className="runtime-notice" role="status" aria-label="输出长度已达上限">本轮输出已达到模型长度上限，任务尚未完成。已保留收到的内容，可继续任务或在模型设置中调整最大输出 Token。</div>}
           {currentSession.metrics?.stopReason === 'budget_limit' && <div className="runtime-notice budget-limit-notice" role="status" aria-label="任务预算已用尽"><span>{(currentSession.metrics.budgetLimit?.message || '本轮已达到预估费用或运行时间上限').replace(/[。.!！?？]+$/, '')}。任务尚未完成，{currentSession.output ? '已保留阶段性输出。' : '当前尚无可展示的输出。'}可调整预算后继续。</span>{currentSession.metrics.budgetLimit && <small>本轮预估费用 {'$'}{currentSession.metrics.budgetLimit.estimatedCost.toFixed(4)} · 费用上限 {'$'}{currentSession.metrics.budgetLimit.maxCostUsd.toFixed(2)}</small>}<button type="button" className="button outline small" onClick={() => openSettings('runtime')}>调整运行预算</button><small>设置 → 运行与权限 → 任务路由与模型分工</small></div>}
@@ -80,6 +83,7 @@ export default function App() {
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onCancelEdit={cancelMessageEdit}
         verificationMode={verificationMode} onVerificationModeChange={setVerificationMode}
+        planningMode={planningMode} onPlanningModeChange={setPlanningMode}
         sessionRules={sessionRules} onSessionRulesChange={setSessionRules}
         multiModel={currentSession.multiModel !== false}
         pinnedModelId={currentSession.multiModel === false ? selectedSessionModelId : undefined}

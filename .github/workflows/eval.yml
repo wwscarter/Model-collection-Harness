@@ -1,0 +1,60 @@
+name: Model evaluation (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Provider model identifier
+        required: true
+        type: string
+      provider:
+        description: Model protocol
+        required: true
+        default: custom
+        type: choice
+        options: [custom, openai, deepseek, anthropic, google]
+      base_url:
+        description: API base URL (required for custom)
+        required: false
+        type: string
+      tags:
+        description: Comma-separated tags
+        default: code
+        type: string
+      repeat:
+        description: Runs per task (1 to 20)
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      - run: npm run build:cli
+      - run: node dist/cli/newai.mjs eval --tags "$EVAL_TAGS" --repeat "$EVAL_REPEAT" --json
+        env:
+          NEWAI_EVAL_MODEL_ID: ${{ inputs.model }}
+          NEWAI_EVAL_PROVIDER: ${{ inputs.provider }}
+          NEWAI_EVAL_BASE_URL: ${{ inputs.base_url }}
+          NEWAI_EVAL_API_KEY: ${{ secrets.NEWAI_EVAL_API_KEY }}
+          NEWAI_EVAL_INPUT_COST_PER_1K: ${{ vars.NEWAI_EVAL_INPUT_COST_PER_1K }}
+          NEWAI_EVAL_OUTPUT_COST_PER_1K: ${{ vars.NEWAI_EVAL_OUTPUT_COST_PER_1K }}
+          EVAL_TAGS: ${{ inputs.tags }}
+          EVAL_REPEAT: ${{ inputs.repeat }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: model-evaluation
+          path: eval/results/

@@ -1,0 +1,12 @@
+{
+  "calls": [
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "discount",
+        "path": "."
+      }
+    }
+  ],
+  "answer": "Synthetic lookup fixture: discountTotal is defined in src/pricing.mjs."
+}

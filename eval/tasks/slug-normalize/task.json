@@ -1,0 +1,26 @@
+{
+  "id": "slug-normalize",
+  "tags": [
+    "code",
+    "fix",
+    "text"
+  ],
+  "prompt": "Implement slug(text): lowercase ASCII words, trim whitespace, collapse any non-alphanumeric run into a single hyphen, and trim outer hyphens. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

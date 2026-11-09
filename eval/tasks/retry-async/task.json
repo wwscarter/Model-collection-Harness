@@ -1,0 +1,26 @@
+{
+  "id": "retry-async",
+  "tags": [
+    "code",
+    "fix",
+    "async"
+  ],
+  "prompt": "Implement retry(fn,attempts): call the async function until success; at most attempts calls; rethrow the last error. attempts is a positive integer. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

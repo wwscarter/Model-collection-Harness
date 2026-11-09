@@ -6,6 +6,10 @@ import type { SandboxApi } from './sandboxTypes';
 import type { VerificationMode } from './verificationTypes';
 import type { RulesApi } from './rulesTypes';
 import type { HooksApi } from './hooksTypes';
+import type { SkillsApi } from './skillsTypes';
+import type { McpApi } from './mcpTypes';
+import type { ToolTrustApi } from './toolTrustTypes';
+import type { PlanDecision, PlanningMode, RunPlan } from '@core/planning/PlanTypes';
 
 export interface ModelCapability { type: string; score: number; }
 
@@ -225,7 +229,7 @@ export interface AmdApi {
   updateModel: (id: string, updates: unknown) => Promise<{ success: boolean; model: ModelConfig }>;
   deleteModel: (id: string) => Promise<{ success: boolean }>;
   testModel: (id: string) => Promise<unknown>;
-  executeTask: (input: { sessionId: string; prompt: string; taskType?: string; stream?: boolean; collaboratorModelIds?: string[]; assistantMessageId?: string; verificationMode?: VerificationMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number }) => Promise<ExecutionResult>;
+  executeTask: (input: { sessionId: string; prompt: string; taskType?: string; stream?: boolean; collaboratorModelIds?: string[]; assistantMessageId?: string; verificationMode?: VerificationMode; planningMode?: PlanningMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number }) => Promise<ExecutionResult>;
   getTaskMetrics: (sessionId?: string) => Promise<unknown>;
   getRecentInvocations: (limit?: number) => Promise<unknown>;
   getDashboard: (options?: { range?: '24h' | '7d' | '30d' }) => Promise<DashboardSnapshot>;
@@ -279,21 +283,26 @@ export interface AmdApi {
     testConnection: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string; modelId: string; temperature?: number; enableThinking?: boolean; contextWindow?: number }) => Promise<{ success: boolean; latency?: number; error?: string; demo?: boolean }>;
   };
   sessions: {
+    plans?: (sessionId: string) => Promise<RunPlan[]>;
+    planDecision?: (decision: PlanDecision) => Promise<RunPlan>;
     list: () => Promise<Array<Record<string, unknown>>>;
     get: (id: string) => Promise<Record<string, unknown> | undefined>;
     save: (session: unknown) => Promise<Record<string, unknown>>;
     delete: (id: string) => Promise<{ success: boolean }>;
-    execute: (input: { sessionId: string; projectId?: string | null; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; pinnedModelId?: string; verificationMode?: VerificationMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
+    execute: (input: { sessionId: string; projectId?: string | null; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; pinnedModelId?: string; verificationMode?: VerificationMode; planningMode?: PlanningMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
     cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
   agent: {
+    skills: SkillsApi;
+    mcp: McpApi;
+    toolTrust: ToolTrustApi;
     hooks: HooksApi;
     rules: RulesApi;
     describe: () => Promise<AgentResourceSummary>;
     searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;
     setSearchProvider: (id: string) => Promise<Array<{ id: string; label: string; active: boolean }>>;
   };
-  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:verification' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
+  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:verification' | 'session:plan' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
 }
 
 declare global {

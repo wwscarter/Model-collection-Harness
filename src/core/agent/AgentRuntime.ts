@@ -84,7 +84,7 @@ export class AgentRuntime {
     } as never);
   }
 
-  private extensionFactories(projectRoot?: string): InlineExtension[] {
+  private extensionFactories(projectRoot?: string, allowMcp = true): InlineExtension[] {
     const gate = this.options.toolGate;
     const factories: InlineExtension[] = [];
     if (gate) {
@@ -99,11 +99,15 @@ export class AgentRuntime {
         },
       });
     }
-    // MCP servers (agentDir/mcp.json) reconnect at every session start, so only load the extension
-    // when servers are configured. MCP tools default to `codemode` exposure, which needs codemode.
-    if (this.options.enableMcp && fs.existsSync(path.join(this.options.agentDir, 'mcp.json'))) {
+    // Re-read the app configuration for each session. Never use Pi's project
+    // config discovery or its default subprocess transport.
+    if (allowMcp && this.options.enableMcp && this.options.mcpConfig) {
       factories.push(
-        { name: 'mcp', factory: createMcpExtension({ logPath: path.join(this.options.agentDir, 'mcp.log'), startupWaitMs: 8000 }) },
+        { name: 'mcp', factory: createMcpExtension({
+          logPath: path.join(this.options.agentDir, 'mcp.log'), startupWaitMs: 8000,
+          loadConfig: () => this.options.mcpConfig!.loadConfig(),
+          createTransport: this.options.mcpTransport ?? (() => { throw new Error('MCP 受控传输服务不可用'); }),
+        }) },
         { name: 'codemode', factory: createCodemodeExtension({ models: false }) },
         { name: 'tool-search', factory: createToolSearchExtension() },
       );
@@ -111,7 +115,7 @@ export class AgentRuntime {
     return [...factories, ...(this.options.extensions ?? [])];
   }
 
-  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string, projectRoot?: string, runExtensions: InlineExtension[] = []) {
+  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string, projectRoot?: string, runExtensions: InlineExtension[] = [], allowMcp = false) {
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: this.options.agentDir,
@@ -123,9 +127,14 @@ export class AgentRuntime {
       noThemes: true,
       noExtensions: !this.options.enableFileExtensions,
       disabledBuiltinExtensions: ['llama.cpp'],
-      extensionFactories: [...this.extensionFactories(projectRoot), ...runExtensions],
+      extensionFactories: [...this.extensionFactories(projectRoot, allowMcp), ...runExtensions],
       skillsOverride: (base) => ({
-        skills: base.skills.filter((skill) => skill.filePath.startsWith(this.options.agentDir)),
+        skills: base.skills.filter((skill) => {
+          try {
+            const relative = path.relative(fs.realpathSync(this.options.agentDir), fs.realpathSync(skill.filePath));
+            return Boolean(relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) && (this.options.skillManager?.isEnabled(skill.filePath) ?? true);
+          } catch { return false; }
+        }),
         diagnostics: base.diagnostics,
       }),
     });
@@ -185,6 +194,7 @@ export class AgentRuntime {
     const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
     const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
+    if (enableTools && request.projectAccess !== 'read' && request.planTool) rawTools.push(request.planTool);
     const toolRuntime = new ToolRuntime({
       cwd,
       maxCalls: this.options.maxToolCalls,
@@ -194,7 +204,7 @@ export class AgentRuntime {
     const promptInput = { now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot };
     const rules = prepareRulesPrompt(request, promptInput);
     const hooks = prepareHooks(request);
-    const resourceLoader = await this.resourceLoader(cwd, settingsManager, buildSystemPrompt(promptInput), request.projectRoot, [...(rules ? [rules.extension] : []), ...(hooks ? [hooks.extension] : [])]);
+    const resourceLoader = await this.resourceLoader(cwd, settingsManager, buildSystemPrompt(promptInput), request.projectRoot, [...(rules ? [rules.extension] : []), ...(hooks ? [hooks.extension] : [])], enableTools);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
     const { session } = await createAgentSession({
       cwd,

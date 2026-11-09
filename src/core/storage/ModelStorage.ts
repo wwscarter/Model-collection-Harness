@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import { decryptAPIKey, encryptAPIKey } from "../../utils/crypto";
+import { decryptAPIKey, encryptAPIKey, type CredentialCodec } from "../../utils/crypto";
 import { ModelConfig, cloneModelConfig } from "../models/ModelConfig";
 
 export interface ModelStore {
@@ -47,12 +47,14 @@ interface CredentialRow {
 export class ModelStorage implements ModelStore {
   private readonly db: Database.Database;
 
-  constructor(dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), "data", "amd.db")) {
+  constructor(dbPath = process.env.DATABASE_PATH || path.resolve(process.cwd(), "data", "amd.db"), private readonly codec: CredentialCodec = { encrypt: encryptAPIKey, decrypt: decryptAPIKey }) {
     if (dbPath !== ":memory:") {
       const directory = path.dirname(dbPath);
       fs.mkdirSync(directory, { recursive: true });
     }
     this.db = new Database(dbPath);
+    this.db.pragma("busy_timeout = 5000");
+    this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.initSchema();
   }
@@ -213,7 +215,7 @@ export class ModelStorage implements ModelStore {
           `)
           .run({
             model_id: model.id,
-            api_key: encryptAPIKey(model.apiKey),
+            api_key: this.codec.encrypt(model.apiKey),
             base_url: model.baseURL ?? null,
           });
       } else if (!model.credentialError) {
@@ -246,7 +248,7 @@ export class ModelStorage implements ModelStore {
     let credentialError: string | undefined;
     if (credentials) {
       try {
-        apiKey = decryptAPIKey(credentials.api_key);
+        apiKey = this.codec.decrypt(credentials.api_key);
       } catch {
         credentialError = "API Key 解密失败，请在模型设置中重新输入";
       }

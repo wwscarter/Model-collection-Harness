@@ -6,14 +6,17 @@ import { buildOrchestratorPrompt, parseOrchestratorPlan, selectOrchestratorModel
 import { BudgetExceededError } from '@core/routing/RunBudget';
 import type { RunContext } from './RunContext';
 import { costOf } from './runHelpers';
+import { presentPlan } from './presentPlan';
 
 /** Apply optional orchestration suggestions to the routed task. */
 export async function planStage(ctx: RunContext): Promise<void> {
   const plannerModels = ctx.deps.models.getAllModels().filter((candidate) => candidate.enabled && hasUsableCredentials(candidate) && ctx.deps.quota.isAvailable(candidate));
   const explicitSingle = Boolean(ctx.decision.ruleId && ctx.decision.strategy === 'single');
-  const needsPlanning = !ctx.pinned && !explicitSingle && ctx.deps.routingSettings?.planning.mode !== 'off'
-    && (ctx.decision.complexity === 'high' || ['plan', 'plan+verify', 'parallel', 'escalate'].includes(ctx.decision.strategy ?? 'single'));
-  const planner = needsPlanning ? selectOrchestratorModel(plannerModels, ctx.deps.routingSettings?.planning.modelId) : undefined;
+  const mode = ctx.request.planningMode ?? ctx.deps.routingSettings?.planning.executionMode ?? 'auto';
+  const needsPlanning = mode !== 'auto' || (!ctx.pinned && !explicitSingle && ctx.deps.routingSettings?.planning.mode !== 'off'
+    && (ctx.decision.complexity === 'high' || ['plan', 'plan+verify', 'parallel', 'escalate'].includes(ctx.decision.strategy ?? 'single')));
+  const configuredPlanner = ctx.deps.routingSettings?.planning.modelId;
+  const planner = needsPlanning ? selectOrchestratorModel(plannerModels, configuredPlanner) ?? (mode !== 'auto' && !configuredPlanner ? ctx.model : undefined) : undefined;
   if (planner) {
     const planSpan = ctx.trace.child('plan', 'planning', { modelId: planner.id, modelSnapshot: snapshotModel(planner), role: 'planner', executorModelId: ctx.model.id });
     const planModelSpan = planSpan.child('model', 'planning-model', { modelId: planner.id, modelSnapshot: snapshotModel(planner), role: 'planner' });
@@ -67,4 +70,5 @@ export async function planStage(ctx: RunContext): Promise<void> {
       // An unavailable or malformed optional plan leaves normal routing intact.
     }
   }
+  await presentPlan(ctx);
 }

@@ -197,7 +197,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
         <div className="titlebar-right"><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
       <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button><button className={tab === 'extensions' ? 'active' : ''} role="tab" aria-selected={tab === 'extensions'} onClick={() => setTab('extensions')}>扩展</button></div>
-      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : tab === 'extensions' ? <ExtensionsSettings rules={window.amd?.agent?.rules} hooks={window.amd?.agent?.hooks} /> : <div className="settings-body">
+      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : tab === 'extensions' ? <ExtensionsSettings rules={window.amd?.agent?.rules} hooks={window.amd?.agent?.hooks} skills={window.amd?.agent?.skills} mcp={window.amd?.agent?.mcp} toolTrust={window.amd?.agent?.toolTrust} /> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">
             <div className="endpoint-list-title"><strong>端点与路由</strong><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>

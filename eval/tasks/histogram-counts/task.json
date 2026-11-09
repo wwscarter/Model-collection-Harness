@@ -1,0 +1,26 @@
+{
+  "id": "histogram-counts",
+  "tags": [
+    "code",
+    "feature",
+    "collections"
+  ],
+  "prompt": "Implement histogram(values): return a Map counting every input string. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

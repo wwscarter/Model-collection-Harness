@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   appEvents: new Map<string, (...args: any[]) => any>(),
   userData: '',
   showOpenDialog: vi.fn(),
+  openPath: vi.fn(async () => ''),
   executeRun: vi.fn(async (_request: unknown, _deps: unknown, _emit: unknown) => ({ output: 'done' })),
 }));
 
@@ -38,6 +39,7 @@ vi.mock('electron', () => ({
   },
   session: { defaultSession: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } },
   dialog: { showOpenDialog: state.showOpenDialog, showMessageBox: vi.fn(), showErrorBox: vi.fn() },
+  shell: { openPath: state.openPath },
 }));
 
 vi.mock('../../src/core/agent/RunCoordinator', () => ({ executeRun: state.executeRun }));
@@ -68,8 +70,8 @@ beforeAll(async () => {
 
 beforeEach(() => { state.executeRun.mockClear(); });
 
-afterAll(() => {
-  state.appEvents.get('before-quit')?.();
+afterAll(async () => {
+  await state.appEvents.get('before-quit')?.();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -78,6 +80,23 @@ function saveSession(id: string, projectId?: string) {
 }
 
 describe('main process session projects', () => {
+  it('routes selected skill previews, confirmation, enabled state and tool trust through startup IPC', async () => {
+    const source = path.join(directory, 'ordinary-guide');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: ordinary-guide\ndescription: Explain project conventions.\n---\nUse clear task summaries.');
+    state.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
+    const preview = await invoke('agent:skills:preview-import');
+    expect(preview).toMatchObject({ token: expect.any(String), preview: { name: 'ordinary-guide', fileCount: 1, content: expect.stringContaining('Use clear task summaries.') } });
+    expect(await invoke('agent:skills:confirm-import', preview.token)).toMatchObject({ name: 'ordinary-guide' });
+    expect((await invoke('agent:skills:list')).skills).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'ordinary-guide', enabled: true })]));
+    await invoke('agent:skills:set-enabled', 'ordinary-guide', false);
+    expect((await invoke('agent:skills:list')).skills).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'ordinary-guide', enabled: false })]));
+    expect(await invoke('agent:skills:open-directory')).toEqual({ success: true });
+    expect(state.openPath).toHaveBeenCalledWith(path.join(fs.realpathSync(state.userData), 'agent', 'skills'));
+    expect(await invoke('agent:tool-trust:set', 'read', 'ask')).toMatchObject({ read: 'ask' });
+    expect((await invoke('agent:tool-trust:get')).tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'read', trust: 'ask', source: 'builtin' })]));
+  });
+
   it('routes Hooks configuration and current project confirmation through the startup IPC registration', async () => {
     const config = { version: 1, hooks: [{ id: 'lint', event: 'run_start', run: 'npm run lint' }] };
     const projectFile = path.join(projectA.root, '.newai', 'hooks.json');

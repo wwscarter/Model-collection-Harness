@@ -1,0 +1,25 @@
+{
+  "id": "config-display",
+  "tags": [
+    "code",
+    "config"
+  ],
+  "prompt": "Update settings.json to use dark theme and fontSize 16. Preserve recentLimit and do not edit check.mjs.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 10
+    }
+  ],
+  "timeoutMs": 300000
+}

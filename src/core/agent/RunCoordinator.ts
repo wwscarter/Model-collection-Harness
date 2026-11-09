@@ -18,30 +18,36 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
   const ctx = createRunContext(request, deps, emit);
   let output: Record<string, unknown>;
   try {
-    await startHooks(ctx);
     await contextStage(ctx);
     await routeStage(ctx);
     await planStage(ctx);
-    await compactStage(ctx);
-    try {
-      await parallelStage(ctx);
-      await executeStage(ctx);
-      await verifyStage(ctx);
-      output = await finalizeStage(ctx);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.executionSpan?.end({ status: message === '任务已取消' ? 'cancelled' : 'failed', error: message });
-      ctx.synthesisSpan?.end({ status: 'failed', error: message });
-      // Failures are learning signals too; user cancellations are not model failures.
-      if (!ctx.controller.signal.aborted && !(error instanceof BudgetExceededError)) {
-        ctx.recordGrowth({ modelId: ctx.executionModel.id, taskType: ctx.decision.taskType, success: false, completed: false, actualLatency: ctx.metrics?.latency });
+    if (ctx.planOnlyOutput) {
+      output = ctx.planOnlyOutput;
+    } else {
+      await startHooks(ctx);
+      await compactStage(ctx);
+      try {
+        await parallelStage(ctx);
+        await executeStage(ctx);
+        await verifyStage(ctx);
+        output = await finalizeStage(ctx);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.executionSpan?.end({ status: message === '任务已取消' ? 'cancelled' : 'failed', error: message });
+        ctx.synthesisSpan?.end({ status: 'failed', error: message });
+        // Failures are learning signals too; user cancellations are not model failures.
+        if (!ctx.controller.signal.aborted && !(error instanceof BudgetExceededError)) {
+          ctx.recordGrowth({ modelId: ctx.executionModel.id, taskType: ctx.decision.taskType, success: false, completed: false, actualLatency: ctx.metrics?.latency });
+        }
+        throw error;
       }
-      throw error;
     }
+    if (ctx.runPlan && !ctx.planOnlyOutput) ctx.plans.status(ctx.runId, ctx.traceStatus === 'success' ? 'completed' : 'failed', (plan) => { ctx.runPlan = plan; ctx.emit('session:plan', plan); });
   } catch (error) {
     const failure = ctx.controller.signal.aborted ? ctx.cancellationError() : error;
     ctx.traceStatus = failure instanceof Error && failure.message === '任务已取消' ? 'cancelled' : 'failed';
     ctx.traceError = failure instanceof Error ? failure.message : String(failure);
+    if (ctx.runPlan && ctx.runPlan.status !== 'cancelled') ctx.plans.status(ctx.runId, ctx.traceStatus === 'cancelled' ? 'cancelled' : 'failed', (plan) => ctx.emit('session:plan', plan));
     throw failure;
   } finally {
     await endHooks(ctx);

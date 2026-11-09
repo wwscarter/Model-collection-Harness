@@ -25,6 +25,9 @@ import { validateSessionRules } from '../sessionRules';
 import { costOf, estimateTokens, sanitizeHistory } from './runHelpers';
 import type { InvokeStreamed, RunDependencies, RunEmit, RunRequest } from './RunTypes';
 import type { HookRunner } from '@core/hooks/HookRunner';
+import { PlanController } from '@core/planning/PlanController';
+import { planningMode, type RunPlan } from '@core/planning/PlanTypes';
+import { createPlanTool } from '@core/planning/planTool';
 
 export interface RunContext {
   request: RunRequest;
@@ -59,6 +62,7 @@ export interface RunContext {
   noteBudgetLimit(message: string): void;
   deadline: AbortController;
   deadlineTimer: ReturnType<typeof setTimeout>;
+  pauseDeadline(): () => void;
   controller: { signal: AbortSignal };
   cancellationError(): Error;
   projectRoot?: string;
@@ -73,6 +77,9 @@ export interface RunContext {
   model: ModelConfig;
   orchestration?: OrchestrationPlan;
   planningModelId?: string;
+  plans: PlanController;
+  runPlan?: RunPlan;
+  planOnlyOutput?: Record<string, unknown>;
   executionPlan: ReturnType<typeof buildExecutionPlan>;
   taskParts: string[];
   buildTaskPrompt(parts: string[]): string;
@@ -133,6 +140,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
         ...options,
         sessionRules: ctx.request.sessionRules,
         hookRunner: ctx.hookRunner,
+        planTool: ctx.runPlan && options?.projectAccess !== 'read' ? createPlanTool(ctx.plans, ctx.runId, (plan) => { ctx.runPlan = plan; ctx.emit('session:plan', plan); }) : undefined,
         onRulesLoaded: (metadata) => {
           const rules = metadata.rules.map(({ source, path, hash }) => ({ source, path, hash }));
           ctx.trace.child('context', 'rules.inject', { modelId: model.id, rules, truncated: metadata.truncated }).end();
@@ -166,7 +174,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     }
   };
   ctx.createProvider = (model: ModelConfig): ModelProvider => {
-    const provider = (ctx.deps.createProvider ?? createProviderImpl)(model);
+    const provider = ctx.deps.createProvider ? ctx.deps.createProvider(model) : createProviderImpl(model, { legacyProviders: ctx.deps.routingSettings?.legacyProviders });
     return {
       modelId: provider.modelId, invoke: async (prompt, options) => {
         const budget = modelContextBudget([model], options?.maxTokens ?? model.maxTokens);
@@ -199,6 +207,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   if (ctx.request.prompt.length > 200000)
     throw new Error('任务描述过长');
   validateSessionRules(ctx.request.sessionRules);
+  if (ctx.request.planningMode !== undefined) planningMode(ctx.request.planningMode);
   if (ctx.request.taskId !== undefined && typeof ctx.request.taskId !== 'string')
     throw new Error('任务 ID 无效');
   if (ctx.request.sessionId !== undefined && typeof ctx.request.sessionId !== 'string')
@@ -280,11 +289,23 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   ctx.budgetLimits = ctx.deps.routingSettings?.budget ?? DEFAULT_ROUTING_SETTINGS.budget!;
   const { maxDurationMs } = ctx.budgetLimits;
   ctx.runBudget = new RunBudget({ maxCost: ctx.budgetLimits.maxCostUsd, maxDurationMs });
+  ctx.plans = ctx.deps.plans ?? new PlanController();
   ctx.noteBudgetLimit = (message: string) => { ctx.budgetLimit = { code: 'BUDGET_EXCEEDED', message, estimatedCost: ctx.totalCost, maxCostUsd: ctx.budgetLimits.maxCostUsd }; };
   ctx.trace.setAttributes({ budget: { ...ctx.budgetLimits, pricingBasis: 'configured-token-rates' } });
   ctx.deadline = new AbortController();
   ctx.deadlineTimer = setTimeout(() => ctx.deadline.abort(new BudgetExceededError(`本轮运行已超过 ${Math.round(maxDurationMs / 1000)} 秒预算`)), maxDurationMs);
   ctx.deadlineTimer.unref?.();
+  ctx.pauseDeadline = () => {
+    ctx.runBudget.assertAvailable();
+    clearTimeout(ctx.deadlineTimer); ctx.runBudget.pause();
+    let resumed = false;
+    return () => {
+      if (resumed) return; resumed = true; ctx.runBudget.resume();
+      const remaining = Math.max(1, maxDurationMs - ctx.runBudget.snapshot().elapsedMs);
+      ctx.deadlineTimer = setTimeout(() => ctx.deadline.abort(new BudgetExceededError('本轮运行已超过时间预算')), remaining);
+      ctx.deadlineTimer.unref?.();
+    };
+  };
   ctx.controller = { signal: AbortSignal.any([ctx.deps.controller.signal, ctx.deadline.signal]) };
   ctx.cancellationError = () => ctx.deps.controller.signal.aborted
     ? new Error('任务已取消')

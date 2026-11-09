@@ -27,8 +27,9 @@ export class ObservabilityEngine implements TraceStore {
 
   constructor(dbPath = ':memory:') {
     this.db = new Database(dbPath);
-    this.verificationMetrics = new VerificationMetrics(this.db);
+    this.db.pragma('busy_timeout = 5000');
     this.db.pragma('journal_mode = WAL');
+    this.verificationMetrics = new VerificationMetrics(this.db);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS invocations (
         id TEXT PRIMARY KEY,

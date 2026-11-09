@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:trace', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:plan', 'session:trace', 'tty:data', 'execution:data']);
 type Listener = (payload: unknown) => void;
 type IpcListener = (_event: IpcRendererEvent, payload: unknown) => void;
 const subscriptions = new Map<string, Map<Listener, Set<IpcListener>>>();
@@ -118,6 +118,8 @@ const amdApi = {
     testConnection: (input: unknown) => ipcRenderer.invoke('model:test-draft', input),
   },
   sessions: {
+    plans: (sessionId: string) => ipcRenderer.invoke('session:plans-list', sessionId),
+    planDecision: (decision: unknown) => ipcRenderer.invoke('session:plan-decision', decision),
     list: () => ipcRenderer.invoke('session:list'),
     get: (id: string) => ipcRenderer.invoke('session:get', id),
     save: (session: unknown) => ipcRenderer.invoke('session:save', session),
@@ -126,6 +128,24 @@ const amdApi = {
     cancel: (taskId: string) => ipcRenderer.invoke('session:cancel', taskId),
   },
   agent: {
+    skills: {
+      list: () => ipcRenderer.invoke('agent:skills:list'),
+      openDirectory: () => ipcRenderer.invoke('agent:skills:open-directory'),
+      previewImport: () => ipcRenderer.invoke('agent:skills:preview-import'),
+      confirmImport: (token: string) => ipcRenderer.invoke('agent:skills:confirm-import', token),
+      setEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('agent:skills:set-enabled', id, enabled),
+    },
+    mcp: {
+      list: () => ipcRenderer.invoke('agent:mcp:list'),
+      save: (name: string, config: unknown) => ipcRenderer.invoke('agent:mcp:save', name, config),
+      remove: (name: string) => ipcRenderer.invoke('agent:mcp:remove', name),
+      test: (name: string) => ipcRenderer.invoke('agent:mcp:test', name),
+      log: () => ipcRenderer.invoke('agent:mcp:log'),
+    },
+    toolTrust: {
+      get: () => ipcRenderer.invoke('agent:tool-trust:get'),
+      set: (name: string, trust: string) => ipcRenderer.invoke('agent:tool-trust:set', name, trust),
+    },
     hooks: {
       list: () => ipcRenderer.invoke('agent:hooks:list'),
       saveGlobal: (input: unknown) => ipcRenderer.invoke('agent:hooks:save', input),

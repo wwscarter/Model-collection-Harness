@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
-import { createProvider, parseSSE, type ModelStreamChunk } from '../../src/core/providers/ModelProvider';
+import { createProvider as createConfiguredProvider, parseSSE, type ModelStreamChunk } from '../../src/core/providers/ModelProvider';
 import { testModelConnection } from '../../src/core/providers/ModelConnection';
 
 const model = (provider: ModelConfig['provider'] = 'custom', overrides: Partial<ModelConfig> = {}): ModelConfig => ({
@@ -14,7 +14,9 @@ const sse = (events: unknown[]) => new Response(events.map((event) => 'data: ' +
 const collect = async (stream: AsyncIterable<ModelStreamChunk>) => { const chunks: ModelStreamChunk[] = []; for await (const chunk of stream) chunks.push(chunk); return chunks; };
 afterEach(() => vi.unstubAllGlobals());
 
-describe('provider response handling', () => {
+const createProvider = (config: ModelConfig) => createConfiguredProvider(config, { legacyProviders: true });
+
+describe('legacy provider compatibility responses', () => {
   it.each(providers)('does not accept an empty successful %s response', async (provider) => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ choices: [], content: [], candidates: [] })));
     await expect(createProvider(model(provider)).invoke('hello')).rejects.toThrow('empty text response');
@@ -27,7 +29,7 @@ describe('provider response handling', () => {
 
   it('does not report a blank gateway response as a successful connection test', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({})));
-    const result = await testModelConnection({ provider: 'custom', baseURL: 'https://provider.example/v1', modelId: 'synthetic' }, { getModel: () => undefined });
+    const result = await testModelConnection({ provider: 'custom', baseURL: 'https://provider.example/v1', modelId: 'synthetic' }, { getModel: () => undefined }, { legacyProviders: true });
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('empty text response') });
   });
 

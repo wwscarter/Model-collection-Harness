@@ -39,7 +39,7 @@ describe('custom OpenAI-compatible provider', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await createProvider(customModel()).invoke('ping');
+    const result = await createProvider(customModel(), { legacyProviders: true }).invoke('ping');
 
     expect(result.content).toBe('connected');
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8080/v1/chat/completions', expect.objectContaining({

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, X } from 'lucide-react';
 import type { ModelConfig, ProjectInfo, ProjectRecord } from '../types';
 import type { VerificationMode } from '../verificationTypes';
+import type { PlanningMode } from '@core/planning/PlanTypes';
 
 interface AgentInputBarProps {
   value: string;
@@ -22,6 +23,8 @@ interface AgentInputBarProps {
   approvalMode: 'ask' | 'auto' | 'full';
   verificationMode: VerificationMode;
   onVerificationModeChange: (mode: VerificationMode) => void;
+  planningMode?: PlanningMode;
+  onPlanningModeChange?: (mode: PlanningMode | undefined) => void;
   sessionRules: string;
   onSessionRulesChange: (rules: string) => void;
   onOpenSettings: () => void;
@@ -41,7 +44,7 @@ const QUICK_COMMANDS = [
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, sessionRules, onSessionRulesChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, planningMode, onPlanningModeChange, sessionRules, onSessionRulesChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -75,6 +78,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
         {project && (project.git ? <span className="composer-git-state" title={project.git.branch || project.git.head || 'Git'}><GitBranch size={12} strokeWidth={1.7} />{project.git.branch || 'Git'}</span>
           : <button className="composer-git-create" disabled={gitBusy} onClick={onInitGit}>{gitBusy ? <LoaderCircle size={12} className="spinning" /> : null}{gitBusy ? '创建中…' : '创建 Git 存储库'}</button>)}
         <label className="composer-git-state">验证 <select className="composer-git-create" aria-label="项目验证模式" title="快速检查 lint 与类型；完整检查再运行测试" value={verificationMode} disabled={busy} onChange={(event) => onVerificationModeChange(event.target.value as VerificationMode)}><option value="off">关闭</option><option value="quick">快速</option><option value="full">完整</option></select></label>
+        <label className="composer-git-state">规划 <select className="composer-git-create" aria-label="本轮规划模式" value={planningMode ?? 'default'} disabled={busy} onChange={(event) => onPlanningModeChange?.(event.target.value === 'default' ? undefined : event.target.value as PlanningMode)}><option value="default">使用设置</option><option value="auto">自动执行</option><option value="confirm">确认后执行</option><option value="only">仅规划</option></select></label>
       </div>
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
       <details><summary className="composer-git-create">本会话规则{sessionRules ? ' · ' + sessionRules.length + ' 字符' : ''}</summary><label className="field"><textarea className="input mono" aria-label="本会话规则" rows={4} maxLength={8000} style={{ height: 'auto', maxHeight: 180, resize: 'vertical' }} value={sessionRules} disabled={busy} placeholder="例如：用中文解释，并概述相关测试结果。" onChange={(event) => onSessionRulesChange(event.target.value)} /></label><p className="runtime-hint">{sessionRules.length}/8000 字符 · 仅用于当前会话的后续任务，关闭应用后清除，不保存到会话历史。</p></details>

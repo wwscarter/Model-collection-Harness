@@ -20,6 +20,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
     sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded,
     hookRunner: options.hookRunner,
+    planTool: options.planTool,
     onToolEvent: (event) => {
       if (['write', 'edit'].includes(event.toolName)) {
         const file = (event.args as { path?: unknown } | undefined)?.path;
@@ -41,6 +42,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
 }
 
 export function createRunDependencies(ctx: MainContext, controller: AbortController, projectContext: RunDependencies['projectContext']): RunDependencies {
+  if (ctx.core) return ctx.core.createRunDependencies(controller, projectContext);
   const { registry, routingService, routingLearning, routingPolicy, modelQuota, traceRecorder, observability, growth, codeAuditor, auditLog, memoryStore, sessionStorage } = ctx;
   return {
     models: registry,
@@ -55,6 +57,7 @@ export function createRunDependencies(ctx: MainContext, controller: AbortControl
     auditLog,
     memory: memoryStore,
     summaries: sessionStorage,
+    plans: ctx.plans,
     projectContext,
     createProjectVerification: (input) => createProjectVerification(ctx, input),
     createHookRuntime: (input) => createHookRuntime(ctx, input),

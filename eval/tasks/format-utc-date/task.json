@@ -1,0 +1,26 @@
+{
+  "id": "format-utc-date",
+  "tags": [
+    "code",
+    "fix",
+    "date"
+  ],
+  "prompt": "Implement formatDate(date): YYYY-MM-DD using UTC fields and zero padding. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

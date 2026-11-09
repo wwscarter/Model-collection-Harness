@@ -64,6 +64,23 @@ afterEach(async () => {
 });
 
 describe('model routing settings', () => {
+  it('saves the default plan execution preference', async () => {
+    await render();
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="计划执行方式"]')!.value).toBe('auto');
+    await select('计划执行方式', 'confirm');
+    await submit();
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ planning: expect.objectContaining({ executionMode: 'confirm' }) }));
+  });
+  it('offers the shared Pi adapter by default and saves the legacy compatibility fallback', async () => {
+    await render();
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="辅助模型调用通道"]')!.value).toBe('pi');
+    await select('辅助模型调用通道', 'legacy');
+    await submit();
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ legacyProviders: true }));
+    await select('辅助模型调用通道', 'pi');
+    await submit();
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ legacyProviders: false }));
+  });
   it('prevents saving a failed initial read and allows a retry without replacing stored settings', async () => {
     get.mockRejectedValueOnce(new Error('配置读取失败'));
     await render();

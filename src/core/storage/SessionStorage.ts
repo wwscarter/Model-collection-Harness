@@ -77,6 +77,8 @@ export class SessionStorage {
   constructor(dbPath: string) {
     if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
+    this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('journal_mode = WAL');
     this.db.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, prompt TEXT NOT NULL, user_message TEXT NOT NULL DEFAULT '', output TEXT NOT NULL DEFAULT '', messages TEXT NOT NULL DEFAULT '[]', model_used TEXT, last_run_id TEXT, summary TEXT, summary_covers_to INTEGER, summary_hash TEXT, summary_tokens INTEGER, summary_updated_at TEXT, metrics TEXT, audit_result TEXT, rating INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);`);
     const columns = this.db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === 'user_message')) this.db.exec("ALTER TABLE sessions ADD COLUMN user_message TEXT NOT NULL DEFAULT ''");

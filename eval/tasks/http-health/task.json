@@ -1,0 +1,26 @@
+{
+  "id": "http-health",
+  "tags": [
+    "code",
+    "feature",
+    "http"
+  ],
+  "prompt": "Implement createApp(): return an unstarted node:http Server. GET /health responds 200 with JSON {status:ok}; other paths respond 404. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "command",
+      "run": "node check.mjs",
+      "expectExit": 0
+    },
+    {
+      "type": "file-unchanged",
+      "path": "check.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 20
+    }
+  ],
+  "timeoutMs": 300000
+}

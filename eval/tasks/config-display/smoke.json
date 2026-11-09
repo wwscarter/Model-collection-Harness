@@ -1,0 +1,12 @@
+{
+  "calls": [
+    {
+      "name": "write",
+      "args": {
+        "path": "settings.json",
+        "content": "{\"display\": {\"theme\": \"dark\", \"fontSize\": 16}, \"recentLimit\": 10}"
+      }
+    }
+  ],
+  "answer": "Synthetic configuration fixture completed."
+}

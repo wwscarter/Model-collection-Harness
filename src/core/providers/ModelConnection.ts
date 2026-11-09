@@ -1,5 +1,6 @@
 import { credentialOrigin, type ModelConfig, type ModelProvider } from '../models/ModelConfig';
-import { createProvider, resolveOpenAIEndpoint } from './ModelProvider';
+import { createProvider, type ProviderOptions } from './ModelProvider';
+import { normalizeBaseUrl } from '@core/agent/modelMapping';
 
 /** Draft values are sent to the main process; saved credentials never return to the renderer. */
 export interface ModelConnectionInput {
@@ -62,22 +63,20 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
 
 function discoveryURL(model: ModelConfig): URL {
   if (model.provider === 'google') {
-    const url = new URL(model.baseURL || 'https://generativelanguage.googleapis.com/v1beta');
-    const path = url.pathname.replace(/\/+$/, '');
-    const root = path.includes('/models/') ? path.slice(0, path.indexOf('/models/')) : path.endsWith('/models') ? path.slice(0, -7) : path;
-    url.pathname = `${root}/models`;
+    const url = new URL(normalizeBaseUrl(model.provider, model.baseURL));
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
     url.searchParams.delete('alt');
     url.searchParams.set('key', model.apiKey);
     return url;
   }
   if (model.provider === 'anthropic') {
-    const url = new URL(model.baseURL || 'https://api.anthropic.com/v1');
-    const path = url.pathname.replace(/\/+$/, '').replace(/\/messages$/, '');
-    url.pathname = path.endsWith('/models') ? path : `${path}/models`;
+    const url = new URL(normalizeBaseUrl(model.provider, model.baseURL));
+    const path = url.pathname.replace(/\/+$/, '');
+    url.pathname = path.endsWith('/models') ? path : `${path}/v1/models`;
     return url;
   }
-  const url = new URL(resolveOpenAIEndpoint(model.baseURL || (model.provider === 'deepseek' ? 'https://api.deepseek.com/v1' : undefined)));
-  url.pathname = url.pathname.replace(/\/chat\/completions$/, '/models');
+  const url = new URL(normalizeBaseUrl(model.provider, model.baseURL));
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
   return url;
 }
 
@@ -113,7 +112,7 @@ export async function fetchModelIdentifiers(input: ModelConnectionInput, registr
   throw new Error('模型列表分页过多，请缩小端点范围或手动添加模型 ID');
 }
 
-export async function testModelConnection(input: ModelConnectionInput, registry: ModelLookup): Promise<ModelConnectionResult> {
+export async function testModelConnection(input: ModelConnectionInput, registry: ModelLookup, options: ProviderOptions = {}): Promise<ModelConnectionResult> {
   const started = Date.now();
   try {
     const model = resolveDraftModel(input, registry);
@@ -121,7 +120,7 @@ export async function testModelConnection(input: ModelConnectionInput, registry:
     if (!model.apiKey && model.provider !== 'custom') {
       return { success: false, demo: true, error: '尚未配置 API Key，当前为演示模式，未测试远程连接' };
     }
-    await createProvider(model).invoke('Reply with the single word: connected', { maxTokens: 128, signal: AbortSignal.timeout(15_000) });
+    await createProvider(model, options).invoke('Reply with the single word: connected', { maxTokens: 128, signal: AbortSignal.timeout(15_000) });
     return { success: true, latency: Date.now() - started, demo: false };
   } catch (error) {
     return { success: false, latency: Date.now() - started, error: error instanceof Error ? error.message : String(error), demo: false };

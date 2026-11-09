@@ -1,0 +1,32 @@
+{
+  "id": "locate-discount",
+  "tags": [
+    "code",
+    "search"
+  ],
+  "prompt": "Find the function computing a percentage discount. Report its file path and function name. Do not change files.",
+  "fixture": "fixture",
+  "checks": [
+    {
+      "type": "answer-contains",
+      "value": "src/pricing.mjs"
+    },
+    {
+      "type": "answer-contains",
+      "value": "discountTotal"
+    },
+    {
+      "type": "file-unchanged",
+      "path": "src/pricing.mjs"
+    },
+    {
+      "type": "file-unchanged",
+      "path": "src/cart.mjs"
+    },
+    {
+      "type": "max-tool-calls",
+      "value": 6
+    }
+  ],
+  "timeoutMs": 300000
+}

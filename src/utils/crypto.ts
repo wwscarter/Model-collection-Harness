@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export type EncryptionKeyProvider = () => Buffer | string;
+export interface CredentialCodec { encrypt(value: string): string; decrypt(value: string): string }
 
 let keyProvider: EncryptionKeyProvider | undefined;
 
@@ -49,9 +50,13 @@ function getEncryptionKey(): Buffer {
 
 /** Encrypt an API key as `iv:ciphertext:authTag` using AES-256-GCM. */
 export function encryptAPIKey(apiKey: string): string {
+  return encryptValue(apiKey, getEncryptionKey());
+}
+
+function encryptValue(apiKey: string, key: Buffer): string {
   if (typeof apiKey !== "string") throw new TypeError("API key must be a string");
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", getEncryptionKey(), iv);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([cipher.update(apiKey, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return `${iv.toString("hex")}:${ciphertext.toString("hex")}:${authTag.toString("hex")}`;
@@ -59,6 +64,10 @@ export function encryptAPIKey(apiKey: string): string {
 
 /** Decrypt a value produced by encryptAPIKey and fail closed on tampering. */
 export function decryptAPIKey(encrypted: string): string {
+  return decryptValue(encrypted, getEncryptionKey());
+}
+
+function decryptValue(encrypted: string, key: Buffer): string {
   const parts = encrypted.split(":");
   if (parts.length !== 3) throw new Error("Invalid encrypted API key format");
   const [ivHex, ciphertextHex, authTagHex] = parts;
@@ -70,10 +79,18 @@ export function decryptAPIKey(encrypted: string): string {
   const authTag = Buffer.from(authTagHex, "hex");
   if (iv.length !== 12 || authTag.length !== 16) throw new Error("Invalid encrypted API key metadata");
 
-  const decipher = crypto.createDecipheriv("aes-256-gcm", getEncryptionKey(), iv);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(authTag);
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return plaintext.toString("utf8");
+}
+
+/** Bind credentials to one host instead of changing the process-wide key source. */
+export function createCredentialCodec(provider: EncryptionKeyProvider): CredentialCodec {
+  return {
+    encrypt: (value) => encryptValue(value, normalizeKey(provider())),
+    decrypt: (value) => decryptValue(value, normalizeKey(provider())),
+  };
 }
 
 export interface SafeStorageLike {

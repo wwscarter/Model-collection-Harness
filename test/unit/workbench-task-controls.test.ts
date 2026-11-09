@@ -465,3 +465,31 @@ describe('conversation project selection', () => {
     expect(execute.mock.calls[0][0]).toMatchObject({ sessionId: 's2', projectId: null });
   });
 });
+
+
+describe('workbench plan visibility', () => {
+  const historicalPlan = (assistantMessageId: string) => ({ sessionId: 's1', runId: 'ordinary-plan-run', assistantMessageId, version: 2, executionMode: 'confirm' as const, status: 'completed' as const, createdAt: '2026-11-09T00:00:00.000Z', updatedAt: '2026-11-09T00:00:01.000Z', approvedAt: '2026-11-09T00:00:00.500Z', plan: { mode: 'direct' as const, taskType: 'code' as const, complexity: 'low' as const, steps: [{ id: 'inspect', title: '已保存的文件检查步骤', status: 'done' as const }], subagents: [], verify: false } });
+  it('restores the latest durable plan beside its historical assistant message', async () => {
+    listSessions.mockResolvedValue([{ ...sessionRecord('s1'), output: '历史回答', messages: [{ id: 'stored-assistant', role: 'assistant', content: '历史回答' }] }]);
+    window.amd!.sessions.plans = vi.fn(async () => [historicalPlan('stored-assistant')]);
+    await remount();
+    expect(container.querySelector('[aria-label="执行计划"]')?.textContent).toContain('已保存的文件检查步骤');
+    expect(container.querySelector('[aria-label="执行计划"]')?.textContent).toContain('版本 2');
+    expect(container.querySelector('[aria-label="执行计划"]')?.textContent).toContain('已完成');
+    expect(container.querySelector('[aria-label="执行计划"] button')).toBeNull();
+  });
+  it('sends a temporary planning mode and handles a visible waiting-plan decision', async () => {
+    const mode = container.querySelector<HTMLSelectElement>('[aria-label="本轮规划模式"]')!;
+    await act(async () => { mode.value = 'confirm'; mode.dispatchEvent(new Event('change', { bubbles: true })); });
+    await click('[aria-label="执行任务"]');
+    const submitted = execute.mock.calls[0][0]; expect(submitted.planningMode).toBe('confirm');
+    const waiting = { ...historicalPlan(submitted.assistantMessageId), runId: submitted.runId, version: 1, status: 'awaiting' as const };
+    window.amd!.sessions.planDecision = vi.fn(async () => ({ ...waiting, status: 'approved' as const }));
+    await act(async () => listeners.get('session:plan')!(waiting));
+    expect(container.querySelector('[aria-label="执行计划"]')?.textContent).toContain('等待确认');
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="执行计划"] button')].find((button) => button.textContent === '执行计划')!.click());
+    expect(window.amd!.sessions.planDecision).toHaveBeenCalledWith({ runId: submitted.runId, version: 1, action: 'approve' });
+    await act(async () => resolveRun({ output: '文件检查完成。', runId: submitted.runId }));
+    expect(container.querySelector('[aria-label="执行计划"]')?.textContent).toContain('已确认');
+  });
+});

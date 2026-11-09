@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import { ModelRegistry } from '../../src/core/models/ModelRegistry';
 import { fetchModelIdentifiers, testModelConnection } from '../../src/core/providers/ModelConnection';
-import { createProvider } from '../../src/core/providers/ModelProvider';
+import { createProvider as createConfiguredProvider } from '../../src/core/providers/ModelProvider';
 
 const model = (overrides: Partial<ModelConfig> = {}): ModelConfig => ({
   id: 'saved-model', provider: 'custom', name: 'Saved model', apiKey: 'saved-secret',
@@ -16,6 +16,7 @@ const registryWith = (config: ModelConfig = model()) => {
   registry.registerModel(config);
   return registry;
 };
+const createProvider = (config: ModelConfig) => createConfiguredProvider(config, { legacyProviders: true });
 const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -101,7 +102,7 @@ describe('draft connection test', () => {
     const registry = registryWith(model({ provider: 'deepseek' }));
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ choices: [{ message: { content: 'connected' } }] }));
     vi.stubGlobal('fetch', fetchMock);
-    const result = await testModelConnection({ id: 'saved-model', provider: 'deepseek', baseURL: 'https://saved.example/v1', modelId: 'draft-model-id', temperature: 0.9, enableThinking: true }, registry);
+    const result = await testModelConnection({ id: 'saved-model', provider: 'deepseek', baseURL: 'https://saved.example/v1', modelId: 'draft-model-id', temperature: 0.9, enableThinking: true }, registry, { legacyProviders: true });
     expect(result).toMatchObject({ success: true, demo: false });
     expect(fetchMock.mock.calls[0][0]).toBe('https://saved.example/v1/chat/completions');
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ authorization: 'Bearer saved-secret' });

@@ -37,7 +37,7 @@ function startApplication(): void {
 
   async function bootstrap(): Promise<void> {
     await app.whenReady();
-    const ctx = createMainContext(app.getPath('userData'), () => state.window);
+    const ctx = await createMainContext(app.getPath('userData'), () => state.window);
     state.context = ctx;
     installSessionHardening();
     app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
@@ -59,7 +59,14 @@ function startApplication(): void {
     bootstrap().catch(reportStartupFailure);
   }
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-  app.on('before-quit', () => { if (state.context) disposeMainContext(state.context); });
+  let quitReady = false;
+  let shuttingDown: Promise<void> | undefined;
+  app.on('before-quit', (event) => {
+    if (!state.context || quitReady) return;
+    event?.preventDefault?.();
+    shuttingDown ??= disposeMainContext(state.context).finally(() => { quitReady = true; app.quit(); });
+    return shuttingDown;
+  });
 }
 
 startApplication();

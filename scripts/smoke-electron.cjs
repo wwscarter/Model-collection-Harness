@@ -7,7 +7,7 @@ const timeout = setTimeout(() => fail('timed out'), 20_000);
 app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   const empty = () => [];
-  for (const channel of ['model:list', 'session:list', 'projects:list']) ipcMain.handle(channel, empty);
+  for (const channel of ['model:list', 'session:list', 'session:plans-list', 'projects:list']) ipcMain.handle(channel, empty);
   ipcMain.handle('project:current', () => undefined);
   ipcMain.handle('project:clear', () => ({ success: true }));
   ipcMain.handle('preferences:get', () => ({ approvalMode: 'ask' }));

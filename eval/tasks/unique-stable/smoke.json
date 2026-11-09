@@ -1,0 +1,24 @@
+{
+  "calls": [
+    {
+      "name": "read",
+      "args": {
+        "path": "src/main.mjs"
+      }
+    },
+    {
+      "name": "write",
+      "args": {
+        "path": "src/main.mjs",
+        "content": "export function unique(values) { return [...new Set(values)]; }\n"
+      }
+    },
+    {
+      "name": "run_command",
+      "args": {
+        "command": "node check.mjs"
+      }
+    }
+  ],
+  "answer": "Synthetic framework fixture completed."
+}

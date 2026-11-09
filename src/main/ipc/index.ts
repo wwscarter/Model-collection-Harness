@@ -13,6 +13,9 @@ import { register as registerCodebase } from './codebaseIpc';
 import { register as registerSandbox } from './sandboxIpc';
 import { register as registerRules } from './rulesIpc';
 import { register as registerHooks } from './hooksIpc';
+import { register as registerSkills } from './skillsIpc';
+import { register as registerToolTrust } from './toolTrustIpc';
+import { register as registerMcp } from './mcpIpc';
 
 export function registerHandlers(ctx: MainContext): void {
   registerModel(ctx);
@@ -29,4 +32,7 @@ export function registerHandlers(ctx: MainContext): void {
   registerSandbox(ctx);
   registerRules(ctx);
   registerHooks(ctx);
+  registerSkills(ctx);
+  registerToolTrust(ctx);
+  registerMcp(ctx);
 }

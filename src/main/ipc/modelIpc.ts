@@ -49,10 +49,10 @@ export function register(ctx: MainContext): void {
     return registry.setPrimaryModel(id).map(publicModel);
   });
   handle('model:fetch-models', (_event, input: ModelConnectionInput) => fetchModelIdentifiers(input, registry));
-  handle('model:test-draft', (_event, input: ModelConnectionInput) => testModelConnection(input, registry));
+  handle('model:test-draft', (_event, input: ModelConnectionInput) => testModelConnection(input, registry, ctx.routingService.getConfiguration().settings));
   handle('model:test-connection', async (_event, id: string) => {
     const model = registry.getModel(id);
     if (!model) throw new Error(`Model not found: ${id}`);
-    return { ...await testModelConnection({ id, provider: model.provider }, registry), model: publicModel(model) };
+    return { ...await testModelConnection({ id, provider: model.provider }, registry, ctx.routingService.getConfiguration().settings), model: publicModel(model) };
   });
 }

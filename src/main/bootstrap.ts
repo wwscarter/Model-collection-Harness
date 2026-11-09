@@ -1,161 +1,65 @@
 import { app, dialog, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { configureEncryptionKeyProvider, createElectronSafeStorageKeyProvider } from '@utils/crypto';
-import { ModelStorage } from '@core/storage/ModelStorage';
-import { SessionStorage } from '@core/storage/SessionStorage';
-import { ProjectStorage } from '@core/storage/ProjectStorage';
-import { ModelRegistry } from '@core/models/ModelRegistry';
-import { hasUsableCredentials } from '@core/models/ModelConfig';
-import { AgentRouter } from '@core/routing/AgentRouter';
-import { LocalRoutingModel } from '@core/routing/LocalRoutingModel';
-import { RoutingService } from '@core/routing/RoutingService';
-import { loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
-import { ModelQuota } from '@core/routing/ModelQuota';
-import { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
-import { AuditLog } from '@core/audit/AuditLog';
-import { CodeAuditor } from '@core/audit/CodeAuditor';
-import { TraceRecorder } from '@core/trace/TraceRecorder';
-import { GrowthEngine } from '@core/growth/GrowthEngine';
-import { RoutingLearningStore } from '@core/growth/RoutingLearningStore';
+import { createCredentialCodec, createElectronSafeStorageKeyProvider } from '@utils/crypto';
+import { createCore, type CoreApprovalRequest } from '@core/bootstrap/createCore';
 import { TtyManager } from '@core/tty/TtyManager';
-import { ProjectManager } from '@core/project/ProjectManager';
-import { MemoryStore } from '@core/memory/MemoryStore';
-import { createMemoryTools } from '@core/tools/memoryTools';
-import { CommandExecutor } from '@core/tty/CommandExecutor';
-import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
-import { createProjectCommandTools } from '@core/tools/projectCommandTools';
-import { AgentRuntime } from '@core/agent/AgentRuntime';
-import { RulesLoader } from '@core/agent/RulesLoader';
-import { HookStore } from '@core/hooks/HookStore';
-import { TrustStore } from '@core/security/TrustStore';
-import { loadApprovalMode } from '@core/security/ApprovalPolicy';
-import { CodebaseIndex } from '@core/codebase/CodebaseIndex';
-import { SemanticSearch } from '@core/codebase/SemanticSearch';
-import { loadCodeSearchConfig } from '@core/codebase/CodeSearchConfig';
-import { createCodebaseTools } from '@core/tools/codebaseTools';
-import { createSandboxPolicy } from '@core/security/Sandbox';
-import { loadSandboxSettings } from '@core/security/SandboxSettings';
-import { evaluateCommandApproval } from '@core/security/ApprovalPolicy';
-import { approveToolCall } from './approvalPrompt';
+import { approveToolCall, confirmCommand } from './approvalPrompt';
+import { appendMcpLog } from './mcpRuntime';
 import type { MainContext } from './MainContext';
 
-/** Electron supplies its data directory and window; all long-lived state is returned. */
-export function createMainContext(dataDir: string, getWindow: MainContext['getWindow']): MainContext {
-  const cleanupTasks: (() => void)[] = [];
-  const track = <T>(resource: T, cleanup: (resource: T) => void): T => {
-    cleanupTasks.push(() => cleanup(resource));
-    return resource;
-  };
+/** Electron contributes native approval and keyring adapters to the shared core. */
+export async function createMainContext(dataDir: string, getWindow: MainContext['getWindow']): Promise<MainContext> {
+  let ctx: MainContext | undefined;
+  const keyProvider = process.env.AMD_ENCRYPTION_KEY
+    ? () => process.env.AMD_ENCRYPTION_KEY!
+    : createElectronSafeStorageKeyProvider({ keyPath: path.join(dataDir, 'credentials.key'), safeStorage });
+  const core = await createCore({
+    dataDir,
+    credentialCodec: createCredentialCodec(keyProvider),
+    emit: (channel, payload) => getWindow()?.webContents.send(channel, payload),
+    confirm: (request) => confirmNativeRequest(ctx!, request),
+    onMcpStderr: (entry, text) => { if (ctx) appendMcpLog(ctx, entry, text); },
+  });
   try {
-    const emit: MainContext['emit'] = (channel, payload) => getWindow()?.webContents.send(channel, payload);
-    const workspaceRoot = path.join(dataDir, 'workspace');
-    fs.mkdirSync(workspaceRoot, { recursive: true });
-    const keyPath = path.join(dataDir, 'credentials.key');
-    // An explicit environment key is the documented recovery path when the OS
-    // keyring is unavailable or credentials.key was lost.
-    if (process.env.AMD_ENCRYPTION_KEY) configureEncryptionKeyProvider(() => process.env.AMD_ENCRYPTION_KEY!);
-    else configureEncryptionKeyProvider(createElectronSafeStorageKeyProvider({ keyPath, safeStorage }));
-    const storage = track(new ModelStorage(path.join(dataDir, 'amd.db')), (resource) => resource.close());
-    const sessionStorage = track(new SessionStorage(path.join(dataDir, 'sessions.db')), (resource) => resource.close());
-    const projectStorage = track(new ProjectStorage(path.join(dataDir, 'projects.db')), (resource) => resource.close());
-    const registry = new ModelRegistry(storage, { initializePresets: true, persist: true });
-    // Never enable a preset that cannot make a real request. A fresh install has no
-    // credentials, and silently selecting GPT-4 used to produce demo answers.
-    if (!registry.getEnabledModels().some(hasUsableCredentials)) {
-      const usable = registry.getAllModels().find(hasUsableCredentials);
-      if (usable) registry.updateModel(usable.id, { enabled: true });
-    }
-    const growth = new GrowthEngine({ storagePath: path.join(dataDir, 'growth-profiles.json') });
-    const routingLearning = new RoutingLearningStore(path.join(dataDir, 'routing-corrections.json'));
-    const routingService = track(new RoutingService(path.join(dataDir, 'routing-settings.json'), { getExamples: (context) => routingLearning.getExamples(context) }), (resource) => resource.dispose());
-    const router = new AgentRouter(registry, growth, new LocalRoutingModel({ classifier: routingService }));
-    const preferencesPath = path.join(dataDir, 'preferences.json');
-    const preferences = { approvalMode: loadApprovalMode(preferencesPath) };
-    const routingRulesPath = path.join(dataDir, 'routing-rules.json');
-    const routingHistoryDir = path.join(dataDir, 'routing-rules.history');
-    fs.mkdirSync(routingHistoryDir, { recursive: true });
-    const routingPolicyState = loadRoutingPolicy(routingRulesPath);
-    const routingPolicy = new RoutingPolicyEngine(router, routingPolicyState.policy);
-    for (const diagnostic of routingPolicyState.diagnostics) console.warn('[routing]', diagnostic);
-    const tty = track(new TtyManager({ defaultCwd: workspaceRoot }), (resource) => resource.dispose());
-    const projects = new ProjectManager();
-    const sandboxSettingsPath = path.join(dataDir, 'sandbox-settings.json');
-    const commandSandbox = { settings: loadSandboxSettings(sandboxSettingsPath) };
-    const sandboxPolicy = (root: string) => createSandboxPolicy(root, commandSandbox.settings);
-    const commandExecutor = track(new CommandExecutor({ sandboxPolicy }), (resource) => resource.dispose());
-    const projectProcesses = track(new ProjectProcessManager({ sandboxPolicy }), (resource) => resource.dispose());
-    const codebase = track(new CodebaseIndex(dataDir), (resource) => resource.dispose());
-    const codeSearchConfigPath = path.join(dataDir, 'code-search.json');
-    const codeSearch = { config: loadCodeSearchConfig(codeSearchConfigPath) };
-    const semanticSearch = track(new SemanticSearch({
-      dataDir, getConfig: () => codeSearch.config,
-      getBaseURL: () => routingService.getConfiguration().settings.classifier.baseURL,
-    }), (resource) => resource.close());
-    // Pi resources (skills/, extensions/, mcp.json) live in newAi's own data folder, never ~/.pi.
-    // No project selected means an empty app-owned workspace, not ~/Documents.
-    const agentDir = path.join(dataDir, 'agent');
-    const trustStore = new TrustStore(path.join(dataDir, 'trust.json'));
-    const rulesLoader = new RulesLoader({ agentDir, trustStore });
-    const hookStore = new HookStore(agentDir, trustStore);
-    const agentRuntime = new AgentRuntime({
-      agentDir, defaultCwd: workspaceRoot,
-      toolGate: (request) => approveToolCall(ctx, request), enableMcp: true,
-      extraTools: ({ projectRoot }) => [
-        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot) }) : []),
-        ...(projectRoot ? createCodebaseTools(projectRoot, codebase, semanticSearch, codeSearch.config.enabled, { config: structuredClone(codeSearch.config), baseURL: routingService.getConfiguration().settings.classifier.baseURL }) : []),
-        ...createMemoryTools(memoryStore, { projectRoot }),
-      ],
-    });
-    const observability = track(new ObservabilityEngine(path.join(dataDir, 'metrics.db')), (resource) => resource.close());
-    observability.recoverInterruptedRuns();
-    const modelQuota = new ModelQuota(observability);
-    const memoryStore = track(new MemoryStore(path.join(dataDir, 'memory.db')), (resource) => resource.close());
-    const traceRecorder = new TraceRecorder(observability, {
-      onEvent: (event) => {
-        emit('session:trace', event);
-        if (event.type === 'run_end') {
-          try { observability.pruneTraces(observability.getTraceRetention()); }
-          catch (error) { console.warn('Trace retention failed', error); }
-        }
-      },
-    });
-    try { observability.pruneTraces(observability.getTraceRetention()); } catch (error) { console.warn('Trace retention failed', error); }
-    const auditLog = new AuditLog(path.join(dataDir, 'audit.jsonl'));
-    const codeAuditor = new CodeAuditor();
-    const ctx: MainContext = {
-      dataDir, getWindow, emit, workspaceRoot, storage, sessionStorage, projectStorage, registry,
-      growth, routingLearning, routingService, router, preferencesPath, preferences,
-      routingRulesPath, routingHistoryDir, routingPolicy, tty, projects, commandExecutor,
-      projectProcesses, agentRuntime, trustStore, rulesLoader, hookStore, observability, modelQuota, memoryStore, traceRecorder,
-      auditLog, codeAuditor, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(),
-      runningTasks: new Map(), pickedProjectRoots: new Set(),
-      codebase, semanticSearch, codeSearchConfigPath, codeSearch,
-      sandboxSettingsPath, commandSandbox,
-    };
+    const tty = new TtyManager({ defaultCwd: core.workspaceRoot });
+    ctx = { ...core, core, getWindow, tty, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(), pickedProjectRoots: new Set(), runningOperations: new Set() };
     return ctx;
-  } catch (error) {
-    // Preserve cleanup when startup fails before the complete context is returned.
-    for (const cleanup of cleanupTasks.reverse()) {
-      try { cleanup(); } catch { /* preserve the startup error */ }
-    }
-    throw error;
-  }
+  } catch (error) { await core.dispose(); throw error; }
 }
 
-export function disposeMainContext(ctx: MainContext): void {
+async function confirmNativeRequest(ctx: MainContext, request: CoreApprovalRequest): Promise<boolean> {
+  request.signal?.throwIfAborted();
+  if (request.kind === 'tool') return (await approveToolCall(ctx, request)) === undefined;
+  if (request.kind === 'command') return confirmCommand(ctx, request.command, request.cwd, request.signal, request.projectRoot);
+  const isPlan = request.kind === 'plan';
+  const detail = isPlan
+    ? request.plan.plan.steps.map((step, index) => (index + 1) + '. ' + step.title + (step.detail ? '：' + step.detail : '')).join('\n')
+    : '项目：' + request.projectRoot + '\n\n' + request.commands.map((command) => (command.phase === 'quick' ? '快速' : '完整') + ' · ' + command.label + '\n' + command.command).join('\n\n') + '\n\n修改测试文件时也会运行测试。确认的命令保存在：\n' + request.configPath;
+  const options = { type: 'question' as const, signal: request.signal, title: isPlan ? '确认执行计划' : '确认项目验证命令', message: isPlan ? '按照以下计划执行？' : '允许在修改项目文件后运行以下检查？', detail, buttons: isPlan ? ['取消', '执行'] : ['本轮跳过', '确认并运行'], defaultId: 0, cancelId: 0, noLink: true };
+  const window = ctx.getWindow();
+  const answer = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  request.signal?.throwIfAborted();
+  return answer.response === 1;
+}
+
+const disposingContexts = new WeakMap<MainContext, Promise<void>>();
+export function disposeMainContext(ctx: MainContext): Promise<void> {
+  const existing = disposingContexts.get(ctx);
+  if (existing) return existing;
+  ctx.shuttingDown = true;
   for (const controller of ctx.runningTasks.values()) controller.abort();
-  ctx.routingService.dispose();
   ctx.tty.dispose();
-  ctx.commandExecutor.dispose();
-  ctx.projectProcesses.dispose();
-  ctx.codebase.dispose();
-  ctx.semanticSearch.close();
-  ctx.storage.close();
-  ctx.sessionStorage.close();
-  ctx.projectStorage.close();
-  ctx.observability.close();
-  ctx.memoryStore.close();
+  for (const unsubscribe of [...ctx.ttyUnsubscribers.values(), ...ctx.commandUnsubscribers.values()]) unsubscribe();
+  const disposal = (async () => {
+    await Promise.allSettled([...(ctx.runningOperations ?? [])]);
+    if (ctx.core) { await ctx.core.dispose(); return; }
+    ctx.routingService.dispose(); ctx.commandExecutor.dispose(); ctx.projectProcesses.dispose();
+    ctx.codebase.dispose(); ctx.semanticSearch.close(); ctx.storage.close(); ctx.sessionStorage.close();
+    ctx.projectStorage.close(); ctx.observability.close(); ctx.memoryStore.close();
+  })();
+  disposingContexts.set(ctx, disposal);
+  return disposal;
 }
 
 export function showCredentialWarning(ctx: MainContext): void {

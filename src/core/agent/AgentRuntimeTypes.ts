@@ -3,10 +3,12 @@ import type { ModelRequestEstimate, ModelUsage } from '@core/routing/ModelUsage'
 import type { BudgetExceededError } from '@core/routing/RunBudget';
 import type { SearchProviderRegistry } from '@core/tools/search';
 import type { Usage } from '@earendil-works/pi-ai';
-import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { InlineExtension, McpTransportFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { FormattedRules } from './RulePrompt';
 import type { RulesLoader } from './RulesLoader';
 import type { HookRunner } from '@core/hooks/HookRunner';
+import type { SkillManager } from './SkillManager';
+import type { McpConfigStore } from './McpConfigStore';
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
 
@@ -39,6 +41,7 @@ export interface AgentRunRequest {
   projectAccess?: 'read' | 'write';
   /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */
   enableTools?: boolean;
+  planTool?: ToolDefinition;
   maxTokens?: number;
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
@@ -82,6 +85,11 @@ export interface AgentRuntimeOptions {
   toolGate?: ToolGate;
   /** Load agentDir/mcp.json servers through Pi's MCP extension. */
   enableMcp?: boolean;
+  skillManager?: Pick<SkillManager, 'isEnabled'>;
+  /** Only the app configuration loader can supply decrypted runtime credentials. */
+  mcpConfig?: Pick<McpConfigStore, 'loadConfig'>;
+  /** The host supplies the approved transport, including sandboxed stdio execution. */
+  mcpTransport?: McpTransportFactory;
   /** Load agentDir/extensions/* code. Off by default: extensions run with full app permissions. */
   enableFileExtensions?: boolean;
   /** Maximum duration of a run, including model requests and tools. Default five minutes. */

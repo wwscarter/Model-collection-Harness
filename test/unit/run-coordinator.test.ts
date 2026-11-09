@@ -20,6 +20,8 @@ import type { ContextTurn } from '../../src/core/context/ContextAssembler';
 import * as summaryService from '../../src/core/context/SummaryService';
 import { modelContextBudget } from '../../src/core/context/ContextBudget';
 import { DEFAULT_ROUTING_SETTINGS } from '../../src/core/routing/RoutingSettings';
+import { PlanController } from '../../src/core/planning/PlanController';
+import type { RunPlan } from '../../src/core/planning/PlanTypes';
 
 function model(id: string, overrides: Partial<ModelConfig> = {}): ModelConfig {
   return {
@@ -671,5 +673,77 @@ describe('RunCoordinator', () => {
         expect(traceStore.getTrace('plan-fallback')?.spans.find((span) => span.name === 'planning')?.attributes).toMatchObject({ valid: false, fallback: 'normal-routing' });
       }
     } finally { cleanup(); }
+  });
+});
+
+
+describe('run plan confirmation', () => {
+  const plannedResponse = (id: string) => ({ content: JSON.stringify({ mode: 'direct', plan: 'Inspect and verify the requested files.', steps: [{ id: 'inspect', title: 'Inspect relevant files' }], verify: false }), inputTokens: 10, outputTokens: 10, modelId: id });
+
+  it('finishes a plan-only request without execution tools or lifecycle commands', async () => {
+    const invoke = vi.fn(); const lifecycle = vi.fn();
+    const { deps, cleanup } = makeDeps([model('executor', { contextWindow: 32_000 })], invoke, (current) => ({ modelId: current.id, invoke: async () => plannedResponse(current.id) }));
+    deps.createHookRuntime = lifecycle; deps.plans = new PlanController();
+    try {
+      const result = await executeRun({ sessionId: 'session-1', runId: 'only', prompt: 'Plan the implementation', planningMode: 'only', pinnedModelId: 'executor', includeProjectContext: false }, deps, () => undefined);
+      expect(result.stopReason).toBe('plan_only'); expect(result.output).toContain('Inspect relevant files');
+      expect(invoke).not.toHaveBeenCalled(); expect(lifecycle).not.toHaveBeenCalled();
+      expect(deps.plans.latest('only')).toMatchObject({ status: 'completed', executionMode: 'only' });
+    } finally { cleanup(); }
+  });
+
+  it('waits for the edited version, forwards its content and tracks actual step progress', async () => {
+    let notify!: (plan: RunPlan) => void; const ready = new Promise<RunPlan>((resolve) => { notify = resolve; });
+    const invoke = vi.fn<RunDependencies['invokeStreamed']>(async (current, prompt, _tokens, _delta, options) => {
+      expect(prompt).toContain('<approved_plan>'); expect(prompt).toContain('Inspect and verify changed files');
+      expect(options?.planTool?.name).toBe('update_plan');
+      await options!.planTool!.execute('plan-call', { stepId: 'inspect', status: 'done' }, undefined, undefined, {} as never);
+      return { content: 'Ordinary task completed.', inputTokens: 10, outputTokens: 10, modelId: current.id };
+    });
+    const { deps, cleanup } = makeDeps([model('executor', { contextWindow: 32_000 })], invoke, (current) => ({ modelId: current.id, invoke: async () => plannedResponse(current.id) }));
+    const plans = new PlanController(); deps.plans = plans;
+    try {
+      const pending = executeRun({ sessionId: 'session-1', runId: 'confirmed', prompt: 'Inspect this project', planningMode: 'confirm', includeProjectContext: false }, deps, (channel, payload) => { if (channel === 'session:plan' && (payload as RunPlan).status === 'awaiting') notify(payload as RunPlan); });
+      const draft = await ready; expect(invoke).not.toHaveBeenCalled();
+      const edited = plans.decide({ runId: draft.runId, version: draft.version, action: 'edit', steps: [{ id: 'inspect', title: 'Inspect and verify changed files', status: 'pending' }] });
+      expect(invoke).not.toHaveBeenCalled();
+      plans.decide({ runId: draft.runId, version: edited.version, action: 'approve' });
+      await pending; expect(invoke).toHaveBeenCalledOnce();
+      expect(plans.latest('confirmed')).toMatchObject({ version: 2, status: 'completed', plan: { steps: [{ status: 'done' }] } });
+    } finally { cleanup(); }
+  });
+
+  it('cancels a waiting plan and finishes the trace without starting execution', async () => {
+    let notify!: () => void; const ready = new Promise<void>((resolve) => { notify = resolve; });
+    const invoke = vi.fn();
+    const { deps, traceStore, cleanup } = makeDeps([model('executor', { contextWindow: 32_000 })], invoke, (current) => ({ modelId: current.id, invoke: async () => plannedResponse(current.id) }));
+    deps.plans = new PlanController();
+    try {
+      const pending = executeRun({ sessionId: 'session-1', runId: 'cancel-confirm', prompt: 'Plan this project', planningMode: 'confirm', includeProjectContext: false }, deps, (channel) => { if (channel === 'session:plan') notify(); });
+      const rejected = expect(pending).rejects.toThrow('任务已取消');
+      await ready; deps.controller.abort(); await rejected;
+      expect(invoke).not.toHaveBeenCalled(); expect(traceStore.getTrace('cancel-confirm')?.run.status).toBe('cancelled');
+      expect(deps.plans.latest('cancel-confirm')?.status).toBe('cancelled');
+    } finally { cleanup(); }
+  });
+});
+
+
+describe('confirmation waiting budget', () => {
+  it('pauses both elapsed budget and the deadline until the plan is approved', async () => {
+    vi.useFakeTimers();
+    let notify!: () => void; const ready = new Promise<void>((resolve) => { notify = resolve; });
+    const invoke = vi.fn<RunDependencies['invokeStreamed']>(async (current) => ({ content: 'Completed after approval.', inputTokens: 1, outputTokens: 1, modelId: current.id }));
+    const { deps, cleanup } = makeDeps([model('executor', { contextWindow: 32_000 })], invoke, (current) => ({ modelId: current.id, invoke: async () => ({ content: JSON.stringify({ mode: 'direct', plan: 'Inspect ordinary files.' }), inputTokens: 1, outputTokens: 1, modelId: current.id }) }));
+    deps.plans = new PlanController();
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), budget: { maxCostUsd: 1, maxDurationMs: 1000 } };
+    try {
+      const pending = executeRun({ sessionId: 'session-1', runId: 'paused-wait', prompt: 'Inspect project', planningMode: 'confirm', pinnedModelId: 'executor', includeProjectContext: false }, deps, (channel, payload) => { if (channel === 'session:plan' && (payload as RunPlan).status === 'awaiting') notify(); });
+      await ready; await vi.advanceTimersByTimeAsync(20_000);
+      expect(invoke).not.toHaveBeenCalled(); expect(deps.plans.latest('paused-wait')?.status).toBe('awaiting');
+      deps.plans.decide({ runId: 'paused-wait', version: 1, action: 'approve' });
+      const result = await pending; expect(result.output).toBe('Completed after approval.');
+      expect(result.stopReason).not.toBe('budget_limit'); expect(invoke).toHaveBeenCalledOnce();
+    } finally { cleanup(); vi.useRealTimers(); }
   });
 });

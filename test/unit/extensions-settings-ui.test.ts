@@ -63,4 +63,21 @@ describe('extensions settings tab', () => {
     await act(async () => { button('规则').click(); });
     expect(container.querySelector('[aria-label="规则设置"]')).not.toBeNull();
   });
+
+  it('mounts skill, MCP and tool trust management only on their selected subpage', async () => {
+    window.amd!.agent.skills = { list: vi.fn(async () => ({ skills: [], diagnostics: [] })), openDirectory: vi.fn(), previewImport: vi.fn(), confirmImport: vi.fn(), setEnabled: vi.fn() };
+    window.amd!.agent.mcp = { list: vi.fn(async () => ({ path: '/agent/mcp.json', servers: [], diagnostics: [] })), save: vi.fn(), remove: vi.fn(), test: vi.fn(), log: vi.fn() };
+    window.amd!.agent.toolTrust = { get: vi.fn(async () => ({ tools: [], diagnostics: [] })), set: vi.fn() };
+    await act(async () => root.render(createElement(Settings, { models: [], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn(), initialTab: 'extensions' })));
+    await act(async () => button('技能').click());
+    expect(container.querySelector('[aria-label="技能设置"]')).not.toBeNull();
+    expect(window.amd!.agent.skills.list).toHaveBeenCalledOnce();
+    expect(window.amd!.agent.mcp.list).not.toHaveBeenCalled();
+    await act(async () => button('MCP 服务器').click());
+    expect(container.querySelector('[aria-label="MCP 设置"]')).not.toBeNull();
+    expect(window.amd!.agent.mcp.list).toHaveBeenCalledOnce();
+    await act(async () => button('工具信任').click());
+    expect(container.querySelector('[aria-label="工具信任设置"]')).not.toBeNull();
+    expect(window.amd!.agent.toolTrust.get).toHaveBeenCalledOnce();
+  });
 });

@@ -21,6 +21,8 @@ export class ProjectStorage {
   constructor(dbPath: string) {
     if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
+    this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('journal_mode = WAL');
     this.db.exec(`CREATE TABLE IF NOT EXISTS workspace_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL UNIQUE, last_opened_at TEXT NOT NULL, created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_workspace_projects_opened ON workspace_projects(last_opened_at DESC);`);
   }
 

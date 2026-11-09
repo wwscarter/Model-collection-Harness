@@ -11,10 +11,11 @@ import { costOf, errorUsage, estimateTokens, limitedStop, limitMessage, PARTIAL_
 
 /** Stream the answer with usage accounting and fallback. */
 export async function executeStage(ctx: RunContext): Promise<void> {
+  const planIndex = ctx.taskParts.length;
   const buildFinalPrompt = (parts: string[]) => {
     const task = ctx.buildTaskPrompt(parts);
-    const reports = ctx.agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + 4]}` : parts[index + 4] }));
-    return ctx.orchestration ? buildOrchestratedFinalPrompt(task, { ...ctx.orchestration, plan: parts[2], reason: parts[3] }, reports, ctx.failedAgentCount)
+    const reports = ctx.agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + planIndex + 2]}` : parts[index + planIndex + 2] }));
+    return ctx.orchestration ? buildOrchestratedFinalPrompt(task, { ...ctx.orchestration, plan: parts[planIndex], reason: parts[planIndex + 1] }, reports, ctx.failedAgentCount)
       : ctx.collaboratorModels.length ? buildSynthesisPrompt(task, reports, ctx.failedAgentCount) : task;
   };
   const finalParts = [...ctx.taskParts, ctx.orchestration?.plan ?? '', ctx.orchestration?.reason ?? '', ...ctx.agentReports.map((report) => report.content)];

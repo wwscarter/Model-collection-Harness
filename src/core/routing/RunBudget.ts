@@ -33,6 +33,8 @@ export class RunBudget {
   private readonly maxDurationMs: number;
   private readonly maxTokens: number;
   private readonly now: () => number;
+  private pausedAt?: number;
+  private pausedMs = 0;
 
   constructor(options: RunBudgetOptions) {
     this.maxCost = nonNegative(options.maxCost, '成本预算');
@@ -43,11 +45,15 @@ export class RunBudget {
   }
 
   assertAvailable(estimatedCost = 0): void {
-    const elapsed = this.now() - this.startedAt;
+    const elapsed = this.elapsed();
     if (elapsed > this.maxDurationMs) throw new BudgetExceededError(`本轮运行已超过 ${Math.round(this.maxDurationMs / 1000)} 秒预算`);
     if (this.cost + nonNegative(estimatedCost, '预估费用') > this.maxCost) throw new BudgetExceededError(`本轮运行已超过成本预算（$${this.maxCost.toFixed(2)}）`);
     if (this.tokens > this.maxTokens) throw new BudgetExceededError('本轮运行已超过 Token 预算');
   }
+
+  pause(): void { if (this.pausedAt === undefined) this.pausedAt = this.now(); }
+  resume(): void { if (this.pausedAt !== undefined) { this.pausedMs += Math.max(0, this.now() - this.pausedAt); this.pausedAt = undefined; } }
+  private elapsed(): number { return Math.max(0, (this.pausedAt ?? this.now()) - this.startedAt - this.pausedMs); }
 
   add(usage: { cost?: number; tokens?: number }): void {
     const cost = nonNegative(usage.cost ?? 0, '使用费用');
@@ -79,7 +85,7 @@ export class RunBudget {
     return {
       cost: this.cost,
       tokens: this.tokens,
-      elapsedMs: Math.max(0, this.now() - this.startedAt),
+      elapsedMs: this.elapsed(),
       costRemaining: Math.max(0, this.maxCost - this.cost),
       maxCost: this.maxCost,
       maxDurationMs: this.maxDurationMs,

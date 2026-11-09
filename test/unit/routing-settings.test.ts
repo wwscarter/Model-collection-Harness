@@ -9,6 +9,17 @@ const settings = () => structuredClone(DEFAULT_ROUTING_SETTINGS);
 afterEach(() => { vi.restoreAllMocks(); for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('RoutingSettings', () => {
+  it('defaults to unified Pi calls and persists the explicit legacy fallback', () => {
+    const previous = settings(); delete previous.legacyProviders;
+    expect(validateRoutingSettings(previous).legacyProviders).toBe(false);
+    expect(validateRoutingSettings({ ...settings(), legacyProviders: true }).legacyProviders).toBe(true);
+    expect(() => validateRoutingSettings({ ...settings(), legacyProviders: 'true' })).toThrow('布尔值');
+  });
+  it('migrates plan execution defaults and accepts each user execution preference', () => {
+    expect(validateRoutingSettings({ ...settings(), planning: { mode: 'auto' } }).planning.executionMode).toBe('auto');
+    for (const executionMode of ['auto', 'confirm', 'only']) expect(validateRoutingSettings({ ...settings(), planning: { mode: 'auto', executionMode } }).planning.executionMode).toBe(executionMode);
+    expect(() => validateRoutingSettings({ ...settings(), planning: { mode: 'auto', executionMode: 'other' } })).toThrow('计划执行模式');
+  });
   it('migrates settings without budget fields and validates saved runtime limits', () => {
     const legacy = settings(); delete legacy.budget;
     expect(validateRoutingSettings(legacy).budget).toEqual({ maxCostUsd: 0.25, maxDurationMs: 600_000 });

@@ -27,8 +27,16 @@ import type { SandboxSettings } from '@core/security/SandboxSettings';
 import type { TrustStore } from '@core/security/TrustStore';
 import type { RulesLoader } from '@core/agent/RulesLoader';
 import type { HookStore } from '@core/hooks/HookStore';
+import type { SkillManager } from '@core/agent/SkillManager';
+import type { McpConfigStore } from '@core/agent/McpConfigStore';
+import type { ToolTrustStore } from '@core/security/ToolTrustStore';
+import type { PlanController } from '@core/planning/PlanController';
+import type { Core } from '@core/bootstrap/createCore';
 
 export interface MainContext {
+  core?: Core;
+  runningOperations?: Set<Promise<unknown>>;
+  shuttingDown?: boolean;
   dataDir: string;
   getWindow(): BrowserWindow | null;
   emit(channel: string, payload: unknown): void;
@@ -54,6 +62,11 @@ export interface MainContext {
   trustStore: TrustStore;
   rulesLoader: RulesLoader;
   hookStore: HookStore;
+  skillManager: SkillManager;
+  mcpConfig: McpConfigStore;
+  toolTrust: ToolTrustStore;
+  mcpTools: Map<string, string[]>;
+  plans?: PlanController;
   codeAuditor: CodeAuditor;
   traceRecorder: TraceRecorder;
   memoryStore: MemoryStore;

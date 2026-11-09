@@ -18,6 +18,8 @@ import type { TraceRecorder } from '@core/trace/TraceRecorder';
 import type { VerificationEvent, VerificationOutcome, VerificationTurn, VerificationTurnDecision, VerifyMode } from '@core/verify/VerificationTypes';
 import type { AgentRunRequest, ToolEvent } from '../AgentRuntime';
 import type { HookRunner, HookRunnerOptions } from '@core/hooks/HookRunner';
+import type { PlanController } from '@core/planning/PlanController';
+import type { PlanningMode } from '@core/planning/PlanTypes';
 
 export interface RunRequest {
   sessionId?: string;
@@ -40,6 +42,7 @@ export interface RunRequest {
   sessionRules?: string;
   enableTools?: boolean;
   verificationMode?: VerifyMode;
+  planningMode?: PlanningMode;
 }
 
 export type RunEmit = (channel: string, payload: unknown) => void;
@@ -64,6 +67,7 @@ export type InvokeStreamed = (
     sessionRules?: string;
     onRulesLoaded?: AgentRunRequest['onRulesLoaded'];
     hookRunner?: AgentRunRequest['hookRunner'];
+    planTool?: AgentRunRequest['planTool'];
   },
 ) => Promise<ModelResponse>;
 
@@ -86,6 +90,7 @@ export interface RunDependencies {
   };
   invokeStreamed: InvokeStreamed;
   controller: AbortController;
+  plans?: PlanController;
   createProvider?: (model: ModelConfig) => ModelProvider;
   createHookRuntime?: (input: { projectRoot?: string; signal: AbortSignal; assertBudget(): void; onStart: NonNullable<HookRunnerOptions['onStart']>; onResult: NonNullable<HookRunnerOptions['onResult']> }) => Promise<{ runner: Pick<HookRunner, 'run'>; diagnostics: string[] }>;
   createProjectVerification?: (input: {

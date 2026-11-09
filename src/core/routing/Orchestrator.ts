@@ -2,6 +2,7 @@ import type { ModelConfig } from '@core/models/ModelConfig';
 import { hasUsableCredentials } from '@core/models/ModelConfig';
 import type { TaskComplexity, TaskType } from './AgentRouter';
 import { selectPlanningModel } from './ModelCollaboration';
+import { parsePlanSteps, type PlanStep } from '@core/planning/PlanTypes';
 
 export type OrchestrationMode = 'direct' | 'delegate' | 'verify';
 
@@ -17,6 +18,7 @@ export interface OrchestrationPlan {
   complexity: TaskComplexity;
   reason?: string;
   plan?: string;
+  steps: PlanStep[];
   subagents: OrchestrationSubagent[];
   verify: boolean;
 }
@@ -59,6 +61,7 @@ export function buildOrchestratorPrompt(input: OrchestratorPromptInput): string 
     'Return JSON only, matching this shape:',
     '{"mode":"direct|delegate|verify","taskType":"code|reasoning|analysis|review|creative|general","complexity":"low|medium|high","reason":"brief reason","plan":"brief execution plan","subagents":[{"modelId":"EXACT id from list","role":"research|review|analysis|code|test","instruction":"self-contained task for this subagent"}],"verify":true|false}',
     'Rules:',
+    '- Include steps: [{"id":"step-1","title":"Concrete action","detail":"Optional details","status":"pending"}]. Use 1–24 steps with stable unique ids.',
     '- mode=direct: suggest steps for the selected executor; no subagents.',
     '- mode=delegate: suggest independent read-only assignments; the selected executor will synthesize their reports.',
     '- mode=verify: suggest independent verification of the selected executor’s answer.',
@@ -128,6 +131,7 @@ export function parseOrchestratorPlan(raw: string, models: ModelConfig[], orches
     complexity,
     reason: typeof record.reason === 'string' ? record.reason.trim().slice(0, 1_000) : undefined,
     plan: typeof record.plan === 'string' ? record.plan.trim().slice(0, 4_000) : undefined,
+    steps: parsePlanSteps(record.steps, typeof record.plan === 'string' ? record.plan : undefined),
     subagents,
     verify,
   };
@@ -138,6 +142,7 @@ export function buildSubagentInstruction(task: string, subagent: OrchestrationSu
     'You are an independent read-only subagent for the lead orchestrator.',
     'Role: ' + (subagent.role || 'analyst'),
     'Your assignment:\n' + subagent.instruction,
+    'When the task includes an approved_plan, its scope takes precedence over this earlier assignment. Skip any assignment that conflicts with the approved steps and explain why.',
     'Use web/file read tools only when necessary. Do not modify files, run project commands, or claim actions you did not perform.',
     'Return a concise, concrete report that the lead orchestrator can synthesize.',
     '',

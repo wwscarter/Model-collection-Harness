@@ -16,9 +16,9 @@ export default defineConfig({
       // which made 92.5% look like project coverage while most files were absent.
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/**/*.d.ts', 'src/renderer/styles/**', 'src/renderer/**/*.css'],
-      // Whole-project floors, set below the 2026-11 baseline (67% lines). They
-      // prevent the old "92.5%" illusion while leaving room to iterate.
-      thresholds: { lines: 60, statements: 55, functions: 48, branches: 48 },
+      // Whole-project floors after the runtime split and optimization pass.
+      // src/** remains included so untouched modules also count toward coverage.
+      thresholds: { lines: 70, statements: 65, functions: 60, branches: 60 },
     },
   },
   resolve: { alias: { '@core': resolve('src/core'), '@utils': resolve('src/utils'), '@main': resolve('src/main') } }
