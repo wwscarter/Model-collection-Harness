@@ -24,6 +24,15 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => { root.unmount(); }); container.remove(); delete window.amd; });
 
 describe('historical model identity display', () => {
+  it('labels hook spans and displays their recorded execution details', async () => {
+    const value = trace();
+    value.spans = [{ ...value.spans[0], kind: 'hook', modelId: undefined, name: 'ordinary-format', attributes: { phase: 'post_tool', command: 'npm run format', output: 'ordinary formatting completed' } }];
+    await render(createElement(TraceTimeline, { trace: value, defaultOpen: true }));
+    expect(container.querySelector('.trace-kind')!.textContent).toBe('钩子');
+    await act(async () => { container.querySelector<HTMLButtonElement>('.trace-row')!.click(); });
+    expect(container.querySelector('.trace-detail')!.textContent).toContain('post_tool');
+    expect(container.querySelector('.trace-detail')!.textContent).toContain('npm run format');
+  });
   it('shows the upstream snapshot in the row and keeps internal configuration identity separate in details', async () => {
     await render(createElement(TraceTimeline, { trace: trace(model), defaultOpen: true }));
     expect(container.querySelector('.trace-model')!.textContent).toBe('actual-upstream-v2');

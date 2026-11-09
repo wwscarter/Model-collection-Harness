@@ -17,6 +17,7 @@ import type { SessionStorage } from '@core/storage/SessionStorage';
 import type { TraceRecorder } from '@core/trace/TraceRecorder';
 import type { VerificationEvent, VerificationOutcome, VerificationTurn, VerificationTurnDecision, VerifyMode } from '@core/verify/VerificationTypes';
 import type { AgentRunRequest, ToolEvent } from '../AgentRuntime';
+import type { HookRunner, HookRunnerOptions } from '@core/hooks/HookRunner';
 
 export interface RunRequest {
   sessionId?: string;
@@ -62,6 +63,7 @@ export type InvokeStreamed = (
     afterTurn?: AgentRunRequest['afterTurn'];
     sessionRules?: string;
     onRulesLoaded?: AgentRunRequest['onRulesLoaded'];
+    hookRunner?: AgentRunRequest['hookRunner'];
   },
 ) => Promise<ModelResponse>;
 
@@ -85,6 +87,7 @@ export interface RunDependencies {
   invokeStreamed: InvokeStreamed;
   controller: AbortController;
   createProvider?: (model: ModelConfig) => ModelProvider;
+  createHookRuntime?: (input: { projectRoot?: string; signal: AbortSignal; assertBudget(): void; onStart: NonNullable<HookRunnerOptions['onStart']>; onResult: NonNullable<HookRunnerOptions['onResult']> }) => Promise<{ runner: Pick<HookRunner, 'run'>; diagnostics: string[] }>;
   createProjectVerification?: (input: {
     projectRoot: string;
     mode: 'quick' | 'full';

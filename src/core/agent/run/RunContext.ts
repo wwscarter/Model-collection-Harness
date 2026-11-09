@@ -24,6 +24,7 @@ import type { buildExecutionPlan } from '../RunOrchestrator';
 import { validateSessionRules } from '../sessionRules';
 import { costOf, estimateTokens, sanitizeHistory } from './runHelpers';
 import type { InvokeStreamed, RunDependencies, RunEmit, RunRequest } from './RunTypes';
+import type { HookRunner } from '@core/hooks/HookRunner';
 
 export interface RunContext {
   request: RunRequest;
@@ -90,6 +91,7 @@ export interface RunContext {
   finalContext: ReturnType<typeof assembleContext>;
   verification?: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string };
   projectVerification?: VerificationOutcome;
+  hookRunner?: Pick<HookRunner, 'run'>;
   invokeStreamed: InvokeStreamed;
   createProvider(model: ModelConfig): ModelProvider;
   recordGrowth(feedback: RoutingFeedback): void;
@@ -130,6 +132,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       }, {
         ...options,
         sessionRules: ctx.request.sessionRules,
+        hookRunner: ctx.hookRunner,
         onRulesLoaded: (metadata) => {
           const rules = metadata.rules.map(({ source, path, hash }) => ({ source, path, hash }));
           ctx.trace.child('context', 'rules.inject', { modelId: model.id, rules, truncated: metadata.truncated }).end();

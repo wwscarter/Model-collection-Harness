@@ -5,6 +5,7 @@ import type { CodebaseApi } from './codebaseTypes';
 import type { SandboxApi } from './sandboxTypes';
 import type { VerificationMode } from './verificationTypes';
 import type { RulesApi } from './rulesTypes';
+import type { HooksApi } from './hooksTypes';
 
 export interface ModelCapability { type: string; score: number; }
 
@@ -62,7 +63,7 @@ export interface TraceModelSnapshot {
 
 export type RunStatus = 'running' | 'success' | 'failed' | 'cancelled';
 export type SpanStatus = RunStatus;
-export type SpanKind = 'run' | 'route' | 'context' | 'memory' | 'compact' | 'plan' | 'model' | 'tool' | 'synthesis' | 'audit' | 'verify' | 'verify-command' | 'verify-repair';
+export type SpanKind = 'run' | 'route' | 'context' | 'memory' | 'compact' | 'plan' | 'model' | 'tool' | 'synthesis' | 'audit' | 'verify' | 'verify-command' | 'verify-repair' | 'hook';
 
 export interface TraceRun {
   id: string;
@@ -286,6 +287,7 @@ export interface AmdApi {
     cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
   agent: {
+    hooks: HooksApi;
     rules: RulesApi;
     describe: () => Promise<AgentResourceSummary>;
     searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;

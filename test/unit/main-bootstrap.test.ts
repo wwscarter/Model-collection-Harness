@@ -51,4 +51,25 @@ describe('main context lifecycle', () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it('assembles the Hook store with the same persistent trust grants as project Rules', async () => {
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'newai-startup-hooks-')));
+    const context = createMainContext(directory, () => null);
+    try {
+      const config = { version: 1, hooks: [{ id: 'lint', event: 'run_start', run: 'npm run lint' }] };
+      await context.hookStore.saveGlobal(config);
+      expect((await context.hookStore.list()).global).toMatchObject({ path: path.join(directory, 'agent', 'hooks.json'), trusted: true, config });
+      const project = path.join(directory, 'project');
+      fs.mkdirSync(path.join(project, '.newai'), { recursive: true });
+      fs.writeFileSync(path.join(project, '.newai', 'hooks.json'), JSON.stringify(config));
+      const preview = (await context.hookStore.list(project)).project!;
+      expect(preview.trusted).toBe(false);
+      await context.hookStore.trustProject(project, preview.hash);
+      expect(context.trustStore.isTrusted(project, '.newai/hooks.json', preview.hash)).toBe(true);
+      expect((await context.hookStore.load(project)).hooks.map((hook) => hook.source)).toEqual(['global', 'project']);
+    } finally {
+      disposeMainContext(context);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

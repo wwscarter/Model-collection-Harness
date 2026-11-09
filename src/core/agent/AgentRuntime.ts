@@ -25,6 +25,7 @@ import { RUN_TIMEOUT_MS, type AgentRunRequest, type AgentRunResult, type AgentRu
 import { driveAgentSession } from './AgentSessionDriver';
 import { installUsageAccounting } from './AgentUsage';
 import { prepareRulesPrompt } from './AgentRules';
+import { prepareHooks } from './AgentHooks';
 import { validateSessionRules } from './sessionRules';
 
 export { trimHistory } from './AgentHistory';
@@ -192,7 +193,8 @@ export class AgentRuntime {
     const toolDefinitions = toolRuntime.wrap(rawTools);
     const promptInput = { now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot };
     const rules = prepareRulesPrompt(request, promptInput);
-    const resourceLoader = await this.resourceLoader(cwd, settingsManager, buildSystemPrompt(promptInput), request.projectRoot, rules ? [rules.extension] : []);
+    const hooks = prepareHooks(request);
+    const resourceLoader = await this.resourceLoader(cwd, settingsManager, buildSystemPrompt(promptInput), request.projectRoot, [...(rules ? [rules.extension] : []), ...(hooks ? [hooks.extension] : [])]);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
     const { session } = await createAgentSession({
       cwd,
@@ -206,8 +208,9 @@ export class AgentRuntime {
       settingsManager,
       resourceLoader,
     });
-    const usageState = installUsageAccounting(session, request, mapping, this.options.runTimeoutMs);
-    return driveAgentSession(session, request, toolRuntime, usageState, { maxToolRounds: this.options.maxToolRounds, beforeTurn: rules?.beforeTurn });
+    const guardedRequest = hooks ? { ...request, beforeModelRequest: (estimate: Parameters<NonNullable<AgentRunRequest['beforeModelRequest']>>[0]) => { hooks.assertReady(); return request.beforeModelRequest?.(estimate); } } : request;
+    const usageState = installUsageAccounting(session, guardedRequest, mapping, this.options.runTimeoutMs);
+    return driveAgentSession(session, guardedRequest, toolRuntime, usageState, { maxToolRounds: this.options.maxToolRounds, beforeTurn: rules?.beforeTurn, assertReady: hooks?.assertReady });
   }
 
   /** Describe what the agent can use, for the settings UI. */

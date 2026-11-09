@@ -78,19 +78,40 @@ function saveSession(id: string, projectId?: string) {
 }
 
 describe('main process session projects', () => {
+  it('routes Hooks configuration and current project confirmation through the startup IPC registration', async () => {
+    const config = { version: 1, hooks: [{ id: 'lint', event: 'run_start', run: 'npm run lint' }] };
+    const projectFile = path.join(projectA.root, '.newai', 'hooks.json');
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(projectFile, JSON.stringify(config, null, 2) + '\n');
+    await invoke('projects:open', projectA.id);
+    try {
+      expect(await invoke('agent:hooks:save', config)).toEqual(config);
+      const listing = await invoke('agent:hooks:list');
+      expect(listing.global).toMatchObject({ trusted: true, config });
+      expect(listing.project).toMatchObject({ path: projectFile, trusted: false, config });
+      expect(await invoke('agent:hooks:trust', listing.project.hash)).toEqual({ success: true });
+      expect((await invoke('agent:hooks:list')).project.trusted).toBe(true);
+      expect(JSON.parse(fs.readFileSync(path.join(state.userData, 'trust.json'), 'utf8')).grants).toEqual(expect.arrayContaining([expect.objectContaining({ projectRoot: projectA.root, file: '.newai/hooks.json', sha256: listing.project.hash })]));
+    } finally {
+      await invoke('agent:hooks:save', { version: 1, hooks: [] });
+      fs.rmSync(projectFile, { force: true });
+    }
+  });
+
   it('forwards the agent stop reason and preserves zero usage through streamed model responses', async () => {
     const run = vi.spyOn(AgentRuntime.prototype, 'run').mockResolvedValue({ content: 'Current stage summary', inputTokens: 0, outputTokens: 17, toolCalls: 80, stopReason: 'tool_limit' });
     const onRulesLoaded = vi.fn();
     const afterTurn = vi.fn();
+    const hookRunner = { run: vi.fn() };
     const current = { ...invoke('model:list')[0], id: 'synthetic', name: 'Synthetic model', provider: 'custom', apiKey: '', baseURL: 'http://127.0.0.1/v1' } as ModelConfig;
     state.executeRun.mockImplementationOnce(async (_request, supplied) => {
-      const response = await (supplied as RunDependencies).invokeStreamed(current, 'hello', 100, () => undefined, { sessionRules: 'Prefer concise answers.', onRulesLoaded, afterTurn });
+      const response = await (supplied as RunDependencies).invokeStreamed(current, 'hello', 100, () => undefined, { sessionRules: 'Prefer concise answers.', onRulesLoaded, afterTurn, hookRunner });
       return { output: response.content, response };
     });
     try {
       expect(await invoke('session:execute', { sessionId: 'forward-stop-reason', prompt: 'hello', projectId: null })).toMatchObject({ response: { content: 'Current stage summary', stopReason: 'tool_limit', inputTokens: 0, outputTokens: 17 } });
       expect(run).toHaveBeenCalledOnce();
-      expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionRules: 'Prefer concise answers.', rulesLoader: expect.objectContaining({ load: expect.any(Function) }), onRulesLoaded, afterTurn }));
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionRules: 'Prefer concise answers.', rulesLoader: expect.objectContaining({ load: expect.any(Function) }), onRulesLoaded, afterTurn, hookRunner }));
     } finally { run.mockRestore(); }
   });
 

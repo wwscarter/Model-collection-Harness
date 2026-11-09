@@ -3,6 +3,7 @@ import { compactStage } from './run/compactStage';
 import { contextStage } from './run/contextStage';
 import { executeStage } from './run/executeStage';
 import { finalizeStage } from './run/finalizeStage';
+import { endHooks, startHooks } from './run/hookLifecycle';
 import { parallelStage } from './run/parallelStage';
 import { planStage } from './run/planStage';
 import { routeStage } from './run/routeStage';
@@ -15,7 +16,9 @@ export type { InvokeStreamed, RunDependencies, RunEmit, RunRequest } from './run
 /** Execute one user turn through independently testable pipeline stages. */
 export async function executeRun(request: RunRequest, deps: RunDependencies, emit: RunEmit): Promise<Record<string, unknown>> {
   const ctx = createRunContext(request, deps, emit);
+  let output: Record<string, unknown>;
   try {
+    await startHooks(ctx);
     await contextStage(ctx);
     await routeStage(ctx);
     await planStage(ctx);
@@ -24,7 +27,7 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
       await parallelStage(ctx);
       await executeStage(ctx);
       await verifyStage(ctx);
-      return await finalizeStage(ctx);
+      output = await finalizeStage(ctx);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.executionSpan?.end({ status: message === '任务已取消' ? 'cancelled' : 'failed', error: message });
@@ -39,10 +42,12 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
     const failure = ctx.controller.signal.aborted ? ctx.cancellationError() : error;
     ctx.traceStatus = failure instanceof Error && failure.message === '任务已取消' ? 'cancelled' : 'failed';
     ctx.traceError = failure instanceof Error ? failure.message : String(failure);
-    ctx.finishTrace(ctx.traceStatus, ctx.traceError);
     throw failure;
   } finally {
+    await endHooks(ctx);
     clearTimeout(ctx.deadlineTimer);
     ctx.finishTrace(ctx.traceStatus, ctx.traceError);
   }
+  ctx.emit('session:completed', output);
+  return output;
 }

@@ -5,7 +5,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import { summarizeToolResult, textOf } from './AgentHistory';
 import { MAX_TOOL_ROUNDS, type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type RunUsageState } from './AgentRuntimeTypes';
 
-export async function driveAgentSession(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime, usageState: RunUsageState, options: Pick<AgentRuntimeOptions, 'maxToolRounds'> & { beforeTurn?: () => Promise<void> }): Promise<AgentRunResult> {
+export async function driveAgentSession(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime, usageState: RunUsageState, options: Pick<AgentRuntimeOptions, 'maxToolRounds'> & { beforeTurn?: () => Promise<void>; assertReady?: () => void }): Promise<AgentRunResult> {
   let content = '';
   let toolCalls = 0;
   let toolRounds = 0;
@@ -93,6 +93,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
           summaryFailed = true;
         }
       }
+      try { options.assertReady?.(); } catch (error) { if (error instanceof BudgetExceededError) usageState.budgetError = error; else throw error; }
       const stats = session.getSessionStats();
       const last = [...session.messages].reverse().find((message) => (message as { role?: string }).role === 'assistant') as { stopReason?: string; errorMessage?: string } | undefined;
       if (last?.stopReason === 'aborted' || request.signal?.aborted) throw new Error('任务已取消');

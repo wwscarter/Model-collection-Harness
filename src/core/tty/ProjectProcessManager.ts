@@ -11,6 +11,8 @@ export interface ProjectCommandRequest {
   /** Foreground execution deadline, or background startup observation period. */
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Hook file arguments use PowerShell quoting on Windows. */
+  shell?: 'powershell';
 }
 
 export interface ProjectProcessSnapshot {
@@ -103,7 +105,7 @@ export class ProjectProcessManager {
     const requestedTimeout = request.timeoutMs ?? (background ? BACKGROUND_STARTUP_MS : DEFAULT_TIMEOUT_MS);
     if (!Number.isFinite(requestedTimeout) || requestedTimeout <= 0) throw new Error('timeoutMs 必须是正数');
     const timeoutMs = Math.min(maximum, Math.max(50, Math.floor(requestedTimeout)));
-    const state = this.start(command, cwd, background);
+    const state = this.start(command, cwd, background, request.shell);
     const cancel = () => { state.info.cancelled = true; this.terminate(state); };
     request.signal?.addEventListener('abort', cancel, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -156,11 +158,13 @@ export class ProjectProcessManager {
     }
   }
 
-  private start(command: string, cwd: string, background: boolean): ProcessState {
+  private start(command: string, cwd: string, background: boolean, requestedShell?: 'powershell'): ProcessState {
     const id = randomUUID();
     const windows = process.platform === 'win32';
-    const shell = windows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
-    const wrapped = wrapCommand(shell, windows ? ['/d', '/s', '/c', command] : ['-c', command], (this.sandboxPolicy ?? createSandboxPolicy)(cwd), commandEnvironment(cwd));
+    const powershell = windows && requestedShell === 'powershell';
+    const shell = powershell ? 'powershell.exe' : windows ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/sh');
+    const args = powershell ? ['-NoProfile', '-NonInteractive', '-Command', command] : windows ? ['/d', '/s', '/c', command] : ['-c', command];
+    const wrapped = wrapCommand(shell, args, (this.sandboxPolicy ?? createSandboxPolicy)(cwd), commandEnvironment(cwd));
     const child = spawn(wrapped.command, wrapped.args, {
       cwd, env: wrapped.env, detached: !windows, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     });

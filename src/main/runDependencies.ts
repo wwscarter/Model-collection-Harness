@@ -4,6 +4,7 @@ import type { ModelResponse } from '@core/providers/ModelProvider';
 import type { RunDependencies } from '@core/agent/RunCoordinator';
 import type { MainContext } from './MainContext';
 import { createProjectVerification } from './projectVerification';
+import { createHookRuntime } from './hookRuntime';
 
 function estimateTokens(value: string): number { return Math.max(1, Math.ceil(value.length / 4)); }
 
@@ -18,6 +19,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
     enableTools: options.enableTools !== false,
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
     sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded,
+    hookRunner: options.hookRunner,
     onToolEvent: (event) => {
       if (['write', 'edit'].includes(event.toolName)) {
         const file = (event.args as { path?: unknown } | undefined)?.path;
@@ -55,6 +57,7 @@ export function createRunDependencies(ctx: MainContext, controller: AbortControl
     summaries: sessionStorage,
     projectContext,
     createProjectVerification: (input) => createProjectVerification(ctx, input),
+    createHookRuntime: (input) => createHookRuntime(ctx, input),
     invokeStreamed: (model, prompt, maxTokens, onDelta, options) => invokeStreamed(ctx, model, prompt, maxTokens, onDelta, options),
     controller,
   };

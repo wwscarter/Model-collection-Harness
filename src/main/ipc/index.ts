@@ -12,6 +12,7 @@ import { register as registerPreferences } from './preferencesIpc';
 import { register as registerCodebase } from './codebaseIpc';
 import { register as registerSandbox } from './sandboxIpc';
 import { register as registerRules } from './rulesIpc';
+import { register as registerHooks } from './hooksIpc';
 
 export function registerHandlers(ctx: MainContext): void {
   registerModel(ctx);
@@ -27,4 +28,5 @@ export function registerHandlers(ctx: MainContext): void {
   registerCodebase(ctx);
   registerSandbox(ctx);
   registerRules(ctx);
+  registerHooks(ctx);
 }

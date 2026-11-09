@@ -29,22 +29,22 @@ export interface TraceRecorderOptions {
 const MAX_ATTRIBUTES_CHARS = 4_000;
 
 /** Keep trace metadata small and free of accidental full-file copies. */
-function safeAttributes(attributes: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+function safeAttributes(attributes: Record<string, unknown> | undefined, maxChars = MAX_ATTRIBUTES_CHARS): Record<string, unknown> | undefined {
   if (!attributes) return undefined;
   try {
     const json = JSON.stringify(attributes);
     const snapshot = JSON.parse(json) as Record<string, unknown>;
-    if (json.length <= MAX_ATTRIBUTES_CHARS) return snapshot;
+    if (json.length <= maxChars) return snapshot;
     // Identity must survive a long routing explanation or many candidate snapshots.
     // Keep structured evidence first; the remainder is only a bounded preview.
     const bounded: Record<string, unknown> = { truncated: true };
     for (const key of ['modelId', 'modelSnapshot', 'role', 'classification', 'taskType', 'complexity', 'strategy', 'ruleId', 'pinned', 'attemptIndex', 'fallbackAttempts', 'planningModelId', 'alternatives', 'fallbackModels', 'alternativeSnapshots', 'fallbackSnapshots', 'attempts']) {
       if (snapshot[key] === undefined) continue;
       const candidate = { ...bounded, [key]: snapshot[key] };
-      if (JSON.stringify(candidate).length <= MAX_ATTRIBUTES_CHARS - 160) bounded[key] = snapshot[key];
+      if (JSON.stringify(candidate).length <= maxChars - 160) bounded[key] = snapshot[key];
     }
-    let preview = json.slice(0, Math.max(0, MAX_ATTRIBUTES_CHARS - JSON.stringify(bounded).length - 32));
-    while (preview.length && JSON.stringify({ ...bounded, preview }).length > MAX_ATTRIBUTES_CHARS) preview = preview.slice(0, -32);
+    let preview = json.slice(0, Math.max(0, maxChars - JSON.stringify(bounded).length - 32));
+    while (preview.length && JSON.stringify({ ...bounded, preview }).length > maxChars) preview = preview.slice(0, -32);
     return { ...bounded, ...(preview ? { preview } : {}) };
   } catch {
     return { truncated: true, reason: 'unserializable attributes' };
@@ -126,7 +126,7 @@ export class TraceRecorder {
       outputTokens: 0,
       cost: 0,
       modelId: typeof attributes?.modelId === 'string' ? attributes.modelId : undefined,
-      attributes: safeAttributes(attributes),
+      attributes: safeAttributes(attributes, kind === 'hook' ? 16_384 : MAX_ATTRIBUTES_CHARS),
     };
     this.store.saveTraceSpan(span);
     const handle = new TraceSpanHandle(this, span, kind === 'run');
@@ -156,7 +156,7 @@ export class TraceRecorder {
     span.outputTokens = result.outputTokens ?? span.outputTokens;
     span.cost = result.cost ?? span.cost;
     span.errorMessage = result.error;
-    if (result.attributes) span.attributes = safeAttributes({ ...(span.attributes ?? {}), ...result.attributes });
+    if (result.attributes) span.attributes = safeAttributes({ ...(span.attributes ?? {}), ...result.attributes }, span.kind === 'hook' ? 16_384 : MAX_ATTRIBUTES_CHARS);
     this.persistSpan(span);
     this.handles.delete(span.id);
     this.emit({ type: 'span_end', runId: span.runId, span });

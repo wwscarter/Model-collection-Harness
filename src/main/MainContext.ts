@@ -26,6 +26,7 @@ import type { CodeSearchConfig } from '@core/codebase/CodeSearchConfig';
 import type { SandboxSettings } from '@core/security/SandboxSettings';
 import type { TrustStore } from '@core/security/TrustStore';
 import type { RulesLoader } from '@core/agent/RulesLoader';
+import type { HookStore } from '@core/hooks/HookStore';
 
 export interface MainContext {
   dataDir: string;
@@ -52,6 +53,7 @@ export interface MainContext {
   agentRuntime: AgentRuntime;
   trustStore: TrustStore;
   rulesLoader: RulesLoader;
+  hookStore: HookStore;
   codeAuditor: CodeAuditor;
   traceRecorder: TraceRecorder;
   memoryStore: MemoryStore;

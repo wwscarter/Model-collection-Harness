@@ -6,6 +6,7 @@ import type { Usage } from '@earendil-works/pi-ai';
 import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { FormattedRules } from './RulePrompt';
 import type { RulesLoader } from './RulesLoader';
+import type { HookRunner } from '@core/hooks/HookRunner';
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
 
@@ -33,6 +34,7 @@ export interface AgentRunRequest {
   /** App-owned loader: the renderer never supplies file access or trusted content. */
   rulesLoader?: Pick<RulesLoader, 'load'>;
   onRulesLoaded?: (metadata: Pick<FormattedRules, 'rules' | 'truncated'>) => void;
+  hookRunner?: Pick<HookRunner, 'run'>;
   /** Analysis subagents can inspect a project without modifying it or running commands. */
   projectAccess?: 'read' | 'write';
   /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */

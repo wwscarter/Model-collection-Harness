@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Settings } from '../../src/renderer/pages/Settings';
 import type { AmdApi } from '../../src/renderer/types';
 import type { RulesApi, RulesListing } from '../../src/renderer/rulesTypes';
+import type { HooksApi } from '../../src/renderer/hooksTypes';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -46,5 +47,20 @@ describe('extensions settings tab', () => {
     expect(container.textContent).toContain('规则已达到容量限制');
     expect(container.textContent).toContain('全局规则文件超过 64 条');
     expect(container.textContent).not.toContain('因长度限制未被注入');
+  });
+
+  it('switches between Rules and Hooks subpages without calling Hooks until selected', async () => {
+    const hooks: HooksApi = { list: vi.fn(async () => ({ diagnostics: [] })), saveGlobal: vi.fn(), trustProject: vi.fn() };
+    window.amd!.agent.hooks = hooks;
+    await act(async () => { root.render(createElement(Settings, { models: [], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn(), initialTab: 'extensions' })); });
+    expect(container.querySelector('[aria-label="规则设置"]')).not.toBeNull();
+    expect(hooks.list).not.toHaveBeenCalled();
+    await act(async () => { button('Hooks').click(); });
+    expect(button('Hooks').getAttribute('aria-selected')).toBe('true');
+    expect(container.querySelector('[aria-label="Hooks JSON 配置"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="规则设置"]')).toBeNull();
+    expect(hooks.list).toHaveBeenCalledOnce();
+    await act(async () => { button('规则').click(); });
+    expect(container.querySelector('[aria-label="规则设置"]')).not.toBeNull();
   });
 });
