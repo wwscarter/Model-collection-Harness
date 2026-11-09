@@ -23,6 +23,11 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   web_fetch: { name: 'web_fetch', maxResultChars: 12_000, timeoutMs: 25_000, cacheTtlMs: 10 * 60_000 },
   read: { name: 'read', maxResultChars: 12_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
   ls: { name: 'ls', maxResultChars: 8_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
+  grep: { name: 'grep', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
+  find: { name: 'find', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
+  code_symbols: { name: 'code_symbols', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
+  // Local indexing has bounded per-request deadlines and inherits the run cancellation.
+  code_search: { name: 'code_search', maxResultChars: 8_000, cacheTtlMs: 30_000 },
   write: { name: 'write', maxResultChars: 2_000, timeoutMs: 10_000 },
   edit: { name: 'edit', maxResultChars: 2_000, timeoutMs: 10_000 },
   process_status: { name: 'process_status', maxResultChars: 8_000, timeoutMs: 5_000 },
@@ -102,7 +107,7 @@ export class ToolRuntime {
         const stat = await fs.promises.stat(target);
         return `read:${this.fileVersion}:${target}:${stat.mtimeMs}:${stat.size}:${stable(params)}`;
       }
-      if (name === 'ls') return `ls:${this.fileVersion}:${stable(params)}`;
+      if (['ls', 'grep', 'find', 'code_symbols', 'code_search'].includes(name)) return `${name}:${this.fileVersion}:${stable(params)}`;
       return `${name}:${stable(params)}`;
     } catch {
       return '';

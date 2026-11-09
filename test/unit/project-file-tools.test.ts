@@ -18,7 +18,7 @@ function execute(name: string, input: Record<string, unknown>) {
 describe('project file tools', () => {
   it('registers mutation tools only for a selected project', () => {
     expect(createFileTools({ cwd: projectRoot }).map((tool) => tool.name)).toEqual(['read']);
-    expect(createFileTools({ cwd: projectRoot, projectRoot }).map((tool) => tool.name)).toEqual(['read', 'ls', 'write', 'edit']);
+    expect(createFileTools({ cwd: projectRoot, projectRoot }).map((tool) => tool.name)).toEqual(['read', 'ls', 'write', 'edit', 'grep', 'find']);
   });
 
   it('creates nested directories and writes UTF-8 webpage content', async () => {

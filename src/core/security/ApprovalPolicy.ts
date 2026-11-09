@@ -5,7 +5,7 @@ export type ApprovalMode = 'ask' | 'auto' | 'full';
 export interface ApprovalDecision { decision: 'allow' | 'confirm' | 'deny'; reason: string }
 export interface ToolApprovalRequest { toolName: string; input: Record<string, unknown>; projectRoot?: string }
 
-export const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'process_list', 'remember', 'recall']);
+export const SAFE_TOOLS = new Set(['web_search', 'web_fetch', 'read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'process_status', 'process_list', 'remember', 'recall']);
 
 export function isDangerousCommand(command: string): boolean {
   return /(^|[;&|]\s*)(sudo|su|shutdown|reboot|diskutil|mkfs|dd\s+if=|rm\s+-rf\s+\/|chmod\s+-R\s+777|:?\(\)\s*\{)/i.test(command)

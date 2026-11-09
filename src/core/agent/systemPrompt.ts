@@ -34,6 +34,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   }
   if (input.projectRoot && has('read')) {
     lines.push(`用户已关联项目目录 ${input.projectRoot}。需要了解代码时用 ls 和 read 查看文件。`);
+    if (has('grep') && has('find')) lines.push('先用 find 按文件名、grep 按内容定位，再用 read 的 offset/limit 读取命中附近的行段，避免逐层 ls 或读取整个大文件。检索会遵守 .gitignore；结果截断时缩小目录或文件模式。');
     if (has('write') && has('edit')) lines.push('你可以使用 write 创建或覆盖项目文件，使用 edit 精确修改已有文件。用户要求实现、保存或修改代码时，直接调用工具完成，不要把复制代码或手工保存交给用户。写入前检查已有文件，保留与任务无关的内容。');
     if (has('run_command')) lines.push(
       '你可以使用 run_command 在该项目的工作目录执行命令；应用会在执行前向用户展示确认，不要要求用户手工复制命令。命令以当前系统用户权限运行，工作目录不等于系统沙箱，只执行任务需要的操作。',

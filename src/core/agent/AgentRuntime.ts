@@ -252,7 +252,7 @@ export class AgentRuntime {
       ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir] }),
       ...(this.options.extraTools?.({ cwd, projectRoot }) ?? []),
     ];
-    return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls', 'process_status', 'process_list'].includes(tool.name)) : tools;
+    return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'process_status', 'process_list'].includes(tool.name)) : tools;
   }
 
   private seedSession(cwd: string, history: ChatTurn[], piModel: { api: string; provider: string; id: string }, summary?: string): SessionManager {

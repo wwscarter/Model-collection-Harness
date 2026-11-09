@@ -1,10 +1,12 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { Type } from 'typebox';
 import { createEditToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { SearchProviderRegistry } from './search';
 import { fetchWebPage, type WebFetchOptions } from './webFetch';
-import { isSensitiveFileName, isSensitiveRelativePath } from '@core/security/sensitiveFiles';
+import { isSensitiveFileName } from '@core/security/sensitiveFiles';
+import { isWithin, realOrSelf, resolveAllowedPath } from './projectPaths';
+import { createProjectSearchTools } from './projectSearchTools';
+export { resolveAllowedPath } from './projectPaths';
 
 /** Details attached to tool results; the renderer shows them on tool cards. */
 export interface WebSearchDetails { provider: string; query: string; results: Array<{ title: string; url: string }>; }
@@ -51,37 +53,6 @@ export function createWebFetchTool(options: Omit<WebFetchOptions, 'signal'> = {}
   });
 }
 
-function realOrSelf(target: string): string {
-  try { return fs.realpathSync(target); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return target;
-    // New files and nested directories do not exist yet. Resolve their existing parent first.
-    const parent = path.dirname(target);
-    return parent === target ? target : path.join(realOrSelf(parent), path.basename(target));
-  }
-}
-
-function isWithin(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
-/**
- * Resolve `target` (absolute, or relative to the first root) and require it to stay inside one of
- * `roots` after following symlinks. Files that commonly hold secrets are refused.
- */
-export function resolveAllowedPath(roots: readonly string[], target: string): string {
-  if (!roots.length) throw new Error('没有可访问的目录');
-  const realRoots = roots.map(realOrSelf);
-  const real = realOrSelf(path.resolve(realRoots[0], target));
-  const containingRoot = realRoots.find((root) => isWithin(root, real));
-  if (!containingRoot) throw new Error('只能访问当前项目目录（或已安装的技能目录）内的文件');
-  const relative = path.relative(containingRoot, real);
-  // Includes .git/: writing hooks or objects is a persistence primitive, and
-  // .git/config can carry a remote URL with an access token.
-  if (isSensitiveRelativePath(relative)) throw new Error('该文件可能包含密钥或属于版本库元数据，已拒绝访问');
-  return real;
-}
-
 /**
  * Project file tools built on Pi's read/ls/write/edit. Skills remain read-only, and mutation
  * tools are offered only when the user has selected a project.
@@ -124,6 +95,7 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
         writeFile: async (absolute, content) => { await fs.promises.writeFile(resolveWritePath(absolute), content, 'utf8'); },
       },
     }) as unknown as ToolDefinition);
+    tools.push(...createProjectSearchTools(options.projectRoot));
   }
   return tools;
 }

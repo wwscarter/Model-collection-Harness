@@ -110,4 +110,19 @@ describe('ToolRuntime', () => {
     expect((await wrapped.execute(...args)).content[0]).toMatchObject({ text: 'recovered' });
     expect(execute).toHaveBeenCalledTimes(2);
   });
+
+  it.each(['grep', 'find', 'code_symbols', 'code_search'])('refreshes %s results after a project mutation', async (name) => {
+    let value = 'before';
+    const search = vi.fn(async () => result(value));
+    const tools = new ToolRuntime({ cwd: process.cwd() }).wrap([
+      tool(name, search),
+      tool('write', async () => { value = 'after'; return result('saved'); }),
+    ]);
+    await tools[0].execute(...args);
+    await tools[0].execute(...args);
+    expect(search).toHaveBeenCalledOnce();
+    await tools[1].execute(...args);
+    expect((await tools[0].execute(...args)).content[0]).toMatchObject({ text: 'after' });
+    expect(search).toHaveBeenCalledTimes(2);
+  });
 });

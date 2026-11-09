@@ -19,7 +19,7 @@ afterEach(() => {
 
 describe('approval decisions', () => {
   it.each(modes)('allows existing safe tools in %s mode', (mode) => {
-    for (const toolName of ['read', 'ls', 'web_search', 'web_fetch', 'process_status', 'process_list', 'remember', 'recall']) {
+    for (const toolName of ['read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'web_search', 'web_fetch', 'process_status', 'process_list', 'remember', 'recall']) {
       expect(evaluateToolApproval(mode, { toolName, input: {} }).decision).toBe('allow');
     }
   });

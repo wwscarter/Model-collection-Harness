@@ -474,7 +474,8 @@ describe('AgentRuntime (Pi SDK)', () => {
     try {
       await agent.run({ model: model(), prompt: '读取项目', projectRoot: cwd, projectAccess: 'read' });
       const names = requests[0].body.tools.map((tool: any) => tool.function.name);
-      expect(names).toEqual(expect.arrayContaining(['read', 'ls']));
+      expect(names).toEqual(expect.arrayContaining(['read', 'ls', 'grep', 'find']));
+      expect(requests[0].body.messages[0].content).toContain('先用 find 按文件名、grep 按内容定位');
       for (const name of ['write', 'edit', 'run_command', 'stop_process']) expect(names).not.toContain(name);
       expect(requests[0].body.messages[0].content).toContain('本轮项目文件工具只有读取能力');
     } finally {
