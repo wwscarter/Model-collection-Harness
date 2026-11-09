@@ -26,6 +26,8 @@ import { CommandExecutor } from '@core/tty/CommandExecutor';
 import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
 import { createProjectCommandTools } from '@core/tools/projectCommandTools';
 import { AgentRuntime } from '@core/agent/AgentRuntime';
+import { RulesLoader } from '@core/agent/RulesLoader';
+import { TrustStore } from '@core/security/TrustStore';
 import { loadApprovalMode } from '@core/security/ApprovalPolicy';
 import { CodebaseIndex } from '@core/codebase/CodebaseIndex';
 import { SemanticSearch } from '@core/codebase/SemanticSearch';
@@ -91,8 +93,11 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
     }), (resource) => resource.close());
     // Pi resources (skills/, extensions/, mcp.json) live in newAi's own data folder, never ~/.pi.
     // No project selected means an empty app-owned workspace, not ~/Documents.
+    const agentDir = path.join(dataDir, 'agent');
+    const trustStore = new TrustStore(path.join(dataDir, 'trust.json'));
+    const rulesLoader = new RulesLoader({ agentDir, trustStore });
     const agentRuntime = new AgentRuntime({
-      agentDir: path.join(dataDir, 'agent'), defaultCwd: workspaceRoot,
+      agentDir, defaultCwd: workspaceRoot,
       toolGate: (request) => approveToolCall(ctx, request), enableMcp: true,
       extraTools: ({ projectRoot }) => [
         ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot) }) : []),
@@ -120,7 +125,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
       dataDir, getWindow, emit, workspaceRoot, storage, sessionStorage, projectStorage, registry,
       growth, routingLearning, routingService, router, preferencesPath, preferences,
       routingRulesPath, routingHistoryDir, routingPolicy, tty, projects, commandExecutor,
-      projectProcesses, agentRuntime, observability, modelQuota, memoryStore, traceRecorder,
+      projectProcesses, agentRuntime, trustStore, rulesLoader, observability, modelQuota, memoryStore, traceRecorder,
       auditLog, codeAuditor, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(),
       runningTasks: new Map(), pickedProjectRoots: new Set(),
       codebase, semanticSearch, codeSearchConfigPath, codeSearch,

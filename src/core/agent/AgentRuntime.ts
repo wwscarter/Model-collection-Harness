@@ -24,6 +24,8 @@ import { trimHistory } from './AgentHistory';
 import { RUN_TIMEOUT_MS, type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type ChatTurn, type ResourceSummary } from './AgentRuntimeTypes';
 import { driveAgentSession } from './AgentSessionDriver';
 import { installUsageAccounting } from './AgentUsage';
+import { prepareRulesPrompt } from './AgentRules';
+import { validateSessionRules } from './sessionRules';
 
 export { trimHistory } from './AgentHistory';
 export type { AgentRunRequest, AgentRunResult, AgentRuntimeOptions, AgentTurnContinuation, ChatTurn, ResourceSummary, ToolEvent, ToolGate } from './AgentRuntimeTypes';
@@ -108,7 +110,7 @@ export class AgentRuntime {
     return [...factories, ...(this.options.extensions ?? [])];
   }
 
-  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string, projectRoot?: string) {
+  private async resourceLoader(cwd: string, settingsManager: SettingsManager, systemPrompt: string, projectRoot?: string, runExtensions: InlineExtension[] = []) {
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: this.options.agentDir,
@@ -120,7 +122,7 @@ export class AgentRuntime {
       noThemes: true,
       noExtensions: !this.options.enableFileExtensions,
       disabledBuiltinExtensions: ['llama.cpp'],
-      extensionFactories: this.extensionFactories(projectRoot),
+      extensionFactories: [...this.extensionFactories(projectRoot), ...runExtensions],
       skillsOverride: (base) => ({
         skills: base.skills.filter((skill) => skill.filePath.startsWith(this.options.agentDir)),
         diagnostics: base.diagnostics,
@@ -161,6 +163,8 @@ export class AgentRuntime {
 
   /** Run one user turn, streaming text and tool events. Resolves with the final assistant text. */
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    validateSessionRules(request.sessionRules);
+    if (request.sessionRules?.trim() && !request.rulesLoader) throw new Error('会话规则服务不可用');
     const timeout = AbortSignal.timeout(this.options.runTimeoutMs ?? RUN_TIMEOUT_MS);
     const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
     try {
@@ -186,8 +190,9 @@ export class AgentRuntime {
       maxResultCharsTotal: this.options.maxToolResultChars,
     });
     const toolDefinitions = toolRuntime.wrap(rawTools);
-    const systemPrompt = buildSystemPrompt({ now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot });
-    const resourceLoader = await this.resourceLoader(cwd, settingsManager, systemPrompt, request.projectRoot);
+    const promptInput = { now: this.options.now?.() ?? new Date(), tools: toolDefinitions.map((tool) => tool.name), projectRoot: request.projectRoot };
+    const rules = prepareRulesPrompt(request, promptInput);
+    const resourceLoader = await this.resourceLoader(cwd, settingsManager, buildSystemPrompt(promptInput), request.projectRoot, rules ? [rules.extension] : []);
     const model = request.maxTokens ? { ...piModel, maxTokens: Math.min(piModel.maxTokens, request.maxTokens) } : piModel;
     const { session } = await createAgentSession({
       cwd,
@@ -202,7 +207,7 @@ export class AgentRuntime {
       resourceLoader,
     });
     const usageState = installUsageAccounting(session, request, mapping, this.options.runTimeoutMs);
-    return driveAgentSession(session, request, toolRuntime, usageState, { maxToolRounds: this.options.maxToolRounds });
+    return driveAgentSession(session, request, toolRuntime, usageState, { maxToolRounds: this.options.maxToolRounds, beforeTurn: rules?.beforeTurn });
   }
 
   /** Describe what the agent can use, for the settings UI. */

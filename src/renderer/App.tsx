@@ -32,6 +32,7 @@ export default function App() {
     updateCurrent, startMessageEdit, editingMessageId, handleKeyDown, execute, cancelRun,
     cancelMessageEdit, selectedSessionModelId, enabledModelOptions, toggleMultiModel, selectSessionModel,
     verificationMode, setVerificationMode, currentVerification,
+    sessionRules, setSessionRules,
   } = run;
   const {
     view, setView, openFiles, setOpenFiles, activeFilePath, setActiveFilePath, previewOpen,
@@ -79,6 +80,7 @@ export default function App() {
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onCancelEdit={cancelMessageEdit}
         verificationMode={verificationMode} onVerificationModeChange={setVerificationMode}
+        sessionRules={sessionRules} onSessionRulesChange={setSessionRules}
         multiModel={currentSession.multiModel !== false}
         pinnedModelId={currentSession.multiModel === false ? selectedSessionModelId : undefined}
         models={enabledModelOptions}

@@ -80,14 +80,17 @@ function saveSession(id: string, projectId?: string) {
 describe('main process session projects', () => {
   it('forwards the agent stop reason and preserves zero usage through streamed model responses', async () => {
     const run = vi.spyOn(AgentRuntime.prototype, 'run').mockResolvedValue({ content: 'Current stage summary', inputTokens: 0, outputTokens: 17, toolCalls: 80, stopReason: 'tool_limit' });
+    const onRulesLoaded = vi.fn();
+    const afterTurn = vi.fn();
     const current = { ...invoke('model:list')[0], id: 'synthetic', name: 'Synthetic model', provider: 'custom', apiKey: '', baseURL: 'http://127.0.0.1/v1' } as ModelConfig;
     state.executeRun.mockImplementationOnce(async (_request, supplied) => {
-      const response = await (supplied as RunDependencies).invokeStreamed(current, 'hello', 100, () => undefined);
+      const response = await (supplied as RunDependencies).invokeStreamed(current, 'hello', 100, () => undefined, { sessionRules: 'Prefer concise answers.', onRulesLoaded, afterTurn });
       return { output: response.content, response };
     });
     try {
       expect(await invoke('session:execute', { sessionId: 'forward-stop-reason', prompt: 'hello', projectId: null })).toMatchObject({ response: { content: 'Current stage summary', stopReason: 'tool_limit', inputTokens: 0, outputTokens: 17 } });
       expect(run).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionRules: 'Prefer concise answers.', rulesLoader: expect.objectContaining({ load: expect.any(Function) }), onRulesLoaded, afterTurn }));
     } finally { run.mockRestore(); }
   });
 

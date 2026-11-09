@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { containsSensitiveContent } from '@core/security/sensitiveContent';
 
 export type MemoryScope = 'global' | 'project' | 'session';
 export type MemoryKind = 'preference' | 'fact' | 'decision' | 'todo' | 'artifact';
@@ -53,7 +54,6 @@ interface MemoryRow {
 }
 
 const MAX_CONTENT_CHARS = 2_000;
-const SENSITIVE_CONTENT = /(sk-[a-z0-9_-]{16,}|api[_-]?key\s*[:=]|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[a-z0-9]{20,}|xox[baprs]-)/i;
 
 export class MemoryStore {
   private readonly db: Database.Database;
@@ -105,7 +105,7 @@ export class MemoryStore {
     const content = input.content?.trim();
     if (!content) throw new Error('记忆内容不能为空');
     if (content.length > MAX_CONTENT_CHARS) throw new Error(`记忆内容不能超过 ${MAX_CONTENT_CHARS} 字`);
-    if (SENSITIVE_CONTENT.test(content)) throw new Error('记忆内容可能包含密钥或令牌，已拒绝保存');
+    if (containsSensitiveContent(content)) throw new Error('记忆内容可能包含密钥或令牌，已拒绝保存');
     const scope = input.scope ?? (input.projectRoot ? 'project' : 'global');
     if (scope === 'project' && !input.projectRoot) throw new Error('项目记忆需要项目目录');
     if (scope === 'session' && !input.sessionId) throw new Error('会话记忆需要会话 ID');

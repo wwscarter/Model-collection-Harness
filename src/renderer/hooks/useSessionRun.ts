@@ -26,6 +26,14 @@ export function useSessionRun() {
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
   const [verificationMode, setVerificationModeState] = useState<VerificationMode>('quick');
   const [verificationEvents, setVerificationEvents] = useState<Record<string, SessionVerificationEvent>>({});
+  const [sessionRuleDrafts, setSessionRuleDrafts] = useState<Record<string, string>>({});
+  const sessionRules = state.currentSessionId ? sessionRuleDrafts[state.currentSessionId] ?? '' : '';
+  const setSessionRules = (content: string) => {
+    if (isLoading || !state.currentSessionId) return;
+    let bounded = content.slice(0, 8_000);
+    if (/[\uD800-\uDBFF]/.test(bounded.at(-1) ?? '')) bounded = bounded.slice(0, -1);
+    setSessionRuleDrafts((current) => ({ ...current, [state.currentSessionId!]: bounded }));
+  };
   const setVerificationMode = (mode: VerificationMode) => { if (!isLoading) setVerificationModeState(mode); };
   const withRunTiming = (metrics: SessionMetrics | undefined, sessionId: string, confidence: number | undefined, hasOutput: boolean, stopReason?: string): SessionMetrics | undefined => {
     const timing = runTimingRef.current;
@@ -189,6 +197,7 @@ export function useSessionRun() {
         stream: true,
         includeProjectContext,
         verificationMode,
+        sessionRules: sessionRules.trim() ? sessionRules : undefined,
         pinnedModelId,
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
         history: historyForModel(messages.slice(0, -2)),
@@ -250,6 +259,7 @@ export function useSessionRun() {
     ...state, completionNotice, setCompletionNotice, projectReloadKey, setProjectReloadKey,
     liveTrace, liveElapsedMs, execute, cancelRun, handleKeyDown,
     verificationMode, setVerificationMode, currentVerification: state.currentSessionId ? verificationEvents[state.currentSessionId] : undefined,
+    sessionRules, setSessionRules,
   };
 }
 

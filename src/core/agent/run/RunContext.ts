@@ -21,6 +21,7 @@ import type { VerificationOutcome } from '@core/verify/VerificationTypes';
 import { randomUUID } from 'node:crypto';
 import type { ToolEvent } from '../AgentRuntime';
 import type { buildExecutionPlan } from '../RunOrchestrator';
+import { validateSessionRules } from '../sessionRules';
 import { costOf, estimateTokens, sanitizeHistory } from './runHelpers';
 import type { InvokeStreamed, RunDependencies, RunEmit, RunRequest } from './RunTypes';
 
@@ -128,6 +129,12 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
         }
       }, {
         ...options,
+        sessionRules: ctx.request.sessionRules,
+        onRulesLoaded: (metadata) => {
+          const rules = metadata.rules.map(({ source, path, hash }) => ({ source, path, hash }));
+          ctx.trace.child('context', 'rules.inject', { modelId: model.id, rules, truncated: metadata.truncated }).end();
+          options?.onRulesLoaded?.(metadata);
+        },
         beforeModelRequest: (estimate) => reserveRequest(lease, model, estimate),
         onUsage: (usage) => {
           reservations.delete(lease);
@@ -188,6 +195,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     throw new Error('任务描述不能为空');
   if (ctx.request.prompt.length > 200000)
     throw new Error('任务描述过长');
+  validateSessionRules(ctx.request.sessionRules);
   if (ctx.request.taskId !== undefined && typeof ctx.request.taskId !== 'string')
     throw new Error('任务 ID 无效');
   if (ctx.request.sessionId !== undefined && typeof ctx.request.sessionId !== 'string')

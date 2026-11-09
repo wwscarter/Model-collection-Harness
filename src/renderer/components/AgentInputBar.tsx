@@ -22,6 +22,8 @@ interface AgentInputBarProps {
   approvalMode: 'ask' | 'auto' | 'full';
   verificationMode: VerificationMode;
   onVerificationModeChange: (mode: VerificationMode) => void;
+  sessionRules: string;
+  onSessionRulesChange: (rules: string) => void;
   onOpenSettings: () => void;
   onToggleMultiModel: () => void;
   onSelectModel: (id: string) => void;
@@ -39,7 +41,7 @@ const QUICK_COMMANDS = [
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, sessionRules, onSessionRulesChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -75,6 +77,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
         <label className="composer-git-state">验证 <select className="composer-git-create" aria-label="项目验证模式" title="快速检查 lint 与类型；完整检查再运行测试" value={verificationMode} disabled={busy} onChange={(event) => onVerificationModeChange(event.target.value as VerificationMode)}><option value="off">关闭</option><option value="quick">快速</option><option value="full">完整</option></select></label>
       </div>
       <textarea ref={inputRef} rows={2} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder={hasMessages ? '输入追加指令或反馈…' : '描述你想完成的任务…'} aria-label={editing ? '编辑消息' : '描述任务'} />
+      <details><summary className="composer-git-create">本会话规则{sessionRules ? ' · ' + sessionRules.length + ' 字符' : ''}</summary><label className="field"><textarea className="input mono" aria-label="本会话规则" rows={4} maxLength={8000} style={{ height: 'auto', maxHeight: 180, resize: 'vertical' }} value={sessionRules} disabled={busy} placeholder="例如：用中文解释，并概述相关测试结果。" onChange={(event) => onSessionRulesChange(event.target.value)} /></label><p className="runtime-hint">{sessionRules.length}/8000 字符 · 仅用于当前会话的后续任务，关闭应用后清除，不保存到会话历史。</p></details>
       <footer>
         <div className="dock-left quick-menu-wrap"><button className="attach-button quick-menu-trigger" title="快捷指令" aria-label="快捷指令" aria-expanded={quickOpen} onClick={() => setQuickOpen((open) => !open)}><Plus size={18} /></button>{quickOpen && <div className="quick-menu" role="menu" aria-label="快捷指令">{QUICK_COMMANDS.map((command) => <button key={command.label} className="quick-menu-item" role="menuitem" disabled={command.requiresFile && !activeFilePath} title={command.requiresFile && !activeFilePath ? '请先从工作区打开一个文件' : undefined} onClick={() => insertCommand(command.requiresFile ? `请解释项目文件「${activeFilePath}」的实现、关键流程和潜在风险。` : command.prompt)}>{command.label}</button>)}</div>}<button className="composer-permission" title="执行权限设置" aria-label={'执行权限：' + permissionLabel} onClick={onOpenSettings}><ShieldCheck size={12} strokeWidth={1.7} /><span>{permissionLabel}</span></button></div>
         <div className="dock-right">

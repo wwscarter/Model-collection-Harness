@@ -4,6 +4,8 @@ import type { BudgetExceededError } from '@core/routing/RunBudget';
 import type { SearchProviderRegistry } from '@core/tools/search';
 import type { Usage } from '@earendil-works/pi-ai';
 import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { FormattedRules } from './RulePrompt';
+import type { RulesLoader } from './RulesLoader';
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
 
@@ -26,6 +28,11 @@ export interface AgentRunRequest {
   /** The caller already applied its token budget; skip the 20-turn/60k-char trim. */
   skipHistoryTrim?: boolean;
   projectRoot?: string;
+  /** Ephemeral system instructions; do not append to history or summaries. */
+  sessionRules?: string;
+  /** App-owned loader: the renderer never supplies file access or trusted content. */
+  rulesLoader?: Pick<RulesLoader, 'load'>;
+  onRulesLoaded?: (metadata: Pick<FormattedRules, 'rules' | 'truncated'>) => void;
   /** Analysis subagents can inspect a project without modifying it or running commands. */
   projectAccess?: 'read' | 'write';
   /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */

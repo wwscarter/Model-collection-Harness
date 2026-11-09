@@ -24,6 +24,8 @@ import type { CodebaseIndex } from '@core/codebase/CodebaseIndex';
 import type { SemanticSearch } from '@core/codebase/SemanticSearch';
 import type { CodeSearchConfig } from '@core/codebase/CodeSearchConfig';
 import type { SandboxSettings } from '@core/security/SandboxSettings';
+import type { TrustStore } from '@core/security/TrustStore';
+import type { RulesLoader } from '@core/agent/RulesLoader';
 
 export interface MainContext {
   dataDir: string;
@@ -48,6 +50,8 @@ export interface MainContext {
   commandExecutor: CommandExecutor;
   projectProcesses: ProjectProcessManager;
   agentRuntime: AgentRuntime;
+  trustStore: TrustStore;
+  rulesLoader: RulesLoader;
   codeAuditor: CodeAuditor;
   traceRecorder: TraceRecorder;
   memoryStore: MemoryStore;

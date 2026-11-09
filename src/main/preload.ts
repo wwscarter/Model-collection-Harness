@@ -126,6 +126,13 @@ const amdApi = {
     cancel: (taskId: string) => ipcRenderer.invoke('session:cancel', taskId),
   },
   agent: {
+    rules: {
+      list: () => ipcRenderer.invoke('agent:rules:list'),
+      saveGlobal: (input: unknown) => ipcRenderer.invoke('agent:rules:save', input),
+      setEnabled: (name: string, enabled: boolean) => ipcRenderer.invoke('agent:rules:set-enabled', name, enabled),
+      removeGlobal: (name: string) => ipcRenderer.invoke('agent:rules:remove', name),
+      trustProject: (path: string, sha256: string) => ipcRenderer.invoke('agent:rules:trust', path, sha256),
+    },
     describe: () => ipcRenderer.invoke('agent:describe'),
     searchProviders: () => ipcRenderer.invoke('agent:search-providers'),
     setSearchProvider: (id: string) => ipcRenderer.invoke('agent:set-search-provider', id),

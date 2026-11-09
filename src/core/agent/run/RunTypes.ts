@@ -35,6 +35,8 @@ export interface RunRequest {
   includeProjectContext?: boolean;
   contextMaxTokens?: number;
   history?: unknown;
+  /** Temporary system rules, excluded from conversation persistence. */
+  sessionRules?: string;
   enableTools?: boolean;
   verificationMode?: VerifyMode;
 }
@@ -58,6 +60,8 @@ export type InvokeStreamed = (
     onUsage?: (usage: ModelUsage) => void;
     beforeModelRequest?: (request: ModelRequestEstimate) => { maxOutputTokens: number } | void;
     afterTurn?: AgentRunRequest['afterTurn'];
+    sessionRules?: string;
+    onRulesLoaded?: AgentRunRequest['onRulesLoaded'];
   },
 ) => Promise<ModelResponse>;
 

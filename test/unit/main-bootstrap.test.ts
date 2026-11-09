@@ -7,7 +7,7 @@ import { SessionStorage } from '@core/storage/SessionStorage';
 import { ProjectStorage } from '@core/storage/ProjectStorage';
 import { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
 import { RoutingService } from '@core/routing/RoutingService';
-import { createMainContext } from '../../src/main/bootstrap';
+import { createMainContext, disposeMainContext } from '../../src/main/bootstrap';
 
 vi.mock('electron', () => ({
   app: {},
@@ -22,6 +22,20 @@ vi.mock('electron', () => ({
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('main context lifecycle', () => {
+  it('initializes the shared rules loader and trust store in the app data directory', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-startup-rules-'));
+    const context = createMainContext(directory, () => null);
+    try {
+      expect(context.trustStore.list()).toEqual([]);
+      const rule = await context.rulesLoader.saveGlobal({ name: '工作约定', content: '使用简洁说明。', enabled: true });
+      expect(rule.path).toBe(path.join(fs.realpathSync(directory), 'agent', 'rules', '工作约定.md'));
+      expect((await context.rulesLoader.load()).rules).toMatchObject([{ name: '工作约定', content: '使用简洁说明。' }]);
+    } finally {
+      disposeMainContext(context);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('closes initialized stores and services when startup fails before returning a context', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-startup-'));
     const modelClose = vi.spyOn(ModelStorage.prototype, 'close');

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react';
 import type { ModelConfig } from '../types';
 import { RuntimeSettings } from '../components/RuntimeSettings';
+import { RulesSettings } from '../components/RulesSettings';
 import { routingStatusLabel } from '../components/ModelRoutingSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 import { hasLegacyPresetRates } from '@core/models/ModelSnapshot';
@@ -10,7 +11,7 @@ import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults
 import type { ProviderCategory, SettingsDraft } from '../settingsForm';
 import '../styles/settings.css';
 
-interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; onOpenRouting: () => void; initialTab?: 'models' | 'runtime'; }
+interface SettingsProps { models: ModelConfig[]; onClose: () => void; onModelsChanged: (models: ModelConfig[]) => void; onOpenRouting: () => void; initialTab?: 'models' | 'runtime' | 'extensions'; }
 type Busy = 'saving' | 'testing' | 'fetching' | 'refreshing' | null;
 type ConnectionResult = { success: boolean; latency?: number; error?: string; demo?: boolean };
 type TestedEndpoint = { fingerprint: string; result: ConnectionResult };
@@ -28,7 +29,7 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
 }
 
 export function Settings({ models, onClose, onModelsChanged, onOpenRouting, initialTab = 'models' }: SettingsProps) {
-  const [tab, setTab] = useState<'models' | 'runtime'>(initialTab);
+  const [tab, setTab] = useState<'models' | 'runtime' | 'extensions'>(initialTab);
   const firstModel = models.find((model) => model.isPrimary && model.enabled) ?? models[0];
   const [selectedId, setSelectedId] = useState<string | null>(firstModel?.id ?? null);
   const selected = models.find((model) => model.id === selectedId);
@@ -80,7 +81,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
         if (current.current.busy !== 'saving') current.current.onClose();
       }
       if (event.key === 'Tab') {
-        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]') ?? []).filter((element) => element.getClientRects().length > 0);
+        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]') ?? []).filter((element) => element.getClientRects().length > 0);
         const first = controls[0], last = controls.at(-1);
         if (!first) { event.preventDefault(); return; }
         if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus(); }
@@ -195,8 +196,8 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
         <div className="titlebar-left"><span className="titlebar-symbol"><SlidersHorizontal size={14} /></span><h2 id="settings-title">设置 <span className="settings-title-english">(Settings)</span></h2></div>
         <div className="titlebar-right"><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
-      <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button></div>
-      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : <div className="settings-body">
+      <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button><button className={tab === 'extensions' ? 'active' : ''} role="tab" aria-selected={tab === 'extensions'} onClick={() => setTab('extensions')}>扩展</button></div>
+      {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : tab === 'extensions' ? window.amd?.agent?.rules ? <RulesSettings api={window.amd.agent.rules} /> : <section className="runtime-card" role="alert">规则管理接口尚未连接。</section> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">
             <div className="endpoint-list-title"><strong>端点与路由</strong><button className="button primary small" disabled={Boolean(busy)} onClick={() => switchEndpoint()}><Plus size={13} />添加模型</button></div>

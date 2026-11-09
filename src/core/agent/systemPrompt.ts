@@ -3,6 +3,8 @@ export interface SystemPromptInput {
   tools: string[];
   projectRoot?: string;
   timeZone?: string;
+  /** Bounded fragment produced by formatRules after loading trusted sources. */
+  rules?: string;
 }
 
 function formatNow(now: Date, timeZone?: string): string {
@@ -47,5 +49,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   }
   lines.push('只描述本轮工具清单中实际提供的能力。应用没有可供用户切换的“终端权限模式”，不要编造权限开关、模式或设置入口。');
   lines.push('不要声称执行了实际上没有执行的操作。');
+  if (input.rules) lines.push(input.rules);
   return lines.join('\n');
 }

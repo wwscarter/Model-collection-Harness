@@ -17,6 +17,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
     model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
     projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
+    sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded,
     onToolEvent: (event) => {
       if (['write', 'edit'].includes(event.toolName)) {
         const file = (event.args as { path?: unknown } | undefined)?.path;
