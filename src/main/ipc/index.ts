@@ -1,0 +1,24 @@
+import type { MainContext } from '../MainContext';
+import { register as registerModel } from './modelIpc';
+import { register as registerSession } from './sessionIpc';
+import { register as registerProject } from './projectIpc';
+import { register as registerRouting } from './routingIpc';
+import { register as registerMemory } from './memoryIpc';
+import { register as registerMetrics } from './metricsIpc';
+import { register as registerTrace } from './traceIpc';
+import { register as registerAgent } from './agentIpc';
+import { register as registerExecution } from './executionIpc';
+import { register as registerPreferences } from './preferencesIpc';
+
+export function registerHandlers(ctx: MainContext): void {
+  registerModel(ctx);
+  registerSession(ctx);
+  registerProject(ctx);
+  registerRouting(ctx);
+  registerMemory(ctx);
+  registerMetrics(ctx);
+  registerTrace(ctx);
+  registerAgent(ctx);
+  registerExecution(ctx);
+  registerPreferences(ctx);
+}
