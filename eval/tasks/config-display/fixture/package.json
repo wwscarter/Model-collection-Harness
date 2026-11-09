@@ -1,0 +1,10 @@
+{
+  "name": "newai-eval-config-display",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "node --check check.mjs",
+    "test": "node check.mjs"
+  }
+}

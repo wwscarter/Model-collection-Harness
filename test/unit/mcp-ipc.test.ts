@@ -17,6 +17,7 @@ const directories: string[] = [];
 let server: http.Server;
 let url: string;
 let methods: string[] = [];
+let offeredTools = ['greet'];
 beforeAll(async () => {
   server = http.createServer((request, response) => {
     if (request.method !== 'POST') { response.writeHead(405); response.end(); return; }
@@ -28,7 +29,7 @@ beforeAll(async () => {
       methods.push(message.method);
       if (message.id === undefined) { response.writeHead(202); response.end(); return; }
       const result = message.method === 'initialize' ? { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'ordinary-fixture', version: '1' } }
-        : { tools: [{ name: 'greet', description: 'Ordinary greeting', inputSchema: { type: 'object', properties: {} } }] };
+        : { tools: offeredTools.map((name) => ({ name, description: 'Ordinary reference tool', inputSchema: { type: 'object', properties: {} } })) };
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
     });
@@ -37,7 +38,7 @@ beforeAll(async () => {
   url = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
 });
 afterAll(() => { server.closeAllConnections(); server.close(); });
-beforeEach(() => { methods = []; state.confirm.mockResolvedValue(true); configureEncryptionKeyProvider(() => Buffer.alloc(32, 6)); });
+beforeEach(() => { methods = []; offeredTools = ['greet']; state.confirm.mockResolvedValue(true); configureEncryptionKeyProvider(() => Buffer.alloc(32, 6)); });
 afterEach(() => { state.handlers.clear(); state.confirm.mockClear(); resetEncryptionKeyProvider(); for (const root of directories.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'newai-mcp-host-')));
@@ -51,6 +52,13 @@ function fixture() {
 }
 
 describe('MCP settings host integration', () => {
+  it('stores SDK-compatible identifiers for ordinary formatted tool names', async () => {
+    const value = fixture();
+    offeredTools = ['read-file', 'sum.total', 'docs/list'];
+    await value.invoke('save', 'local-docs', { type: 'http', url, enabled: true });
+    expect(await value.invoke('test', 'local-docs')).toMatchObject({ success: true, tools: 3 });
+    expect(value.ctx.mcpTools.get('local-docs')).toEqual(['mcp__local_docs__read_file', 'mcp__local_docs__sum_total', 'mcp__local_docs__docs_list']);
+  });
   it('saves, lists, connects, tracks tools and removes an ordinary HTTP server', async () => {
     const value = fixture();
     expect((await value.invoke('list')).servers).toEqual([]);

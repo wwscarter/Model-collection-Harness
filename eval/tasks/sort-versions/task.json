@@ -5,7 +5,7 @@
     "fix",
     "sort"
   ],
-  "prompt": "Implement sortVersions(values): sort dotted numeric versions ascending, treating omitted numeric components as zero, without mutating the input. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "prompt": "Implement sortVersions(values): sort dotted numeric versions ascending, treating omitted numeric components as zero, without mutating the input. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing. Keep package.json unchanged.",
   "fixture": "fixture",
   "checks": [
     {
@@ -20,7 +20,12 @@
     {
       "type": "max-tool-calls",
       "value": 20
+    },
+    {
+      "type": "file-unchanged",
+      "path": "package.json"
     }
   ],
-  "timeoutMs": 300000
+  "timeoutMs": 300000,
+  "verificationMode": "full"
 }

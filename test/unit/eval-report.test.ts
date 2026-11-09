@@ -37,4 +37,18 @@ describe('evaluation report outcomes', () => {
     const current = writeReport([sample(false)], directory(), 'model', baseline.jsonPath);
     expect(current.regressions).toEqual([]);
   });
+
+  it('reports actual project verification separately from task assertions and excludes unrun checks', () => {
+    const values: EvalSample[] = [
+      { ...sample(), verification: { mode: 'full', status: 'passed', attempts: 2, repairRounds: 1 } },
+      { ...sample(false), verification: { mode: 'full', status: 'failed', attempts: 3, repairRounds: 2 } },
+      { ...sample(false), verification: { mode: 'quick', status: 'unverified', attempts: 0, repairRounds: 0 } },
+      { ...sample(), verification: { mode: 'off', status: 'skipped', attempts: 0, repairRounds: 0 } },
+      { ...sample(), verification: { mode: 'quick', status: 'not-run', attempts: 0, repairRounds: 0 } },
+    ];
+    const report = writeReport(values, directory(), 'model');
+    expect(report.summary.verification).toEqual({ attempted: 3, passed: 1, failed: 1, unverified: 1, skipped: 1, notRun: 1, passRate: 1 / 3 });
+    expect(report.byTag.code.verification).toEqual(report.summary.verification);
+    expect(fs.readFileSync(report.markdownPath, 'utf8')).toContain('Project verification: 1/3 attempted; rate=33.3%');
+  });
 });

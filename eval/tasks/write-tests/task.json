@@ -1,0 +1,18 @@
+{
+  "id": "write-tests",
+  "tags": ["code", "tests", "arithmetic"],
+  "prompt": "This directory is an isolated local synthetic evaluation fixture for ordinary arithmetic test quality. src/main.mjs already contains a correct sum(values) function: it returns the numeric sum, returns 0 for empty arrays, handles negative and fractional values, and does not mutate its input. Add test/sum.test.mjs using the native node:test runner and node:assert/strict. Exercise those ordinary behaviours, including a single element and mixed positive/negative values. Keep src/main.mjs, check.mjs, package.json and README.md unchanged. Run npm test and node check.mjs to verify the tests. The checker runs your tests against the correct implementation and isolated synthetic implementations containing ordinary arithmetic mistakes; your tests should pass the correct implementation and fail the incorrect ones.",
+  "fixture": "fixture",
+  "verificationMode": "full",
+  "checks": [
+    { "type": "command", "run": "node check.mjs", "expectExit": 0 },
+    { "type": "file-contains", "path": "test/sum.test.mjs", "value": "node:test" },
+    { "type": "file-contains", "path": "test/sum.test.mjs", "value": "node:assert/strict" },
+    { "type": "file-unchanged", "path": "src/main.mjs" },
+    { "type": "file-unchanged", "path": "check.mjs" },
+    { "type": "file-unchanged", "path": "package.json" },
+    { "type": "file-unchanged", "path": "README.md" },
+    { "type": "max-tool-calls", "value": 25 }
+  ],
+  "timeoutMs": 300000
+}

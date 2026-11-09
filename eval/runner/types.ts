@@ -1,4 +1,5 @@
 import type { ModelConfig } from '../../src/core/models/ModelConfig';
+import type { VerificationStatus, VerifyMode } from '../../src/core/verify/VerificationTypes';
 export type EvalCheck =
   | { type: 'command'; run: string; expectExit: number }
   | { type: 'file-unchanged'; path: string }
@@ -7,7 +8,7 @@ export type EvalCheck =
   | { type: 'max-tool-calls'; value: number }
   | { type: 'max-cost'; value: number }
   | { type: 'llm-judge'; modelId: string; rubric: string; minScore: number };
-export interface EvalTask { id: string; tags: string[]; prompt: string; fixture: string; checks: EvalCheck[]; timeoutMs: number; directory: string; }
+export interface EvalTask { id: string; tags: string[]; prompt: string; fixture: string; checks: EvalCheck[]; timeoutMs: number; directory: string; verificationMode: VerifyMode; }
 export interface EvalOptions {
   tasksDir?: string; resultsDir?: string; dataDir?: string; model?: string; tags?: string[];
   repeat?: number; baseline?: string; smoke?: boolean; signal?: AbortSignal;
@@ -16,13 +17,16 @@ export interface EvalOptions {
   modelConfig?: ModelConfig;
 }
 export interface CheckResult { type: EvalCheck['type']; passed: boolean; detail: string; usage?: { inputTokens: number; outputTokens: number; cost: number }; }
+export interface EvalVerification { mode: VerifyMode; status: VerificationStatus | 'not-run'; attempts: number; repairRounds: number; summary?: string; }
+export interface VerificationSummary { attempted: number; passed: number; failed: number; unverified: number; skipped: number; notRun: number; passRate: number | null; }
 export interface EvalSample {
   taskId: string; tags: string[]; model: string; mode: 'smoke' | 'model'; iteration: number;
   modelSnapshot?: { configId: string; provider: string; modelId: string; costPer1kTokens?: { input: number; output: number } };
   passed: boolean; durationMs: number; toolCalls: number; cost: number | null;
   inputTokens: number | null; outputTokens: number | null; checks: CheckResult[]; error?: string;
+  verification?: EvalVerification;
 }
-export interface EvalGroup { runs: number; passed: number; passRate: number; meanDurationMs: number; meanToolCalls: number; meanCost: number | null; }
+export interface EvalGroup { runs: number; passed: number; passRate: number; meanDurationMs: number; meanToolCalls: number; meanCost: number | null; verification: VerificationSummary; }
 export interface EvalReport {
   schemaVersion: 1; createdAt: string; mode: 'smoke' | 'model'; passed: boolean;
   cancelled: boolean; expectedSamples: number;

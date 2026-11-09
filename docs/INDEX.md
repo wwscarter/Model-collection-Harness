@@ -15,6 +15,7 @@
 - [26-PLAN-LOW-PRIORITY.md](../outputs/26-PLAN-LOW-PRIORITY.md)：低优先级改进方案：模块拆分 · 规划可视化 · CLI · 仓库整理
 - [27-OPTIMIZATION-PROGRESS.md](../outputs/27-OPTIMIZATION-PROGRESS.md)：优化实施记录
 - [28-CLEANUP-INVENTORY.md](../outputs/28-CLEANUP-INVENTORY.md)：仓库清理清单
+- [29-PLAN-ACCEPTANCE-REVIEW.md](../outputs/29-PLAN-ACCEPTANCE-REVIEW.md)：合并前核查、已修回归与待验收效果指标
 
 ## 原始架构与实现方案
 

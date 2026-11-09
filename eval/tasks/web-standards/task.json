@@ -1,0 +1,14 @@
+{
+  "id": "web-standards",
+  "tags": ["web", "online"],
+  "prompt": "请打开 W3C 官方网页 https://www.w3.org/standards/ ，依据该网页用中文简要概括 W3C Web 标准的作用，以及页面列出的标准主题。回答中写明 W3C，并给出来源 URL https://www.w3.org/standards/ 。这是只读联网问答任务，不要修改本地 README.md 或其他项目文件；如果页面不可访问，请如实说明，不能声称已读取网页。",
+  "fixture": "fixture",
+  "verificationMode": "off",
+  "checks": [
+    { "type": "answer-contains", "value": "W3C" },
+    { "type": "answer-contains", "value": "https://www.w3.org/standards/" },
+    { "type": "file-unchanged", "path": "README.md" },
+    { "type": "max-tool-calls", "value": 10 }
+  ],
+  "timeoutMs": 300000
+}

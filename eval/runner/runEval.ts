@@ -37,6 +37,7 @@ async function runSample(task: EvalTask, iteration: number, options: EvalOptions
   const runId = randomUUID();
   const selected = selection?.selected;
   const sample: EvalSample = { taskId: task.id, tags: task.tags, model: selected ? selected.provider + '/' + selected.modelId + ' (' + selected.id + ')' : 'synthetic-smoke', ...(selected ? { modelSnapshot: { configId: selected.id, provider: selected.provider, modelId: selected.modelId, ...(selection!.costKnown ? { costPer1kTokens: { ...selected.costPer1kTokens } } : {}) } } : {}), mode: options.smoke ? 'smoke' : 'model', iteration, passed: false, durationMs: 0, toolCalls: 0, cost: null, inputTokens: null, outputTokens: null, checks: [] };
+  sample.verification = { mode: task.verificationMode, status: task.verificationMode === 'off' ? 'skipped' : 'not-run', attempts: 0, repairRounds: 0 };
   let core: Core | undefined; let smoke: Awaited<ReturnType<typeof startSmokeServer>> | undefined;
   const timeout = AbortSignal.timeout(task.timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -46,9 +47,17 @@ async function runSample(task: EvalTask, iteration: number, options: EvalOptions
     fs.cpSync(task.fixture, projectRoot, { recursive: true, errorOnExist: true });
     if (options.smoke) smoke = await startSmokeServer(task);
     const model = smoke?.model ?? selection!.selected;
-    core = await createCore({ dataDir: path.join(root, 'data'), secretKey: () => randomBytes(32), confirm: () => true, emit: () => {} }, { models: [model], persistModels: false, initializePresets: false, approvalMode: 'full', enableMcp: false });
+    core = await createCore({ dataDir: path.join(root, 'data'), secretKey: () => randomBytes(32), confirm: () => true, emit: (channel, payload) => {
+      if (channel !== 'session:verification') return;
+      const event = payload as { phase?: string; status?: string; attempts?: number; repairRounds?: number; summary?: string };
+      if (event.status === 'running') sample.verification!.status = 'unverified';
+      else if (event.status && ['passed', 'failed', 'unverified', 'skipped', 'cancelled', 'budget_limit'].includes(event.status)) sample.verification!.status = event.status as NonNullable<EvalSample['verification']>['status'];
+      if (typeof event.attempts === 'number') sample.verification!.attempts = event.attempts;
+      if (typeof event.repairRounds === 'number') sample.verification!.repairRounds = event.repairRounds;
+      if (event.summary) sample.verification!.summary = event.summary;
+    } }, { models: [model], persistModels: false, initializePresets: false, approvalMode: 'full', enableMcp: false });
     core.memoryStore.setAutoExtract(false);
-    const result = await core.run({ runId, sessionId: randomUUID(), prompt: task.prompt, pinnedModelId: model.id, includeProjectContext: false, enableTools: true, verificationMode: 'off' }, { projectRoot, signal });
+    const result = await core.run({ runId, sessionId: randomUUID(), prompt: task.prompt, pinnedModelId: model.id, includeProjectContext: false, enableTools: true, verificationMode: task.verificationMode }, { projectRoot, signal });
     sample.toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls.length : 0;
     sample.toolCalls = Math.max(sample.toolCalls, core.traceRecorder.getTrace(runId)?.spans.filter((span) => span.kind === 'tool').length ?? 0);
     const metrics = (result.metrics ?? {}) as Record<string, unknown>;
@@ -67,7 +76,9 @@ async function runSample(task: EvalTask, iteration: number, options: EvalOptions
       }
     }
     const limited = ['tool_limit', 'budget_limit', 'length'].includes(String(result.stopReason));
-    sample.passed = sample.checks.every((check) => check.passed) && !limited && !signal.aborted;
+    const verificationFailed = !['passed', 'skipped', 'not-run'].includes(sample.verification!.status);
+    sample.passed = sample.checks.every((check) => check.passed) && !limited && !signal.aborted && !verificationFailed;
+    if (verificationFailed) sample.error = sample.verification!.summary ?? 'Project verification did not pass';
     if (limited) sample.error = 'Run stopped before completion: ' + result.stopReason;
   } catch (error) { sample.error = signal.aborted ? (options.signal?.aborted ? 'Evaluation cancelled' : 'Task timed out') : error instanceof Error ? error.message : String(error); }
   finally {

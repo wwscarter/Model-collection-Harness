@@ -14,10 +14,10 @@ function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-e
 const sample = (taskId: string, passed: boolean): EvalSample => ({ taskId, tags: ['code'], model: 'synthetic-smoke', mode: 'smoke', iteration: 1, passed, durationMs: 10, toolCalls: 2, cost: null, inputTokens: null, outputTokens: null, checks: [] });
 
 describe('offline evaluation runner', () => {
-  it('loads twenty independent tasks and selects five explicit synthetic replays', () => {
+  it('loads twenty-two independent tasks and selects five explicit synthetic replays', () => {
     const tasks = loadTasks(path.resolve('eval/tasks'));
-    expect(tasks).toHaveLength(20);
-    expect(new Set(tasks.map((task) => task.id)).size).toBe(20);
+    expect(tasks).toHaveLength(22);
+    expect(new Set(tasks.map((task) => task.id)).size).toBe(22);
     expect(loadTasks(path.resolve('eval/tasks'), [], true)).toHaveLength(5);
     expect(loadTasks(path.resolve('eval/tasks'), ['http']).map((task) => task.id)).toEqual(['http-health']);
     for (const task of tasks) expect(snapshotFiles(task.fixture).size).toBeGreaterThan(0);
@@ -30,6 +30,8 @@ describe('offline evaluation runner', () => {
     expect(report.samples.map((value) => ({ id: value.taskId, error: value.error, failed: value.checks.filter((check) => !check.passed) }))).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'sum-numbers', failed: [] })]));
     expect(report.passed, JSON.stringify(report.samples.filter((value) => !value.passed))).toBe(true);
     expect(report.summary).toMatchObject({ runs: 5, passed: 5, meanCost: null });
+    expect(report.summary.verification).toMatchObject({ attempted: 4, passed: 4, notRun: 1, passRate: 1 });
+    expect(report.samples.find((sample) => sample.taskId === 'sum-numbers')?.verification).toMatchObject({ mode: 'full', status: 'passed', attempts: 1 });
     expect(report.samples.every((value) => value.cost === null && value.inputTokens === null && value.outputTokens === null)).toBe(true);
     expect(report.samples.reduce((sum, value) => sum + value.toolCalls, 0)).toBeGreaterThan(5);
     expect(JSON.parse(fs.readFileSync(report.jsonPath, 'utf8')).mode).toBe('smoke');

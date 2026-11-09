@@ -53,6 +53,7 @@ export function loadTasks(tasksDir: string, tags: string[] = [], smoke = false):
     if (typeof value.id !== 'string' || !/^[a-z0-9-]+$/.test(value.id) || typeof value.prompt !== 'string' || !value.prompt.trim() || !Array.isArray(value.tags) || value.tags.some((tag: unknown) => typeof tag !== 'string')) throw new Error('Invalid evaluation manifest: ' + entry.name);
     if (!Array.isArray(value.checks) || !value.checks.length || value.checks.length > 50) throw new Error('Evaluation tasks need 1–50 checks');
     if (!Number.isInteger(value.timeoutMs) || value.timeoutMs < 1000 || value.timeoutMs > 30 * 60_000) throw new Error('Evaluation timeout must be 1 second–30 minutes');
+    if (value.verificationMode !== undefined && !['off', 'quick', 'full'].includes(value.verificationMode)) throw new Error('Evaluation verificationMode must be off, quick or full');
     if (tags.length && !tags.some((tag) => value.tags.includes(tag))) continue;
     if (smoke && !fs.existsSync(path.join(directory, 'smoke.json'))) continue;
     const fixture = fixturePath(directory, value.fixture);
@@ -60,7 +61,7 @@ export function loadTasks(tasksDir: string, tags: string[] = [], smoke = false):
     const checks = value.checks.map(checkOf);
     for (const check of checks) if ('path' in check) fixturePath(fixture, check.path);
     if (tasks.some((task) => task.id === value.id)) throw new Error('Duplicate evaluation id: ' + value.id);
-    tasks.push({ id: value.id, tags: [...value.tags], prompt: value.prompt, fixture, checks, timeoutMs: value.timeoutMs, directory });
+    tasks.push({ id: value.id, tags: [...value.tags], prompt: value.prompt, fixture, checks, timeoutMs: value.timeoutMs, directory, verificationMode: value.verificationMode ?? 'quick' });
   }
   if (!tasks.length) throw new Error('No evaluation tasks match the selected tags/mode');
   return tasks;

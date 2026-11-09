@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { McpServerEntry } from '@earendil-works/pi-coding-agent';
 import { redactMcpText, testMcpConnection } from '@core/agent/McpTransport';
+import { mcpToolNames } from '@core/agent/McpToolNames';
 import { createSandboxPolicy } from '@core/security/Sandbox';
 import type { MainContext } from './MainContext';
 import { confirmCommand } from './approvalPrompt';
@@ -54,10 +55,11 @@ export async function testConfiguredMcp(ctx: MainContext, name: string): Promise
   if ('command' in entry.config && !(await confirmCommand(ctx, quote([entry.config.command, ...(entry.config.args ?? [])]), cwd, undefined, cwd))) return { success: false, error: '用户未批准 MCP 服务器连接' };
   try {
     const result = await testMcpConnection({ entry, cwd, sandboxPolicy: (root) => createSandboxPolicy(root, ctx.commandSandbox.settings), onStderr: (text) => appendMcpLog(ctx, entry, text) });
-    const namespace = name.replaceAll('-', '_');
-    ctx.mcpTools.set(name, result.tools.map((tool) => 'mcp__' + namespace + '__' + tool));
+    const names = mcpToolNames(name, result.tools, loaded.servers.filter((server) => server.config.enabled !== false).map((server) => server.name));
+    ctx.mcpTools.set(name, names);
     return { success: true, tools: result.tools.length, sandbox: result.sandbox };
   } catch (error) {
+    ctx.mcpTools.delete(name);
     const text = redactMcpText(error instanceof Error ? error.message : String(error), loaded.servers).slice(0, 4000);
     appendMcpLog(ctx, entry, text + '\n');
     return { success: false, error: text };

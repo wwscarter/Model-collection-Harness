@@ -134,23 +134,33 @@ describe('main process session projects', () => {
     } finally { run.mockRestore(); }
   });
 
-  it('validates routing edits before replacing the file and archives the current policy before restore', () => {
+  it('applies saved and restored routing rules to the next run while archiving the previous policy', async () => {
+    const current = invoke('model:register', { id: 'ordinary-routing', provider: 'custom', name: 'Ordinary routing fixture', modelId: 'ordinary-routing', apiKey: '', baseURL: 'http://127.0.0.1/v1', enabled: true });
+    const routeNextRun = async () => {
+      await invoke('session:execute', { sessionId: 'routing-policy-snapshot', prompt: 'hello', projectId: null });
+      const deps = state.executeRun.mock.calls.at(-1)![1] as RunDependencies;
+      return deps.routing.routeTask({ id: 'ordinary-routing-task', type: 'general', description: 'hello', complexity: 'low' }, deps.models.getAllModels(), undefined, { skipSemantic: true });
+    };
     const original = JSON.stringify({ version: 1, rules: [{ id: 'review', enabled: true, priority: 1, when: {}, then: { strategy: 'single' } }], defaults: { strategy: 'single' } });
     const updated = JSON.stringify({ version: 1, rules: [], defaults: { strategy: 'parallel' } });
     invoke('routing:rules:set', original);
+    expect(await routeNextRun()).toMatchObject({ modelId: current.id, strategy: 'single', ruleId: 'review' });
     const before = invoke('routing:rules:history');
     expect(() => invoke('routing:rules:set', JSON.stringify({ rules: 'wrong' }))).toThrow();
     expect(invoke('routing:rules:get').text).toBe(original);
     expect(invoke('routing:rules:history')).toEqual(before);
 
     invoke('routing:rules:set', updated);
+    expect(await routeNextRun()).toMatchObject({ modelId: current.id, strategy: 'parallel', ruleId: undefined });
     const history = invoke('routing:rules:history') as Array<{ name: string }>;
     const archivedOriginal = history.find((item) => fs.readFileSync(path.join(state.userData, 'routing-rules.history', item.name), 'utf8') === original)!;
     expect(invoke('routing:rules:restore', archivedOriginal.name).text).toBe(original);
     expect(invoke('routing:rules:get').text).toBe(original);
+    expect(await routeNextRun()).toMatchObject({ modelId: current.id, strategy: 'single', ruleId: 'review' });
     const restoredHistory = invoke('routing:rules:history') as Array<{ name: string }>;
     expect(restoredHistory.length).toBe(history.length + 1);
     expect(restoredHistory.some((item) => fs.readFileSync(path.join(state.userData, 'routing-rules.history', item.name), 'utf8') === updated)).toBe(true);
+    invoke('model:delete', current.id);
   });
 
   it('publishes preference changes only after they have been persisted', () => {

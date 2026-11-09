@@ -23,7 +23,8 @@ export async function createMainContext(dataDir: string, getWindow: MainContext[
   });
   try {
     const tty = new TtyManager({ defaultCwd: core.workspaceRoot });
-    ctx = { ...core, core, getWindow, tty, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(), pickedProjectRoots: new Set(), runningOperations: new Set() };
+    // Keep host state on the shared core so IPC replacements are visible to the next run.
+    ctx = Object.assign(core, { core, getWindow, tty, ttyUnsubscribers: new Map<string, () => void>(), commandUnsubscribers: new Map<string, () => void>(), pickedProjectRoots: new Set<string>(), runningOperations: new Set<Promise<unknown>>() });
     return ctx;
   } catch (error) { await core.dispose(); throw error; }
 }

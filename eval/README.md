@@ -6,6 +6,7 @@
 npm run eval -- --smoke
 npm run eval -- --model <配置ID或模型ID> --data-dir <已配置的数据目录> --tags code --repeat 3
 npm run eval -- --model <配置ID> --baseline eval/results/<报告>.json
+npm run eval -- --model <配置ID> --tags online
 ```
 
 `--smoke` 使用本机 SSE 回放服务和真实文件/命令工具执行 5 个框架用例。报告显式标记为 synthetic smoke，模型 token 与费用为 `null`，不能用于证明真实模型能力。普通模式不会读取 `smoke.json`。
@@ -14,7 +15,11 @@ npm run eval -- --model <配置ID> --baseline eval/results/<报告>.json
 
 环境模型的价格需通过 `NEWAI_EVAL_INPUT_COST_PER_1K` 和 `NEWAI_EVAL_OUTPUT_COST_PER_1K` 配置。未配置时成本显示未知，`max-cost` 检查无法判定而失败；配置后的数字是按用量和配置价格计算的估算。真实模型运行要求 OS 沙箱可用，未配置模型时直接报错。
 
-20 个初始任务覆盖检索、配置编辑、算术、集合、文本、版本排序、日期、异步顺序与重试、HTTP 服务。任务目录包括 `task.json`、`fixture/`，5 个框架任务另有 `smoke.json`。评测只把 `fixture/` 复制给运行中的 Agent，清单与回放答案留在外部。
+22 个初始任务覆盖检索、配置编辑、算术、集合、文本、版本排序、日期、异步顺序与重试、HTTP 服务、编写测试和公开标准网页问答。任务目录包括 `task.json`、`fixture/`，5 个框架任务另有 `smoke.json`。评测只把 `fixture/` 复制给运行中的 Agent，清单与回放答案留在外部。
+
+`write-tests` 提供正确的普通求和函数，让 Agent 新增原生 `node:test` 测试，并保持源文件、检查器、包配置和说明不变。`verificationMode: full` 会运行真实 npm test。固定检查器再把这些测试复制到独立临时目录，要求正确实现通过，而六个明确标记为本机隔离合成数据的普通算法错误实现失败，覆盖偏一、空数组、负数、单元素、小数和输入修改。这检验实际测试的业务判别能力，不仅检查测试文件是否存在。
+
+`web-standards` 是只读的 W3C 官方标准网页中文问答，标签为 `web`、`online`，需要可用的外部网络。它没有 `smoke.json`，不在离线 CI 的五项框架回放中运行。用 `--tags online` 单独选择；`--tags code` 会排除该网页任务，不指定标签时会包含它。内容与 URL 的确定性检查只检验答案要素，不证明概括的全部事实正确。新增任务的 fixture 与检查器已在本机验证，不能据此宣称真实模型已通过这两个任务。
 
 检查器支持 `command`、`file-unchanged`、`file-contains`、`answer-contains`、`max-tool-calls`、`max-cost`。可选 `llm-judge` 指定 `modelId`、`rubric` 和 0–1 的 `minScore`；它会调用已配置的评审模型并产生额外费用，框架冒烟禁用此检查器。
 

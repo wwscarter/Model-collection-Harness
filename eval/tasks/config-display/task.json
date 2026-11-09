@@ -4,7 +4,7 @@
     "code",
     "config"
   ],
-  "prompt": "Update settings.json to use dark theme and fontSize 16. Preserve recentLimit and do not edit check.mjs.",
+  "prompt": "Update settings.json to use dark theme and fontSize 16. Preserve recentLimit and do not edit check.mjs. Keep package.json unchanged.",
   "fixture": "fixture",
   "checks": [
     {
@@ -19,7 +19,12 @@
     {
       "type": "max-tool-calls",
       "value": 10
+    },
+    {
+      "type": "file-unchanged",
+      "path": "package.json"
     }
   ],
-  "timeoutMs": 300000
+  "timeoutMs": 300000,
+  "verificationMode": "full"
 }

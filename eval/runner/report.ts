@@ -4,7 +4,12 @@ import { randomUUID } from 'node:crypto';
 import type { EvalGroup, EvalReport, EvalSample } from './types';
 export function summarize(samples: EvalSample[]): EvalGroup {
   const runs = samples.length; const passed = samples.filter((sample) => sample.passed).length;
-  return { runs, passed, passRate: runs ? passed / runs : 0, meanDurationMs: runs ? samples.reduce((sum, sample) => sum + sample.durationMs, 0) / runs : 0, meanToolCalls: runs ? samples.reduce((sum, sample) => sum + sample.toolCalls, 0) / runs : 0, meanCost: runs && samples.every((sample) => sample.cost !== null) ? samples.reduce((sum, sample) => sum + sample.cost!, 0) / runs : null };
+  const statuses = samples.map((sample) => sample.verification?.status ?? 'not-run');
+  const count = (...values: string[]) => statuses.filter((status) => values.includes(status)).length;
+  const skipped = count('skipped'); const notRun = count('not-run');
+  const attempted = runs - skipped - notRun; const verified = count('passed');
+  const verification = { attempted, passed: verified, failed: count('failed'), unverified: count('unverified', 'cancelled', 'budget_limit'), skipped, notRun, passRate: attempted ? verified / attempted : null };
+  return { runs, passed, passRate: runs ? passed / runs : 0, meanDurationMs: runs ? samples.reduce((sum, sample) => sum + sample.durationMs, 0) / runs : 0, meanToolCalls: runs ? samples.reduce((sum, sample) => sum + sample.toolCalls, 0) / runs : 0, meanCost: runs && samples.every((sample) => sample.cost !== null) ? samples.reduce((sum, sample) => sum + sample.cost!, 0) / runs : null, verification };
 }
 export function writeReport(samples: EvalSample[], resultsDir: string, mode: EvalReport['mode'], baseline?: string, options: { cancelled?: boolean; expectedSamples?: number } = {}): EvalReport {
   const expectedSamples = options.expectedSamples ?? samples.length;
@@ -29,9 +34,9 @@ export function writeReport(samples: EvalSample[], resultsDir: string, mode: Eva
   const unknownCost = mode === 'smoke' ? 'N/A (smoke)' : 'Unknown';
   const row = (values: unknown[]) => '| ' + values.map((value) => cell(String(value))).join(' | ') + ' |';
   const grouped = (heading: string, label: string, groups: Record<string, EvalGroup>) => [
-    '## ' + heading, '', '| ' + label + ' | Passed | Rate | Mean time (ms) | Mean tools | Mean cost |',
-    '|---|---:|---:|---:|---:|---:|',
-    ...Object.entries(groups).map(([name, group]) => row([name, group.passed + '/' + group.runs, (100 * group.passRate).toFixed(1) + '%', Math.round(group.meanDurationMs), group.meanToolCalls.toFixed(1), group.meanCost ?? unknownCost])), '',
+    '## ' + heading, '', '| ' + label + ' | Passed | Rate | Mean time (ms) | Mean tools | Mean cost | Project verification |',
+    '|---|---:|---:|---:|---:|---:|---|',
+    ...Object.entries(groups).map(([name, group]) => row([name, group.passed + '/' + group.runs, (100 * group.passRate).toFixed(1) + '%', Math.round(group.meanDurationMs), group.meanToolCalls.toFixed(1), group.meanCost ?? unknownCost, group.verification.attempted ? group.verification.passed + '/' + group.verification.attempted : 'Not run'])), '',
   ];
   const lines = [
     '# Evaluation report', '',
@@ -41,8 +46,9 @@ export function writeReport(samples: EvalSample[], resultsDir: string, mode: Eva
     'Completed samples: ' + samples.length + '/' + expectedSamples, '',
     ...(cancelled ? ['Evaluation was cancelled; completed results are retained and the overall run did not pass.', ''] : []),
     'Passed: ' + report.summary.passed + '/' + report.summary.runs, '',
-    '| Task | Model | Iteration | Passed | Tools | Duration (ms) | Cost |', '|---|---|---:|---|---:|---:|---:|',
-    ...samples.map((sample) => row([sample.taskId, sample.model, sample.iteration, sample.passed ? 'yes' : 'no', sample.toolCalls, sample.durationMs, sample.cost ?? unknownCost])), '',
+    'Project verification: ' + report.summary.verification.passed + '/' + report.summary.verification.attempted + ' attempted; rate=' + (report.summary.verification.passRate === null ? 'N/A' : (100 * report.summary.verification.passRate).toFixed(1) + '%') + '; not run=' + report.summary.verification.notRun + '; skipped=' + report.summary.verification.skipped, '',
+    '| Task | Model | Iteration | Passed | Tools | Duration (ms) | Cost | Verification |', '|---|---|---:|---|---:|---:|---:|---|',
+    ...samples.map((sample) => row([sample.taskId, sample.model, sample.iteration, sample.passed ? 'yes' : 'no', sample.toolCalls, sample.durationMs, sample.cost ?? unknownCost, sample.verification?.status ?? 'not-run'])), '',
     ...grouped('By tag', 'Tag', byTag), ...grouped('By model', 'Model', byModel),
     'New failures: ' + (regressions.join(', ') || 'none'), '',
   ];

@@ -5,7 +5,7 @@
     "feature",
     "http"
   ],
-  "prompt": "Implement createApp(): return an unstarted node:http Server. GET /health responds 200 with JSON {status:ok}; other paths respond 404. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing.",
+  "prompt": "Implement createApp(): return an unstarted node:http Server. GET /health responds 200 with JSON {status:ok}; other paths respond 404. Edit src/main.mjs. Do not change check.mjs. Run node check.mjs after editing. Keep package.json unchanged.",
   "fixture": "fixture",
   "checks": [
     {
@@ -20,7 +20,12 @@
     {
       "type": "max-tool-calls",
       "value": 20
+    },
+    {
+      "type": "file-unchanged",
+      "path": "package.json"
     }
   ],
-  "timeoutMs": 300000
+  "timeoutMs": 300000,
+  "verificationMode": "full"
 }
