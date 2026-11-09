@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Check, Palette, Route, ShieldCheck } from 'lucide-react';
 import { errorMessage } from '../format';
 import { ModelRoutingSettings } from './ModelRoutingSettings';
+import { CodeSearchSettings } from './CodeSearchSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 
 type ApprovalMode = 'ask' | 'auto' | 'full';
@@ -43,6 +44,7 @@ export function RuntimeSettings({ onOpenRouting, onRoutingStatusChange }: Runtim
       {notice && <div className="runtime-notice" role="status">{notice}</div>}
     </section>
     <ModelRoutingSettings onRoutingStatusChange={onRoutingStatusChange} />
+    <CodeSearchSettings />
     <section className="runtime-card">
       <div className="runtime-card-heading"><span className="runtime-card-icon"><Route size={16} /></span><div><h3>路由规则</h3><p>配置任务类型、复杂度、主模型、fallback、协作模型和升级策略。</p></div><button className="button outline" onClick={onOpenRouting}>打开路由规则</button></div>
     </section>

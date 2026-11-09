@@ -9,6 +9,7 @@ import { register as registerTrace } from './traceIpc';
 import { register as registerAgent } from './agentIpc';
 import { register as registerExecution } from './executionIpc';
 import { register as registerPreferences } from './preferencesIpc';
+import { register as registerCodebase } from './codebaseIpc';
 
 export function registerHandlers(ctx: MainContext): void {
   registerModel(ctx);
@@ -21,4 +22,5 @@ export function registerHandlers(ctx: MainContext): void {
   registerAgent(ctx);
   registerExecution(ctx);
   registerPreferences(ctx);
+  registerCodebase(ctx);
 }

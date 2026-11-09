@@ -27,6 +27,10 @@ import { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
 import { createProjectCommandTools } from '@core/tools/projectCommandTools';
 import { AgentRuntime } from '@core/agent/AgentRuntime';
 import { loadApprovalMode } from '@core/security/ApprovalPolicy';
+import { CodebaseIndex } from '@core/codebase/CodebaseIndex';
+import { SemanticSearch } from '@core/codebase/SemanticSearch';
+import { loadCodeSearchConfig } from '@core/codebase/CodeSearchConfig';
+import { createCodebaseTools } from '@core/tools/codebaseTools';
 import { approveToolCall } from './approvalPrompt';
 import type { MainContext } from './MainContext';
 
@@ -72,6 +76,13 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
     const projects = new ProjectManager();
     const commandExecutor = track(new CommandExecutor(), (resource) => resource.dispose());
     const projectProcesses = track(new ProjectProcessManager(), (resource) => resource.dispose());
+    const codebase = track(new CodebaseIndex(dataDir), (resource) => resource.dispose());
+    const codeSearchConfigPath = path.join(dataDir, 'code-search.json');
+    const codeSearch = { config: loadCodeSearchConfig(codeSearchConfigPath) };
+    const semanticSearch = track(new SemanticSearch({
+      dataDir, getConfig: () => codeSearch.config,
+      getBaseURL: () => routingService.getConfiguration().settings.classifier.baseURL,
+    }), (resource) => resource.close());
     // Pi resources (skills/, extensions/, mcp.json) live in newAi's own data folder, never ~/.pi.
     // No project selected means an empty app-owned workspace, not ~/Documents.
     const agentRuntime = new AgentRuntime({
@@ -79,6 +90,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
       toolGate: (request) => approveToolCall(ctx, request), enableMcp: true,
       extraTools: ({ projectRoot }) => [
         ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses) : []),
+        ...(projectRoot ? createCodebaseTools(projectRoot, codebase, semanticSearch, codeSearch.config.enabled, { config: structuredClone(codeSearch.config), baseURL: routingService.getConfiguration().settings.classifier.baseURL }) : []),
         ...createMemoryTools(memoryStore, { projectRoot }),
       ],
     });
@@ -105,6 +117,7 @@ export function createMainContext(dataDir: string, getWindow: MainContext['getWi
       projectProcesses, agentRuntime, observability, modelQuota, memoryStore, traceRecorder,
       auditLog, codeAuditor, ttyUnsubscribers: new Map(), commandUnsubscribers: new Map(),
       runningTasks: new Map(), pickedProjectRoots: new Set(),
+      codebase, semanticSearch, codeSearchConfigPath, codeSearch,
     };
     return ctx;
   } catch (error) {
@@ -122,6 +135,8 @@ export function disposeMainContext(ctx: MainContext): void {
   ctx.tty.dispose();
   ctx.commandExecutor.dispose();
   ctx.projectProcesses.dispose();
+  ctx.codebase.dispose();
+  ctx.semanticSearch.close();
   ctx.storage.close();
   ctx.sessionStorage.close();
   ctx.projectStorage.close();

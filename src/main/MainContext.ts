@@ -20,6 +20,9 @@ import type { AgentRuntime } from '@core/agent/AgentRuntime';
 import type { CodeAuditor } from '@core/audit/CodeAuditor';
 import type { TraceRecorder } from '@core/trace/TraceRecorder';
 import type { MemoryStore } from '@core/memory/MemoryStore';
+import type { CodebaseIndex } from '@core/codebase/CodebaseIndex';
+import type { SemanticSearch } from '@core/codebase/SemanticSearch';
+import type { CodeSearchConfig } from '@core/codebase/CodeSearchConfig';
 
 export interface MainContext {
   getWindow(): BrowserWindow | null;
@@ -46,6 +49,10 @@ export interface MainContext {
   codeAuditor: CodeAuditor;
   traceRecorder: TraceRecorder;
   memoryStore: MemoryStore;
+  codebase: CodebaseIndex;
+  semanticSearch: SemanticSearch;
+  codeSearchConfigPath: string;
+  codeSearch: { config: CodeSearchConfig };
   workspaceRoot: string;
   preferencesPath: string;
   preferences: { approvalMode: ApprovalMode };

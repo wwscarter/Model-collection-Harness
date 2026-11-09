@@ -11,10 +11,25 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
   // Never turn a missing credential into a plausible-looking "demo" answer:
   // the router filters these models, and a direct call fails loudly instead.
   if (!hasUsableCredentials(model)) throw new Error(`模型「${model.name}」尚未配置 API Key，无法执行任务`);
+  const changedPaths = new Map<string, string>();
   const result = await ctx.agentRuntime.run({
     model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
-    projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, onToolEvent: options.onToolEvent,
+    projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
+    onToolEvent: (event) => {
+      if (['write', 'edit'].includes(event.toolName)) {
+        const file = (event.args as { path?: unknown } | undefined)?.path;
+        if (event.status === 'running' && typeof file === 'string') changedPaths.set(event.toolCallId, file);
+        const changed = changedPaths.get(event.toolCallId);
+        if (event.status !== 'running') {
+          changedPaths.delete(event.toolCallId);
+          if (event.status === 'completed' && changed && options.projectRoot) {
+            void ctx.codebase.refresh(options.projectRoot, [changed], options.signal).catch((error) => { if (!options.signal?.aborted) console.warn('代码符号增量更新失败', error); });
+          }
+        }
+      }
+      options.onToolEvent?.(event);
+    },
     beforeModelRequest: options.beforeModelRequest, onUsage: options.onUsage,
   });
   return { content: result.content, inputTokens: result.inputTokens ?? estimateTokens(prompt), outputTokens: result.outputTokens ?? estimateTokens(result.content), modelId: model.id, stopReason: result.stopReason, budgetLimitReason: result.budgetLimitReason };

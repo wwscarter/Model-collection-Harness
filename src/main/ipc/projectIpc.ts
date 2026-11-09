@@ -18,6 +18,7 @@ function openProjectRoot(ctx: MainContext, root: string, name?: string) {
   try {
     const info = ctx.projects.select(root);
     ctx.projectStorage.recordOpened(info.root, name);
+    void ctx.codebase.refresh(info.root).catch((error) => console.warn('本地代码索引更新失败', error));
     return describeProject(ctx, info.root);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;

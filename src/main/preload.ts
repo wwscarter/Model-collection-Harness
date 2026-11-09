@@ -15,6 +15,12 @@ function unsubscribe(channel: string, listener: Listener, handler: IpcListener):
 }
 
 const amdApi = {
+  codebase: {
+    get: () => ipcRenderer.invoke('codebase:get'),
+    set: (input: unknown) => ipcRenderer.invoke('codebase:set', input),
+    probe: (input: unknown) => ipcRenderer.invoke('codebase:probe', input),
+    reindex: () => ipcRenderer.invoke('codebase:reindex'),
+  },
   listModels: () => ipcRenderer.invoke('model:list'),
   registerModel: (config: unknown) => ipcRenderer.invoke('model:register', config),
   updateModel: (id: string, updates: unknown) => ipcRenderer.invoke('model:update', id, updates),
