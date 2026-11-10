@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-11-10
+
+### Agent workflow
+
+- Added project-wide grep/find and a local code index, with optional semantic search backed by an existing local embedding model.
+- Added command classification, platform sandbox integration, and project verification with bounded same-session repairs and independent review.
+- Added trusted Rules and declarative Hooks, plus Skills, MCP server, and tool-trust management in Settings.
+- Added persistent editable plans with approve/cancel controls and live step updates.
+- Unified auxiliary model calls through Pi and added a shared Electron/CLI core, standalone CLI, and offline evaluation runner with 22 fixtures.
+
+### Reliability
+
+- Added explicit framework smoke evaluations, verification outcome reporting, and macOS release checks.
+- Pinned direct dependencies to their lockfile versions and added dependency consistency and production audit checks.
+
 ## 0.1.2 — 2026-11-05
 
 - Keep local projects in stable creation order when opened or renamed, including after a restart.
