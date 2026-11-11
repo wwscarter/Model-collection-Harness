@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { Settings } from './pages/Settings';
 import { NavRail } from './components/NavRail';
 import { MonitoringPage } from './pages/MonitoringPage';
+import { RunHistoryPage } from './pages/RunHistoryPage';
 import { RoutingPanel } from './components/RoutingPanel';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { TopBar } from './components/TopBar';
@@ -43,12 +44,16 @@ export default function App() {
     showNewProject, setShowNewProject, associateProject, gitBusy, initGit, approvalMode,
     openFile, handleProjectCreated,
   } = workspace;
-  return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${previewOpen && projectDrawerOpen ? 'preview-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view === 'monitoring' ? 'monitoring-shell' : ''}`}>
-    <TopBar title={view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
-    <NavRail view={view} onView={(next) => { setView(next); if (next === 'monitoring') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); } }} onSettings={() => openSettings()} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+  const navigate = (next: typeof view) => {
+    setView(next);
+    if (next !== 'workspace') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); }
+  };
+  return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${previewOpen && projectDrawerOpen ? 'preview-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view !== 'workspace' ? 'monitoring-shell' : ''} ${view === 'runs' ? 'history-shell' : ''}`}>
+    <TopBar title={view === 'runs' ? '运行记录' : view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} showWorkspaceToggle={view === 'workspace'} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
+    <NavRail view={view} onView={navigate} onSettings={() => openSettings()} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
     <Sidebar sessions={sessions} currentSessionId={currentSessionId} runningSessionId={runningSessionId} projects={projectList} activeProjectId={currentSession?.projectId} projectError={projectError} completionNotice={completionNotice} onClearCompletion={() => setCompletionNotice(false)} onNewSession={newSession} onSelectSession={selectSession} onDeleteSession={deleteSession} onNewProject={() => setShowNewProject(true)} onOpenProject={(id) => void openProject(id)} onRemoveProject={(id) => void removeProject(id)} />
-    {sidebarOpen && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
-    {view === 'monitoring' ? <MonitoringPage liveTrace={liveTrace} /> : <main className="workspace">
+    {sidebarOpen && view !== 'runs' && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
+    {view === 'runs' ? <RunHistoryPage liveTrace={liveTrace} onBack={() => navigate('monitoring')} /> : view === 'monitoring' ? <MonitoringPage liveTrace={liveTrace} onOpenRuns={() => navigate('runs')} /> : <main className="workspace">
       <div ref={workspaceContentRef} className={`workspace-content ${currentSession && !currentSession.messages.length ? 'empty-workspace' : ''}`}>
         {currentSession ? <section className="chat-thread" aria-label="会话消息">
           {!!currentSession.messages.length && <div className="chat-model-line"><span>{bannerModels}</span></div>}

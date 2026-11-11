@@ -82,7 +82,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
         if (current.current.busy !== 'saving') current.current.onClose();
       }
       if (event.key === 'Tab') {
-        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]') ?? []).filter((element) => element.getClientRects().length > 0);
+        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]') ?? []).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
         const first = controls[0], last = controls.at(-1);
         if (!first) { event.preventDefault(); return; }
         if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus(); }

@@ -44,7 +44,8 @@ describe('Ollama routing backend', () => {
     const call = fetcher.mock.calls.find(([url]) => String(url).endsWith('/api/chat'))!;
     expect(call[1]?.redirect).toBe('error');
     const body = JSON.parse(String(call[1]?.body));
-    expect(body).toMatchObject({ model: config.model, stream: false, think: false, keep_alive: '5m', options: { temperature: 0, num_ctx: 2048, num_predict: 80, num_thread: 4, num_gpu: 0 }, format: { additionalProperties: false } });
+    expect(body).toMatchObject({ model: config.model, stream: false, think: false, keep_alive: '5m', options: { temperature: 0, num_ctx: 2048, num_predict: 80, num_thread: 4 }, format: { additionalProperties: false } });
+    expect(body.options).not.toHaveProperty('num_gpu');
     expect(body.messages[0].content).toBe(buildRoutingPrompt(task));
     expect(backend.getStatus()).toMatchObject({ loaded: true, lastError: undefined });
   });

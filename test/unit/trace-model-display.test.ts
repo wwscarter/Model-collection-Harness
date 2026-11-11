@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TraceTimeline } from '../../src/renderer/components/TraceTimeline';
 import { MonitoringPage } from '../../src/renderer/pages/MonitoringPage';
+import { RunHistoryPage } from '../../src/renderer/pages/RunHistoryPage';
 import type { AmdApi, RunTrace, TraceModelSnapshot } from '../../src/renderer/types';
 
 const model: TraceModelSnapshot = {
@@ -71,7 +72,8 @@ describe('historical model identity display', () => {
     await render(createElement(MonitoringPage, { liveTrace: current }));
     expect(container.querySelector('.monitoring-model-breakdown')!.textContent).toContain('模型配置分布');
     expect(container.querySelector('.monitoring-model-breakdown')!.textContent).toContain('配置ID: custom-endpoint-older');
-    expect(container.querySelector('[aria-label="本轮实际模型"]')!.textContent).toContain('actual-upstream-v2');
-    expect(container.querySelector('[aria-label="本轮实际模型"]')!.textContent).toContain('Saved display name · custom');
+    await render(createElement(RunHistoryPage, { liveTrace: current }));
+    expect(container.querySelector('[aria-label="本轮模型配置"]')!.textContent).toContain('actual-upstream-v2');
+    expect(container.querySelector('[aria-label="本轮模型配置"]')!.textContent).toContain('Saved display name · custom');
   });
 });

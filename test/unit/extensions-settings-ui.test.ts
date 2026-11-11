@@ -80,4 +80,25 @@ describe('extensions settings tab', () => {
     expect(container.querySelector('[aria-label="工具信任设置"]')).not.toBeNull();
     expect(window.amd!.agent.toolTrust.get).toHaveBeenCalledOnce();
   });
+
+  it('supports keyboard tab navigation and keeps the selected panel linked to its tab', async () => {
+    const hooks: HooksApi = { list: vi.fn(async () => ({ diagnostics: [] })), saveGlobal: vi.fn(), trustProject: vi.fn() };
+    window.amd!.agent.hooks = hooks;
+    await act(async () => root.render(createElement(Settings, { models: [], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn(), initialTab: 'extensions' })));
+    const rulesTab = button('规则');
+    rulesTab.focus();
+    await act(async () => rulesTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+    const hooksTab = button('Hooks');
+    expect(document.activeElement).toBe(hooksTab);
+    expect(hooksTab.getAttribute('aria-selected')).toBe('true');
+    expect(hooksTab.tabIndex).toBe(0);
+    expect(rulesTab.tabIndex).toBe(-1);
+    const panel = container.querySelector('[role="tabpanel"]')!;
+    expect(panel.id).toBe(hooksTab.getAttribute('aria-controls'));
+    expect(panel.getAttribute('aria-labelledby')).toBe(hooksTab.id);
+    expect(hooks.list).toHaveBeenCalledOnce();
+    await act(async () => hooksTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+    expect(document.activeElement).toBe(rulesTab);
+    expect(container.querySelector('[aria-label="规则设置"]')).not.toBeNull();
+  });
 });

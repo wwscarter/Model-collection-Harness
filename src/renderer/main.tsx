@@ -5,6 +5,7 @@ import App from './App';
 import { ErrorBoundary } from './ErrorBoundary';
 import './styles/app.css';
 import './styles/workbench.css';
+import './styles/navigation.css';
 
 const theme = {
   token: {

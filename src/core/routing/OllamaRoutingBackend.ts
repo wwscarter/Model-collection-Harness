@@ -185,7 +185,9 @@ export class OllamaRoutingBackend implements RoutingClassifier {
     const data = await this.json('/api/chat', signal, {
       model: this.config.model, messages: [{ role: 'user', content: buildRoutingPrompt(context) }],
       format: ROUTING_JSON_SCHEMA, think: false, stream: false, keep_alive: '5m',
-      options: { temperature: 0, num_ctx: 2048, num_predict: 80, num_thread: 4, num_gpu: 0 },
+      // Let Ollama choose the available accelerator. Forcing num_gpu: 0 makes
+      // the classifier run on CPU even when the local daemon has Metal/CUDA.
+      options: { temperature: 0, num_ctx: 2048, num_predict: 80, num_thread: 4 },
     });
     if (data.done !== true || typeof record(data.message)?.content !== 'string') throw new OllamaRoutingError('invalid-output', 'Ollama did not return a complete classification');
     const content = record(data.message)!.content as string;

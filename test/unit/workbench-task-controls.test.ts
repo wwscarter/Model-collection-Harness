@@ -76,6 +76,30 @@ afterEach(async () => {
 });
 
 describe('workbench task controls', () => {
+  it('opens run history from the monitoring overview and returns to the unchanged conversation', async () => {
+    window.amd!.getDashboard = vi.fn(async () => ({
+      range: { from: new Date(0).toISOString(), to: new Date().toISOString() },
+      summary: { totalTasks: 0, totalInvocations: 0, totalCost: 0, successRate: 0, avgLatency: 0 },
+      modelUsage: [], costTrend: [], recent: [],
+    }));
+    window.amd!.trace = { list: vi.fn(async () => []), get: vi.fn() } as unknown as AmdApi['trace'];
+    await click('[aria-label="运行监测"]');
+    expect(container.querySelector('.monitoring-page')).not.toBeNull();
+    expect(container.querySelector('.trace-timeline')).toBeNull();
+    expect(window.amd!.trace.list).not.toHaveBeenCalled();
+    await act(async () => { [...container.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.includes('查看运行记录'))!.click(); });
+    expect(container.querySelector('.run-history-page')).not.toBeNull();
+    expect(container.querySelector('.app-shell')!.classList.contains('history-shell')).toBe(true);
+    expect(container.querySelector('.topbar-title')!.textContent).toBe('运行记录');
+    expect(container.querySelector('[aria-label="展开工作区文件"]')).toBeNull();
+    expect(window.amd!.trace.list).toHaveBeenCalledOnce();
+    await click('[aria-label="工作台"]');
+    expect(container.querySelector('.app-shell')!.classList.contains('history-shell')).toBe(false);
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="描述任务"]')!.value).toBe('继续检查');
+    expect(container.querySelector('.topbar-title')!.textContent).toBe('Conversation s1');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('shows a completion event resource limit separately from the answer and preserves it when invoke resolves', async () => {
     await click('[aria-label="执行任务"]');
     const output = '已完成目录分析，后续还需要逐项检查。';

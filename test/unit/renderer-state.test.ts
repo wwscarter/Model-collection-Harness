@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MonitoringPage } from '../../src/renderer/pages/MonitoringPage';
+import { RunHistoryPage } from '../../src/renderer/pages/RunHistoryPage';
 import { Settings } from '../../src/renderer/pages/Settings';
 import { RoutingPanel } from '../../src/renderer/components/RoutingPanel';
 import { WorkspacePanel } from '../../src/renderer/components/WorkspacePanel';
@@ -78,7 +79,7 @@ describe('monitoring request ownership', () => {
     vi.mocked(window.amd!.trace.list).mockResolvedValue([run('run-a'), run('run-b')]);
     const next = deferred<RunTrace>();
     vi.mocked(window.amd!.trace.get).mockImplementation(async (id) => id === 'run-b' ? next.promise : trace(id));
-    await render(createElement(MonitoringPage));
+    await render(createElement(RunHistoryPage));
     expect(container.querySelector('.monitoring-trace header')!.textContent).toContain('run-a');
     await click(container.querySelectorAll<HTMLButtonElement>('.monitoring-run-row')[1]);
     expect(container.querySelector('.monitoring-trace header')!.textContent).toContain('run-b');
@@ -90,19 +91,23 @@ describe('monitoring request ownership', () => {
   it('does not refetch a historical trace for unrelated streaming updates', async () => {
     vi.mocked(window.amd!.trace.list).mockResolvedValue([run('history')]);
     const live: RunTrace = { ...trace('live'), run: { ...run('live'), status: 'running' } };
-    await render(createElement(MonitoringPage, { liveTrace: live }));
+    await render(createElement(RunHistoryPage, { liveTrace: live }));
     await click([...container.querySelectorAll<HTMLButtonElement>('.monitoring-run-row')].find((item) => item.textContent?.includes('history'))!);
     expect(window.amd!.trace.get).toHaveBeenCalledTimes(1);
-    await render(createElement(MonitoringPage, { liveTrace: { ...live, spans: [] } }));
+    await render(createElement(RunHistoryPage, { liveTrace: { ...live, spans: [] } }));
     expect(window.amd!.trace.get).toHaveBeenCalledTimes(1);
-    const loads = vi.mocked(window.amd!.getDashboard).mock.calls.length;
-    await render(createElement(MonitoringPage, { liveTrace: { ...live, run: { ...live.run, status: 'success' } } }));
-    expect(vi.mocked(window.amd!.getDashboard).mock.calls.length).toBe(loads + 1);
+    const loads = vi.mocked(window.amd!.trace.list).mock.calls.length;
+    await render(createElement(RunHistoryPage, { liveTrace: { ...live, run: { ...live.run, status: 'success' } } }));
+    expect(vi.mocked(window.amd!.trace.list).mock.calls.length).toBe(loads + 1);
   });
 
-  it('applies the dashboard time range to the recent run list', async () => {
-    vi.mocked(window.amd!.trace.list).mockResolvedValue([run('recent'), { ...run('old'), startedAt: '2026-10-01T00:00:00Z' }]);
-    await render(createElement(MonitoringPage));
+  it('applies the history time range to recent runs independently from dashboard aggregates', async () => {
+    vi.mocked(window.amd!.trace.list).mockResolvedValue([{ ...run('recent'), startedAt: new Date().toISOString() }, { ...run('old'), startedAt: '2026-01-01T00:00:00Z' }]);
+    await render(createElement(RunHistoryPage));
+    await act(async () => {
+      const range = container.querySelector<HTMLSelectElement>('[aria-label="运行记录时间范围"]')!;
+      range.value = '24h'; range.dispatchEvent(new Event('change', { bubbles: true }));
+    });
     expect(container.querySelectorAll('.monitoring-run-row')).toHaveLength(1);
     expect(container.querySelector('.monitoring-run-row')!.textContent).toContain('recent');
   });

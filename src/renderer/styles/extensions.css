@@ -1,0 +1,52 @@
+/* One fixed navigation row and one scroll container for every extension page. */
+.settings-window .extensions-settings { display: flex; min-width: 0; min-height: 0; flex: 1 1 0; flex-direction: column; overflow: hidden; background: var(--surface-soft); }
+.settings-window .extensions-nav { display: flex; min-height: 56px; flex: 0 0 auto; align-items: center; gap: 6px; padding: 10px 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.settings-window .extensions-nav .ant-btn { height: 32px; flex: 0 0 auto; padding: 5px 12px; border: 1px solid transparent; border-radius: 7px; color: var(--text-secondary); background: transparent; box-shadow: none; font-size: 12px; font-weight: 500; }
+.settings-window .extensions-nav .ant-btn:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.settings-window .extensions-nav .ant-btn.is-active { border-color: var(--accent-line); color: var(--accent-deep); background: var(--accent-soft); }
+.settings-window .extensions-content { min-width: 0; min-height: 0; flex: 1 1 0; overflow: auto; padding: 20px 24px 24px; scroll-padding: 20px; scrollbar-gutter: stable; }
+.settings-window .extensions-content:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-window .extensions-content > .runtime-settings { display: grid; min-width: 0; min-height: 0; flex: none; align-content: start; gap: 16px; overflow: visible; padding: 0; background: transparent; }
+.settings-window .extensions-content .runtime-card { min-width: 0; align-self: start; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.settings-window .extensions-content .runtime-card-heading { flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+.settings-window .extensions-content .runtime-card-heading > div { min-width: 180px; flex: 1 1 240px; }
+.settings-window .extensions-content .runtime-card-heading h3 { font-size: 13px; line-height: 20px; }
+.settings-window .extensions-content .runtime-card-heading p { max-width: 680px; margin: 5px 0 0; color: var(--text-muted); font-size: 11px; line-height: 18px; }
+.settings-window .extensions-content .runtime-card-heading > .button { min-height: 30px; font-size: 11px; }
+.settings-window .extensions-content .runtime-hint { color: var(--text-muted); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+.settings-window .extensions-content .runtime-card > .runtime-hint:last-child { margin-bottom: 0; }
+.settings-window .extensions-content .runtime-card > h3 { margin: 0 0 10px; font-size: 13px; }
+.settings-window .extensions-content .form-section { min-width: 0; margin-top: 12px; padding: 12px 14px; border-radius: 8px; }
+.settings-window .extensions-content .routing-config-footer { gap: 10px; padding-top: 0; }
+.settings-window .extensions-content .routing-config-footer > .runtime-hint { margin: 0; font-size: 11px; }
+.settings-window .extensions-content .routing-config-footer > strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.settings-window .extensions-content .routing-config-footer .field-label { width: auto; height: auto; margin: 0; white-space: nowrap; }
+.settings-window .extensions-content .routing-config-fields { gap: 12px; margin-top: 12px; }
+.settings-window .extensions-content .routing-config-fields > .runtime-hint { margin: 0; }
+.settings-window .extensions-content .runtime-notice { margin: 0; padding: 10px 12px; font-size: 11px; line-height: 18px; }
+.settings-window .extensions-content .runtime-notice[role="alert"] { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
+.settings-window .extensions-content .runtime-notice[role="status"] { border-color: var(--accent-line); color: var(--accent-ink); background: var(--accent-soft); }
+.settings-window .extensions-content textarea.input { max-width: 100%; font: 11px/19px var(--code-font); }
+
+/* Tool policies share fixed columns instead of independent flex cards. */
+.tool-trust-table-wrap { width: 100%; min-width: 0; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.tool-trust-table { width: 100%; min-width: 620px; border-collapse: collapse; table-layout: fixed; color: var(--text); font-size: 11px; line-height: 18px; }
+.tool-trust-name-col { width: 27%; }
+.tool-trust-source-col { width: 90px; }
+.tool-trust-policy-col { width: 170px; }
+.tool-trust-table th, .tool-trust-table td { padding: 10px 12px; border-bottom: 1px solid var(--line-weak); vertical-align: middle; text-align: left; }
+.tool-trust-table thead th { color: var(--text-secondary); background: var(--surface-soft); font-weight: 500; white-space: nowrap; }
+.tool-trust-table tbody th { font-weight: 500; }
+.tool-trust-table tbody tr:last-child > * { border-bottom: 0; }
+.tool-trust-table tbody tr:hover { background: var(--surface-soft); }
+.tool-trust-name { display: block; overflow-wrap: anywhere; font-size: 11px; }
+.tool-trust-source { display: inline-block; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.tool-trust-table .tool-trust-description { color: var(--text-muted); font-size: 10px; line-height: 17px; overflow-wrap: anywhere; }
+.settings-window .tool-trust-table .input { width: 100%; height: 32px; min-height: 32px; padding: 5px 9px; border-radius: 6px; background: var(--surface); font-size: 11px; }
+
+@media (max-width: 900px) {
+  .settings-window .extensions-nav { gap: 3px; padding-right: 16px; padding-left: 16px; }
+  .settings-window .extensions-nav .ant-btn { padding-right: 10px; padding-left: 10px; font-size: 11px; }
+  .settings-window .extensions-content { padding: 16px; }
+  .settings-window .extensions-content .runtime-card { padding: 14px; }
+}

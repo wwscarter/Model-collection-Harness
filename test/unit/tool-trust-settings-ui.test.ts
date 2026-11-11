@@ -39,6 +39,15 @@ describe('per-tool trust settings', () => {
     expect(set).toHaveBeenLastCalledWith('read', 'disabled');
   });
 
+  it('labels policy columns and updates the policy explanation and save feedback together', async () => {
+    await render();
+    const table = container.querySelector('table[aria-label="工具调用策略"]')!;
+    expect([...table.querySelectorAll('thead th')].map((cell) => cell.textContent)).toEqual(['工具名称', '来源', '调用策略', '说明']);
+    await choose('read', 'disabled');
+    expect(container.querySelector('[aria-label="工具 read"]')!.textContent).toContain('当前已禁用此工具');
+    expect(container.querySelector('[role="status"]')!.textContent).toContain('read 的工具信任已保存');
+  });
+
   it('keeps automatic approval unavailable for command and file mutation tools', async () => {
     await render();
     for (const name of ['run_command', 'write', 'edit']) {
