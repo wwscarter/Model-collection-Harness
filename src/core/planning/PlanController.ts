@@ -51,6 +51,7 @@ export class PlanController {
     const now = new Date().toISOString();
     let next: RunPlan;
     if (input.action === 'edit') {
+      if (pending.record.editable === false) throw new Error('此计划不支持步骤编辑；请取消并重新描述请求');
       const steps = parsePlanSteps(input.steps);
       if (!steps.length) throw new Error('计划至少需要一个有效步骤');
       next = this.save({ ...pending.record, version: pending.record.version + 1, plan: { ...pending.record.plan, steps, plan: steps.map((step, index) => (index + 1) + '. ' + step.title + (step.detail ? '：' + step.detail : '')).join(String.fromCharCode(10)) }, updatedAt: now });

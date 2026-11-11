@@ -7,7 +7,7 @@ export function register(ctx: ToolContext): void {
   handle('agent:tool-trust:get', async () => {
     const description = await ctx.agentRuntime.describe();
     const choices = ctx.toolTrust.list();
-    const builtins = [...new Set([...description.tools, 'ls', 'grep', 'find', 'write', 'edit', 'run_command', 'process_status', 'process_list', 'stop_process', 'code_symbols', 'code_search', 'update_plan'])];
+    const builtins = [...new Set([...description.tools, 'ls', 'grep', 'find', 'write', 'edit', 'run_command', 'process_status', 'process_list', 'stop_process', 'code_symbols', 'code_search', 'update_plan', 'request_media', 'get_media_job', 'materialize_asset'])];
     const mcpNames = new Set([...ctx.mcpTools.values()].flat());
     const names = new Set([...builtins, ...Object.keys(choices), ...mcpNames]);
     return {

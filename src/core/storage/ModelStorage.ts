@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { decryptAPIKey, encryptAPIKey, type CredentialCodec } from "../../utils/crypto";
 import { ModelConfig, cloneModelConfig } from "../models/ModelConfig";
+import { validateModelOperations, type ModelOperations } from "../models/ModelOperations";
 
 export interface ModelStore {
   saveModel(config: ModelConfig): void;
@@ -28,6 +29,7 @@ interface ModelRow {
   context_window: number;
   intelligence_score: number;
   capabilities: string;
+  operations: string | null;
   cost_per_1k_tokens: string;
   max_tokens: number;
   rate_limit: string;
@@ -75,6 +77,7 @@ export class ModelStorage implements ModelStore {
         context_window INTEGER NOT NULL DEFAULT 4096,
         intelligence_score INTEGER NOT NULL DEFAULT 70,
         capabilities TEXT NOT NULL,
+        operations TEXT,
         cost_per_1k_tokens TEXT NOT NULL,
         max_tokens INTEGER NOT NULL,
         rate_limit TEXT NOT NULL,
@@ -97,6 +100,7 @@ export class ModelStorage implements ModelStore {
     const columns = new Set((this.db.prepare("PRAGMA table_info(models)").all() as Array<{ name: string }>).map((column) => column.name));
     for (const [name, definition] of [
       ["provider_category", "TEXT"],
+      ["operations", "TEXT"],
       ["available_models", "TEXT NOT NULL DEFAULT '[]'"],
       ["temperature", "REAL NOT NULL DEFAULT 0.6"],
       ["enable_thinking", "INTEGER NOT NULL DEFAULT 1"],
@@ -152,13 +156,14 @@ export class ModelStorage implements ModelStore {
   }
 
   saveModel(config: ModelConfig): void {
+    validateModelOperations(config.operations);
     const save = this.db.transaction((model: ModelConfig) => {
       this.db
         .prepare(`
           INSERT INTO models (
-            id, provider, name, model_id, provider_category, available_models, temperature, enable_thinking, is_primary, base_url, context_window, intelligence_score, capabilities, cost_per_1k_tokens,
+            id, provider, name, model_id, provider_category, available_models, temperature, enable_thinking, is_primary, base_url, context_window, intelligence_score, capabilities, operations, cost_per_1k_tokens,
             max_tokens, rate_limit, enabled, priority, created_at, updated_at
-          ) VALUES (@id, @provider, @name, @model_id, @provider_category, @available_models, @temperature, @enable_thinking, @is_primary, @base_url, @context_window, @intelligence_score, @capabilities, @cost_per_1k_tokens,
+          ) VALUES (@id, @provider, @name, @model_id, @provider_category, @available_models, @temperature, @enable_thinking, @is_primary, @base_url, @context_window, @intelligence_score, @capabilities, @operations, @cost_per_1k_tokens,
             @max_tokens, @rate_limit, @enabled, @priority, @created_at, @updated_at)
           ON CONFLICT(id) DO UPDATE SET
             provider = excluded.provider,
@@ -173,6 +178,7 @@ export class ModelStorage implements ModelStore {
             context_window = excluded.context_window,
             intelligence_score = excluded.intelligence_score,
             capabilities = excluded.capabilities,
+            operations = excluded.operations,
             cost_per_1k_tokens = excluded.cost_per_1k_tokens,
             max_tokens = excluded.max_tokens,
             rate_limit = excluded.rate_limit,
@@ -195,6 +201,7 @@ export class ModelStorage implements ModelStore {
           context_window: model.contextWindow ?? model.maxTokens,
           intelligence_score: model.intelligenceScore ?? model.capabilities.find((capability) => capability.type === "reasoning")?.score ?? 70,
           capabilities: JSON.stringify(model.capabilities),
+          operations: model.operations === undefined ? null : JSON.stringify(model.operations),
           cost_per_1k_tokens: JSON.stringify(model.costPer1kTokens),
           max_tokens: model.maxTokens,
           rate_limit: JSON.stringify(model.rateLimit),
@@ -268,6 +275,7 @@ export class ModelStorage implements ModelStore {
       contextWindow: row.context_window || row.max_tokens,
       intelligenceScore: row.intelligence_score,
       capabilities: parseJson(row.capabilities, []),
+      ...(row.operations === null || row.operations === undefined ? {} : { operations: parseOperations(row.operations) }),
       costPer1kTokens: parseJson(row.cost_per_1k_tokens, { input: 0, output: 0 }),
       maxTokens: row.max_tokens,
       rateLimit: parseJson(row.rate_limit, { requestsPerMinute: 0, tokensPerDay: 0 }),
@@ -308,3 +316,12 @@ function parseJson<T>(value: string | null, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
 }
 
+
+/** Corrupt explicit metadata must never silently restore legacy text capability. */
+function parseOperations(value: string): ModelOperations {
+  try {
+    const operations: unknown = JSON.parse(value);
+    validateModelOperations(operations);
+    return operations as ModelOperations;
+  } catch { return { 'text.chat': { protocol: 'unconfigured' } }; }
+}

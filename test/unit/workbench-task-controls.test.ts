@@ -76,6 +76,38 @@ afterEach(async () => {
 });
 
 describe('workbench task controls', () => {
+  it('shows an incomplete notice when required media fails and keeps it after reopening', async () => {
+    await click('[aria-label="执行任务"]');
+    await act(async () => { resolveRun({ output: '素材尚未生成，页面实现尚未完成。', stopReason: 'media_incomplete', metrics: { stopReason: 'media_incomplete' } }); });
+    expect(container.querySelector('[aria-label="素材生成未完成"]')?.textContent).toContain('任务尚未完成');
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.metrics.stopReason).toBe('media_incomplete');
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('[aria-label="素材生成未完成"]')).not.toBeNull();
+  });
+  it('keeps generated assets through streamed events, text completion and history restoration', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const artifact = { id: 'asset-1', kind: 'image', mimeType: 'image/png', fileName: 'hero.png', modelId: 'image-model', configurationId: 'image-config', jobId: 'job-1' };
+    await act(async () => {
+      listeners.get('session:media-job')!({ sessionId: 's1', assistantMessageId: request.assistantMessageId, job: { id: 'job-1', status: 'running', operation: 'image.generate' } });
+    });
+    expect(container.querySelector('.media-job-status')!.textContent).toContain('正在生成');
+    await act(async () => {
+      listeners.get('session:media-artifact')!({ sessionId: 's1', assistantMessageId: request.assistantMessageId, artifact });
+      listeners.get('session:completed')!({ sessionId: 's1', assistantMessageId: request.assistantMessageId, output: '已使用封面图完成页面。', artifacts: [artifact] });
+      resolveRun({ output: '已使用封面图完成页面。', artifacts: [artifact] });
+    });
+    expect(container.querySelectorAll('.media-result')).toHaveLength(1);
+    expect(container.querySelector('.media-result img')!.getAttribute('src')).toBe('newai-media://asset/asset-1');
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.messages.at(-1).artifacts).toEqual([artifact]);
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelectorAll('.media-result')).toHaveLength(1);
+    expect(container.querySelector('.media-result')!.textContent).toContain('image-model');
+  });
   it('shows a completion event resource limit separately from the answer and preserves it when invoke resolves', async () => {
     await click('[aria-label="执行任务"]');
     const output = '已完成目录分析，后续还需要逐项检查。';
@@ -302,7 +334,8 @@ describe('workbench task controls', () => {
     await remount();
     expect(container.querySelector('[aria-label="切换模型"]')!.textContent).toContain('primary-model');
     await click('[aria-label="执行任务"]');
-    expect(execute.mock.calls[0][0].pinnedModelId).toBe('primary');
+    expect(execute.mock.calls[0][0].textModelPreferenceId).toBe('primary');
+    expect(execute.mock.calls[0][0].pinnedModelId).toBeUndefined();
   });
 });
 

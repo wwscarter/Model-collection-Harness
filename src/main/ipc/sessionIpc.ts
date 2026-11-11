@@ -6,11 +6,12 @@ import { createRunDependencies } from '../runDependencies';
 import type { MainContext } from '../MainContext';
 import { handle } from './register';
 import { planningMode, type PlanDecision } from '@core/planning/PlanTypes';
+import { restoreSessionMedia } from '../mediaSession';
 
 export function register(ctx: MainContext): void {
   const { sessionStorage, projectStorage, runningTasks } = ctx;
   handle('session:list', () => sessionStorage.list());
-  handle('session:get', (_event, id: string) => sessionStorage.get(id));
+  handle('session:get', (_event, id: string) => restoreSessionMedia(sessionStorage.get(id), ctx.media));
   handle('session:plans-list', (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) throw new Error('会话 ID 无效');
     return ctx.plans?.list(sessionId) ?? [];
@@ -23,9 +24,10 @@ export function register(ctx: MainContext): void {
     if (!session || typeof session !== 'object' || typeof session.id !== 'string' || !session.id) throw new Error('会话数据无效');
     return sessionStorage.save({ ...session, createdAt: session.createdAt ? new Date(session.createdAt) : new Date(), updatedAt: session.updatedAt ? new Date(session.updatedAt) : new Date() });
   });
-  handle('session:delete', (_event, id: unknown) => {
+  handle('session:delete', async (_event, id: unknown) => {
     if (typeof id !== 'string') return { success: false };
     runningTasks.get(id)?.abort();
+    await ctx.media?.deleteSession(id);
     ctx.plans?.deleteSession(id);
     return { success: sessionStorage.delete(id) };
   });

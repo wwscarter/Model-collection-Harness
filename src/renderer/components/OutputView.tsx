@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, FileCode2 } from 'lucide-react';
+import { Check, Copy, Download, ExternalLink, FileCode2 } from 'lucide-react';
 import { highlightCode, type CodeToken } from '../highlightCode';
 import { splitOutputBlocks } from '../outputBlocks';
+import { mediaAssetUrl, type MediaArtifact, type MediaJobSummary } from '../mediaTypes';
 import '../styles/output.css';
 
 function renderTokens(tokens: CodeToken[], prefix = ''): React.ReactNode[] {
@@ -54,12 +55,37 @@ function CodeBlock({ language, code, generating }: { language: string; code: str
   </section>;
 }
 
-export const OutputView = React.memo(function OutputView({ content, loading, emptyState }: { content: string; loading: boolean; emptyState: boolean }) {
+function MediaCard({ artifact }: { artifact: MediaArtifact }) {
+  const [missing, setMissing] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const act = async (action: 'open' | 'export') => {
+    setActionError(''); setBusy(true);
+    try {
+      if (!window.amd?.media) throw new Error('媒体文件操作需要桌面应用');
+      await window.amd.media[action](artifact.id);
+    } catch { setActionError(action === 'open' ? '无法打开文件，请检查文件是否仍然存在。' : '保存文件失败，请重试。'); }
+    finally { setBusy(false); }
+  };
+  return <figure className="media-result" aria-label={artifact.kind === 'image' ? '生成的图片' : '生成的视频'}>
+    {missing ? <div className="media-missing" role="status">文件暂时无法预览，可能已被移动或删除。</div> : artifact.kind === 'image'
+      ? <img className="media-preview" src={mediaAssetUrl(artifact.id)} alt="生成的图片" loading="lazy" onError={() => setMissing(true)} />
+      : <video className="media-preview" src={mediaAssetUrl(artifact.id)} controls preload="metadata" onError={() => setMissing(true)} />}
+    <figcaption><div><strong>{artifact.kind === 'image' ? '图片' : '视频'}</strong><span>{artifact.width && artifact.height ? artifact.width + ' × ' + artifact.height + ' · ' : ''}{artifact.modelId}</span></div><div className="media-actions"><button type="button" disabled={busy} onClick={() => void act('open')}><ExternalLink size={13} />打开</button><button type="button" disabled={busy} onClick={() => void act('export')}><Download size={13} />另存为</button></div></figcaption>
+    {actionError && <div className="media-action-error" role="alert">{actionError}</div>}
+  </figure>;
+}
+
+const mediaStatusLabels: Record<MediaJobSummary['status'], string> = { queued: '等待生成', submitting: '正在提交', running: '正在生成', downloading: '正在保存', succeeded: '生成完成', failed: '生成失败', unknown: '结果待确认', cancelled: '已停止' };
+
+export const OutputView = React.memo(function OutputView({ content, loading, emptyState, artifacts = [], mediaJobs = [] }: { content: string; loading: boolean; emptyState: boolean; artifacts?: MediaArtifact[]; mediaJobs?: MediaJobSummary[] }) {
   const blocks = useMemo(() => splitOutputBlocks(content), [content]);
-  if (loading && !content) return <div className="output-pending"><i className="live-dot pulse" />正在规划并执行任务…</div>;
-  if (!content && !emptyState) return null;
-  if (!content) return <div className="output-empty"><strong>输出会显示在这里</strong><span>描述你的任务，newAi 会自动选择模型并执行。</span></div>;
+  const visibleJobs = mediaJobs.filter((job) => !artifacts.some((artifact) => artifact.jobId === job.id));
+  const hasMedia = artifacts.length > 0 || visibleJobs.length > 0;
+  if (loading && !content && !hasMedia) return <div className="output-pending"><i className="live-dot pulse" />正在规划并执行任务…</div>;
+  if (!content && !emptyState && !hasMedia) return null;
+  if (!content && !hasMedia) return <div className="output-empty"><strong>输出会显示在这里</strong><span>描述你的任务，newAi 会自动选择模型并执行。</span></div>;
   return <div className="output-content rich-output" aria-busy={loading}>{blocks.map((block) => block.type === 'code'
     ? <CodeBlock key={block.id} language={block.language} code={block.content} generating={loading && !block.complete} />
-    : <ResponseText key={block.id} content={block.content} />)}{loading && <span className="streaming-cursor" aria-label="正在生成">▍</span>}</div>;
+    : <ResponseText key={block.id} content={block.content} />)}{visibleJobs.map((job) => <div key={job.id} className="media-job-status" role="status"><strong>{job.operation === 'image.generate' ? '图片' : '视频'} · {mediaStatusLabels[job.status]}</strong>{job.modelId && <span>{job.modelId}</span>}{job.error && <span>{job.error}</span>}</div>)}{artifacts.map((artifact) => <MediaCard key={artifact.id} artifact={artifact} />)}{loading && content && <span className="streaming-cursor" aria-label="正在生成">▍</span>}</div>;
 });

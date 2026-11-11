@@ -1,3 +1,5 @@
+import { cloneModelOperations, supportsOperation, validateModelOperations, type ModelOperations } from "./ModelOperations";
+
 /** Providers currently supported by the built-in adapters. */
 export type ModelProvider = "openai" | "anthropic" | "google" | "deepseek" | "custom";
 export type ProviderCategory = "official" | "compatible_gateway" | "custom_proxy" | "local_ollama";
@@ -51,6 +53,8 @@ export interface ModelConfig {
   intelligenceScore?: number;
   costPer1kTokens: ModelCost;
   capabilities: ModelCapability[];
+  /** Explicit executable operations; absent metadata retains the legacy text protocol. */
+  operations?: ModelOperations;
   maxTokens: number;
   rateLimit: ModelRateLimit;
   enabled: boolean;
@@ -144,6 +148,7 @@ export function cloneModelConfig(config: ModelConfig): ModelConfig {
     availableModels: config.availableModels ? [...config.availableModels] : undefined,
     costPer1kTokens: { ...config.costPer1kTokens },
     capabilities: config.capabilities.map((capability) => ({ ...capability })),
+    ...(config.operations === undefined ? {} : { operations: cloneModelOperations(config.operations) }),
     rateLimit: { ...config.rateLimit },
     createdAt: new Date(config.createdAt),
     updatedAt: new Date(config.updatedAt),
@@ -151,6 +156,8 @@ export function cloneModelConfig(config: ModelConfig): ModelConfig {
 }
 
 export function validateModelConfig(config: ModelConfig): void {
+  validateModelOperations(config.operations);
+  if (config.isPrimary && !supportsOperation(config, "text.chat")) throw new Error("只有支持文本对话的模型才能设为主力路由");
   if (!["openai", "anthropic", "google", "deepseek", "custom"].includes(config.provider)) throw new Error("Unknown model provider");
   if (!config.id.trim()) throw new Error("Model id is required");
   if (!config.name.trim()) throw new Error("Model name is required");

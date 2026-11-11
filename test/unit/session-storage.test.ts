@@ -6,6 +6,17 @@ import path from 'node:path';
 import { SessionStorage } from '../../src/core/storage/SessionStorage';
 
 describe('SessionStorage', () => {
+  it('saves media-only assistant answers as metadata and drops bytes and arbitrary URLs', () => {
+    const storage = new SessionStorage(':memory:');
+    const now = new Date();
+    try {
+      storage.save({ id: 'media', title: 'Image request', prompt: '', output: '', createdAt: now, updatedAt: now, messages: [{ id: 'a1', role: 'assistant', content: '', artifacts: [{ id: 'asset-1', kind: 'image', mimeType: 'image/png', fileName: '/private/generated.png', modelId: 'image-model', configurationId: 'config-1', jobId: 'job-1', width: 1024, height: 1024, bytes: 'secret', url: 'https://example.com/private' } as never], mediaJobs: [{ id: 'job-1', operation: 'image.generate', status: 'succeeded' }] }] });
+      const message = storage.get('media')!.messages![0];
+      expect(message.artifacts).toEqual([{ id: 'asset-1', kind: 'image', mimeType: 'image/png', fileName: 'generated.png', modelId: 'image-model', configurationId: 'config-1', jobId: 'job-1', width: 1024, height: 1024 }]);
+      expect(message.mediaJobs).toEqual([{ id: 'job-1', operation: 'image.generate', status: 'succeeded' }]);
+      expect(message.content).toBe('');
+    } finally { storage.close(); }
+  });
   it('keeps an unsent draft out of the conversation history after saving and reopening', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-draft-session-'));
     const file = path.join(directory, 'sessions.db');

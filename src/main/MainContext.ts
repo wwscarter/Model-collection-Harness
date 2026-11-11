@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron';
+import type { MediaExecutionService } from '@core/media/MediaExecutionService';
 import type { ApprovalMode } from '@core/security/ApprovalPolicy';
 import type { ModelStorage } from '@core/storage/ModelStorage';
 import type { SessionStorage } from '@core/storage/SessionStorage';
@@ -34,6 +35,7 @@ import type { PlanController } from '@core/planning/PlanController';
 import type { Core } from '@core/bootstrap/createCore';
 
 export interface MainContext {
+  media?: MediaExecutionService;
   core?: Core;
   runningOperations?: Set<Promise<unknown>>;
   shuttingDown?: boolean;

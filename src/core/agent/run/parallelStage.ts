@@ -42,7 +42,7 @@ export async function parallelStage(ctx: RunContext): Promise<void> {
           agentContent += delta;
           ctx.agentMessages[index].content = agentContent;
           ctx.emit('session:agent-update', { sessionId: ctx.sessionId, taskId: ctx.taskId, assistantMessageId: ctx.assistantMessageId, agentId, modelId: agentModel.id, status: 'running', delta });
-        }, { history: agentContext.history, summary: agentContext.summary, skipHistoryTrim: true, enableTools: ctx.enableTools, projectRoot: ctx.projectRoot, projectAccess: 'read', signal: ctx.controller.signal, onToolEvent: (event) => ctx.emitToolEvent(agentId, event) });
+        }, { history: agentContext.history, summary: agentContext.summary, skipHistoryTrim: true, enableTools: ctx.enableTools, projectRoot: ctx.projectRoot, projectAccess: 'read', agentId, signal: ctx.controller.signal, onToolEvent: (event) => ctx.emitToolEvent(agentId, event) });
         ctx.deps.observability.recordInvocationEnd(agentInvocationId, agentResult.inputTokens, agentResult.outputTokens, agentModel.costPer1kTokens, 'success');
         const agentCost = costOf(agentResult.inputTokens, agentResult.outputTokens, agentModel);
         const limited = limitedStop(agentResult.stopReason);

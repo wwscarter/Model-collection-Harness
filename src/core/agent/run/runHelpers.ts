@@ -10,9 +10,9 @@ export const PARTIAL_AGENT_NOTICE = '【子任务部分完成：已达到工具�
 
 export const OUTPUT_LIMIT_NOTICE = '本轮输出达到模型长度上限，回答可能不完整；可继续处理剩余内容。';
 
-export const limitedStop = (stopReason?: string): boolean => ['tool_limit', 'budget_limit', 'length'].includes(stopReason ?? '');
+export const limitedStop = (stopReason?: string): boolean => ['tool_limit', 'budget_limit', 'length', 'media_incomplete'].includes(stopReason ?? '');
 
-export const limitMessage = (stopReason?: string): string | undefined => stopReason === 'budget_limit' ? '本轮已达到预估费用预算，已保留阶段结果；可在设置中调整运行预算。' : stopReason === 'length' ? OUTPUT_LIMIT_NOTICE : stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : undefined;
+export const limitMessage = (stopReason?: string): string | undefined => stopReason === 'budget_limit' ? '本轮已达到预估费用预算，已保留阶段结果；可在设置中调整运行预算。' : stopReason === 'length' ? OUTPUT_LIMIT_NOTICE : stopReason === 'tool_limit' ? TOOL_LIMIT_NOTICE : stopReason === 'media_incomplete' ? '所需媒体素材未完成，本轮任务尚未完整交付。' : undefined;
 
 export function costOf(inputTokens: number, outputTokens: number, model: Pick<ModelConfig, 'costPer1kTokens'>): number {
   return (inputTokens * model.costPer1kTokens.input + outputTokens * model.costPer1kTokens.output) / 1000;

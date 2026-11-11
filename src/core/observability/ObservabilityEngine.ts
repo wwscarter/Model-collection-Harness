@@ -105,11 +105,12 @@ export class ObservabilityEngine implements TraceStore {
     return id;
   }
 
-  recordInvocationEnd(id: string, inputTokens: number, outputTokens: number, rates: { input: number; output: number }, status: Exclude<InvocationStatus, 'running'> = 'success', errorMessage?: string): ModelInvocation | undefined {
+  recordInvocationEnd(id: string, inputTokens: number, outputTokens: number, rates: { input: number; output: number }, status: Exclude<InvocationStatus, 'running'> = 'success', errorMessage?: string, operationCost?: number): ModelInvocation | undefined {
     const invocation = this.running.get(id);
     if (!invocation) return undefined;
     const endTime = new Date();
-    const completed: ModelInvocation = { ...invocation, endTime, inputTokens, outputTokens, totalCost: (inputTokens * rates.input + outputTokens * rates.output) / 1000, status, errorMessage, latency: Math.max(0, endTime.getTime() - invocation.startTime.getTime()) };
+    if (operationCost !== undefined && (!Number.isFinite(operationCost) || operationCost < 0)) throw new Error('操作费用须为非负金额');
+    const completed: ModelInvocation = { ...invocation, endTime, inputTokens, outputTokens, totalCost: operationCost ?? (inputTokens * rates.input + outputTokens * rates.output) / 1000, status, errorMessage, latency: Math.max(0, endTime.getTime() - invocation.startTime.getTime()) };
     this.db.prepare('INSERT INTO invocations (id, task_id, model_id, start_time, end_time, input_tokens, output_tokens, total_cost, status, error_message, latency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(completed.id, completed.taskId, completed.modelId, completed.startTime.toISOString(), completed.endTime!.toISOString(), completed.inputTokens, completed.outputTokens, completed.totalCost, completed.status, completed.errorMessage ?? null, completed.latency);
     this.running.delete(id);
     return completed;

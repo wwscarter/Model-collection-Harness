@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import { hasUsableCredentials, type ModelConfig } from '../models/ModelConfig';
 
 const agentPerspectives = ['独立方案与实现路径', '风险、限制与失败恢复', '测试方案、验收标准与遗漏点', '替代方案与取舍比较'];
@@ -9,7 +10,7 @@ const agentPerspectives = ['独立方案与实现路径', '风险、限制与失
  */
 export function selectPlanningModel(models: ModelConfig[], executionModelId?: string, preferredId?: string): ModelConfig | undefined {
   const candidates = models
-    .filter((model) => model.enabled && hasUsableCredentials(model) && model.id !== executionModelId);
+    .filter((model) => model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model) && model.id !== executionModelId);
   // A configured role must not silently move to a different provider.
   if (preferredId !== undefined) return candidates.find((model) => model.id === preferredId);
   return candidates
@@ -23,7 +24,7 @@ export function selectPlanningModel(models: ModelConfig[], executionModelId?: st
 }
 
 export function selectUtilityModel(models: ModelConfig[], executionModelId?: string, preferredId?: string): ModelConfig | undefined {
-  const usable = models.filter((model) => model.enabled && hasUsableCredentials(model));
+  const usable = models.filter((model) => model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model));
   if (preferredId !== undefined) return usable.find((model) => model.id === preferredId);
   const cost = (model: ModelConfig) => model.costPer1kTokens.input + model.costPer1kTokens.output;
   const sorted = [...usable].sort((a, b) => cost(a) - cost(b) || (b.contextWindow ?? 0) - (a.contextWindow ?? 0) || a.priority - b.priority);

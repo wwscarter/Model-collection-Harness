@@ -16,6 +16,7 @@ import { register as registerHooks } from './hooksIpc';
 import { register as registerSkills } from './skillsIpc';
 import { register as registerToolTrust } from './toolTrustIpc';
 import { register as registerMcp } from './mcpIpc';
+import { register as registerMedia } from './mediaIpc';
 
 export function registerHandlers(ctx: MainContext): void {
   registerModel(ctx);
@@ -35,4 +36,5 @@ export function registerHandlers(ctx: MainContext): void {
   registerSkills(ctx);
   registerToolTrust(ctx);
   registerMcp(ctx);
+  registerMedia(ctx);
 }

@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import { hasUsableCredentials, type ModelConfig, type ModelCapabilityType } from '@core/models/ModelConfig';
 import { modelRegistry } from '@core/models/ModelRegistry';
 import { LocalRoutingModel, type LocalRoutingClassification } from './LocalRoutingModel';
@@ -59,8 +60,9 @@ export class AgentRouter {
 
   async routeTask(context: TaskContext, candidates = this.registry.getEnabledModels(), options: RoutingOptions = {}): Promise<RoutingDecision> {
     options.signal?.throwIfAborted();
-    const enabled = candidates.filter((model) => model.enabled && hasUsableCredentials(model));
+    const enabled = candidates.filter((model) => model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model));
     if (!enabled.length) {
+      if (candidates.some((model) => model.enabled) && !candidates.some((model) => model.enabled && supportsOperation(model, 'text.chat'))) throw new Error('没有支持文本对话的可用模型');
       const anyEnabled = candidates.some((model) => model.enabled);
       throw new Error(anyEnabled ? '已启用的模型都没有可用的 API Key，请先在模型设置中配置凭据' : 'No enabled models are configured');
     }

@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import { hasUsableCredentials, type ModelConfig } from '@core/models/ModelConfig';
 import type { RoutingDecision, RoutingStrategy } from '@core/routing/AgentRouter';
 
@@ -22,7 +23,7 @@ function cost(model: ModelConfig): number {
 }
 
 function usable(model: ModelConfig | undefined, isAvailable?: (id: string) => boolean): model is ModelConfig {
-  return Boolean(model && model.enabled && hasUsableCredentials(model) && (isAvailable?.(model.id) ?? true));
+  return Boolean(model && model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model) && (isAvailable?.(model.id) ?? true));
 }
 
 /**

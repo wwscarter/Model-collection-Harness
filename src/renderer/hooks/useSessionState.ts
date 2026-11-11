@@ -4,6 +4,7 @@ import { restoreMessages, type ChatMessage } from '../sessionMessages';
 import { restoreRouteConfidence } from '../sessionMetrics';
 import { errorMessage } from '../format';
 import { starterSession, type Session } from './sessionState';
+import { supportsOperation } from '@core/models/ModelOperations';
 
 /** Synchronous session snapshots keep IPC callbacks and persistence in agreement. */
 export function useSessionState() {
@@ -123,7 +124,7 @@ export function useSessionState() {
     promptBeforeEditingRef.current = '';
     setEditingMessageId(null);
   };
-  const enabledModelOptions = models.filter((model) => model.enabled && (model.hasApiKey || model.provider === 'custom'));
+  const enabledModelOptions = models.filter((model) => model.enabled && supportsOperation(model, 'text.chat') && (model.hasApiKey || model.provider === 'custom'));
   const defaultSessionModelId = enabledModelOptions.find((model) => model.isPrimary)?.id ?? enabledModelOptions[0]?.id;
   const selectedSessionModelId = enabledModelOptions.some((model) => model.id === currentSession?.modelId) ? currentSession?.modelId : defaultSessionModelId;
   const saveSessionPreference = (patch: Partial<Session>) => {

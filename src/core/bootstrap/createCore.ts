@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { MediaExecutionService } from '@core/media/MediaExecutionService';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createCredentialCodec } from '@utils/crypto';
@@ -127,7 +128,8 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     } });
     const auditLog = new AuditLog(path.join(dataDir, 'audit.jsonl'));
     const codeAuditor = new CodeAuditor();
-    ctx = { host, options, dataDir, workspaceRoot, storage, sessionStorage, projectStorage, registry, growth, routingLearning, routingService, router, routingPolicy, preferencesPath, preferences, routingRulesPath, routingHistoryDir, projects, commandExecutor, projectProcesses, sandboxSettingsPath, commandSandbox, codebase, semanticSearch, codeSearchConfigPath, codeSearch, trustStore, rulesLoader, hookStore, skillManager, mcpConfig, toolTrust, mcpTools: new Map(), agentRuntime, observability, modelQuota, memoryStore, traceRecorder, auditLog, codeAuditor, planStorage, plans, runningTasks: new Map(), emit: host.emit };
+    const media = new MediaExecutionService({ dataDir, models: registry });
+    ctx = { media, host, options, dataDir, workspaceRoot, storage, sessionStorage, projectStorage, registry, growth, routingLearning, routingService, router, routingPolicy, preferencesPath, preferences, routingRulesPath, routingHistoryDir, projects, commandExecutor, projectProcesses, sandboxSettingsPath, commandSandbox, codebase, semanticSearch, codeSearchConfigPath, codeSearch, trustStore, rulesLoader, hookStore, skillManager, mcpConfig, toolTrust, mcpTools: new Map(), agentRuntime, observability, modelQuota, memoryStore, traceRecorder, auditLog, codeAuditor, planStorage, plans, runningTasks: new Map(), emit: host.emit };
     let closing = false;
     let disposal: Promise<void> | undefined;
     const pending = new Set<Promise<unknown>>();

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:plan', 'session:trace', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:plan', 'session:trace', 'session:media-job', 'session:media-artifact', 'tty:data', 'execution:data']);
 type Listener = (payload: unknown) => void;
 type IpcListener = (_event: IpcRendererEvent, payload: unknown) => void;
 const subscriptions = new Map<string, Map<Listener, Set<IpcListener>>>();
@@ -15,6 +15,10 @@ function unsubscribe(channel: string, listener: Listener, handler: IpcListener):
 }
 
 const amdApi = {
+  media: {
+    open: (id: string) => ipcRenderer.invoke('media:open', id),
+    export: (id: string) => ipcRenderer.invoke('media:export', id),
+  },
   sandbox: {
     get: () => ipcRenderer.invoke('sandbox:get'),
     set: (input: unknown) => ipcRenderer.invoke('sandbox:set', input),

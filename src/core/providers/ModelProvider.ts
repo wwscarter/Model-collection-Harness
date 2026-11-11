@@ -1,5 +1,6 @@
 import { hasUsableCredentials, type ModelConfig } from '@core/models/ModelConfig';
 import { PiProvider } from './PiProvider';
+import { supportsOperation } from '@core/models/ModelOperations';
 
 export interface InvokeConfig { temperature?: number; maxTokens?: number; signal?: AbortSignal; }
 export interface ModelResponse { content: string; inputTokens: number; outputTokens: number; modelId: string; stopReason?: string; budgetLimitReason?: string; }
@@ -163,6 +164,7 @@ export class MockProvider implements ModelProvider {
 export interface ProviderOptions { legacyProviders?: boolean; }
 
 export function createProvider(model: ModelConfig, options: ProviderOptions = {}): ModelProvider {
+  if (!supportsOperation(model, 'text.chat')) throw new Error('该模型不支持文本调用，请使用媒体操作');
   if (!hasUsableCredentials(model)) throw new Error(`模型「${model.name}」没有可用凭据，请检查 API Key`);
   if (!options.legacyProviders) return new PiProvider(model);
   if (model.provider === 'openai' || model.provider === 'deepseek' || model.provider === 'custom') return new OpenAIProvider(model);

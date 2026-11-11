@@ -1,10 +1,13 @@
-import { app, BrowserWindow, nativeTheme } from 'electron';
+import { app, BrowserWindow, nativeTheme, protocol } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MainContext } from './MainContext';
 import { createMainContext, disposeMainContext, reportStartupFailure, showCredentialWarning } from './bootstrap';
 import { registerHandlers } from './ipc';
 import { hardenWebContents, installSessionHardening } from './security/windowHardening';
+import { registerMediaProtocol } from './mediaProtocol';
+
+protocol.registerSchemesAsPrivileged([{ scheme: 'newai-media', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,6 +42,7 @@ function startApplication(): void {
     await app.whenReady();
     const ctx = await createMainContext(app.getPath('userData'), () => state.window);
     state.context = ctx;
+    if (ctx.media) registerMediaProtocol(ctx.media);
     installSessionHardening();
     app.on('web-contents-created', (_event, contents) => hardenWebContents(contents));
     registerHandlers(ctx);

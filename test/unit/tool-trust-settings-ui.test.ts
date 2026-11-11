@@ -26,6 +26,14 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 describe('per-tool trust settings', () => {
+  it('shows media tools and keeps project asset export controlled by the execution permission mode', async () => {
+    records.tools.push(...['request_media', 'get_media_job', 'materialize_asset'].map((name) => ({ name, source: 'builtin' })));
+    await render();
+    expect(control('request_media')).not.toBeNull();
+    expect(control('get_media_job')).not.toBeNull();
+    expect(control('materialize_asset').querySelector<HTMLOptionElement>('option[value="auto"]')!.disabled).toBe(true);
+    expect(container.querySelector('[aria-label="工具 materialize_asset"]')!.textContent).toContain('执行权限模式控制');
+  });
   it('shows default policy separately from explicit ask and saves a chosen trust mode', async () => {
     await render();
     expect(control('read').value).toBe('default');

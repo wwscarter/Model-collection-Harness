@@ -3,7 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { errorMessage } from '../format';
 import type { ToolTrustApi, ToolTrustListing, ToolTrustMode } from '../toolTrustTypes';
 
-const modeControlled = new Set(['run_command', 'write', 'edit']);
+const modeControlled = new Set(['run_command', 'write', 'edit', 'materialize_asset']);
 const sourceLabel = (source: string) => source === 'builtin' ? '内置工具' : source === 'mcp' ? 'MCP 工具' : source;
 
 export function ToolTrustSettings({ api }: { api: ToolTrustApi }) {
@@ -34,7 +34,7 @@ export function ToolTrustSettings({ api }: { api: ToolTrustApi }) {
   };
   return <div className="runtime-settings" aria-label="工具信任设置">
     <section className="runtime-card" aria-labelledby="tool-trust-title">
-      <div className="runtime-card-heading"><div><h3 id="tool-trust-title">工具信任</h3><p>按工具设置确认方式。命令和文件修改工具的自动批准由运行权限模式统一管理。</p></div><button type="button" className="button ghost small" aria-label="刷新工具信任" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} /></button></div>
+      <div className="runtime-card-heading"><div><h3 id="tool-trust-title">工具信任</h3><p>按工具设置确认方式。命令和文件写入工具的自动批准由运行权限模式统一管理。</p></div><button type="button" className="button ghost small" aria-label="刷新工具信任" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} /></button></div>
       {!listing && !error && <p className="runtime-hint" role="status">正在读取工具…</p>}
       {listing && !listing.tools.length && <p className="runtime-hint">当前没有可配置的工具。</p>}
       {listing?.tools.map((tool) => <article className="form-section" key={tool.name} aria-label={'工具 ' + tool.name}>

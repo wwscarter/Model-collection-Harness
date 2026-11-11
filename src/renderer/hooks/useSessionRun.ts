@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { RunTrace, SessionMetrics, BudgetLimitNotice } from '../types';
-import { appendAssistantChunk, type ChatAgentMessage, historyForModel, preparePendingTurn, setLatestAssistantDuration, settleAssistantTools, stripAssistantProcess, type ToolCallUpdate, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from '../sessionMessages';
+import { appendAssistantChunk, type ChatAgentMessage, historyForModel, preparePendingTurn, setLatestAssistantDuration, settleAssistantTools, stripAssistantProcess, type ToolCallUpdate, updateAssistantAgent, updateAssistantMedia, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from '../sessionMessages';
 import { completeSessionMetrics, type SessionRunTiming } from '../sessionMetrics';
 import { errorMessage } from '../format';
 import { shouldSubmitPromptKey } from '../promptKeyboard';
@@ -139,8 +139,17 @@ export function useSessionRun() {
         return { run, spans };
       });
     });
+    const applyMediaEvent = (payload: unknown) => {
+      const event = payload as { sessionId?: string; assistantMessageId?: string; runId?: string; job?: unknown; artifact?: unknown; artifacts?: unknown[] };
+      if (!event.sessionId || !event.assistantMessageId || deletedSessionIdsRef.current.has(event.sessionId)) return;
+      setSessions((existing) => existing.map((session) => session.id !== event.sessionId ? session : {
+        ...session, messages: updateAssistantMedia(session.messages, { messageId: event.assistantMessageId, job: event.job, artifacts: event.artifacts ?? (event.artifact ? [event.artifact] : []) }),
+      }));
+    };
+    const unsubscribeMediaJob = window.amd?.on('session:media-job', applyMediaEvent);
+    const unsubscribeMediaArtifact = window.amd?.on('session:media-artifact', applyMediaEvent);
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; runId?: string; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics; budgetLimit?: BudgetLimitNotice };
+      const event = payload as { sessionId?: string; taskId?: string; runId?: string; assistantMessageId?: string; artifacts?: unknown[]; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics; budgetLimit?: BudgetLimitNotice };
       const id = event.sessionId || event.taskId;
       if (!id || deletedSessionIdsRef.current.has(id)) return;
       const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
@@ -150,12 +159,13 @@ export function useSessionRun() {
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
         let messages = updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId);
+        messages = updateAssistantMedia(messages, { messageId: event.assistantMessageId, artifacts: event.artifacts });
         if (metrics?.latencyMs !== undefined) messages = setLatestAssistantDuration(messages, metrics.latencyMs);
         return { ...session, messages, output: event.output ?? '', modelUsed, runId: event.runId ?? session.runId, routeConfidence: metrics?.routeConfidence, metrics };
       }));
       setCompletionNotice(true);
     });
-    return () => { unsubscribeVerification?.(); unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribe?.(); };
+    return () => { unsubscribeVerification?.(); unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribeMediaJob?.(); unsubscribeMediaArtifact?.(); unsubscribe?.(); };
   }, []);
 
   const execute = async () => {
@@ -203,7 +213,7 @@ export function useSessionRun() {
         verificationMode,
         planningMode,
         sessionRules: sessionRules.trim() ? sessionRules : undefined,
-        pinnedModelId,
+        textModelPreferenceId: pinnedModelId,
         // Earlier turns of this conversation (the pending user/assistant pair is the last two).
         history: historyForModel(messages.slice(0, -2)),
       });
@@ -216,6 +226,7 @@ export function useSessionRun() {
       const sourceMetrics = raw.metrics ?? latestSession.metrics;
       const metrics = withRunTiming(raw.budgetLimit ? { ...sourceMetrics, budgetLimit: raw.budgetLimit } : sourceMetrics, currentSession.id, raw.decision?.confidence, Boolean(output), raw.stopReason ?? raw.metrics?.stopReason ?? latestSession.metrics?.stopReason);
       let completedMessages = updateLatestAssistantContent(latestSession.messages, output, modelUsed, raw.planningModelId);
+      completedMessages = updateAssistantMedia(completedMessages, { messageId: messageId + '-assistant', artifacts: raw.artifacts });
       const elapsedMs = metrics?.latencyMs ?? (runTimingRef.current?.sessionId === currentSession.id ? performance.now() - runTimingRef.current.startedAt : undefined);
       if (elapsedMs !== undefined) completedMessages = setLatestAssistantDuration(completedMessages, elapsedMs);
       const persistedMessages = stripAssistantProcess(completedMessages);

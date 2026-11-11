@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { createCore } from '@core/bootstrap/createCore';
 import { readEnvironmentModel } from '@core/bootstrap/environmentModel';
 import type { Core } from '@core/bootstrap/createCore';
+import { normalizeMediaArtifacts } from '@core/media/MediaTypes';
 import { parseCliArguments, CLI_HELP } from './arguments';
 import { createCliHost, type CliIO } from './host';
 
@@ -46,8 +47,12 @@ export async function runCli(argv: string[], io: CliIO = process, dependencies: 
     }
     const output = await core.run({ prompt: args.prompt!, ...(args.model ? { pinnedModelId: args.model } : {}), ...(args.planningMode ? { planningMode: args.planningMode } : {}) }, { projectRoot: args.project, signal: controller.signal });
     const now = new Date();
-    core.sessionStorage.save({ id: String(output.sessionId), title: args.prompt!.slice(0, 80), prompt: args.prompt!, output: String(output.output ?? ''), runId: String(output.runId), projectRoot: args.project, modelUsed: String((output.modelUsed as { id?: string } | undefined)?.id ?? ''), metrics: output.metrics, createdAt: now, updatedAt: now });
-    return ['tool_limit', 'budget_limit', 'length'].includes(String(output.stopReason)) || (output.projectVerification as { status?: string } | undefined)?.status === 'failed' ? 1 : 0;
+    core.sessionStorage.save({ id: String(output.sessionId), title: args.prompt!.slice(0, 80), prompt: args.prompt!, output: String(output.output ?? ''), messages: [
+      { id: String(output.runId) + '-user', role: 'user', content: args.prompt! },
+      { id: String(output.assistantMessageId ?? String(output.runId) + '-assistant'), role: 'assistant', content: String(output.output ?? ''), artifacts: normalizeMediaArtifacts(output.artifacts) },
+    ], runId: String(output.runId), projectRoot: args.project, modelUsed: String((output.modelUsed as { id?: string } | undefined)?.id ?? ''), metrics: output.metrics, createdAt: now, updatedAt: now });
+    if (!args.json) for (const artifact of normalizeMediaArtifacts(output.artifacts)) io.stdout.write('素材：' + core.media.getAssetPath(artifact.id) + String.fromCharCode(10));
+    return ['tool_limit', 'budget_limit', 'length', 'media_incomplete'].includes(String(output.stopReason)) || (output.projectVerification as { status?: string } | undefined)?.status === 'failed' ? 1 : 0;
   } catch (error) {
     const message = controller.signal.aborted ? '任务已取消' : error instanceof Error ? error.message : String(error);
     if (args?.json || argv.includes('--json')) io.stdout.write(JSON.stringify({ channel: 'error', payload: { message, cancelled: controller.signal.aborted } }) + '\n');

@@ -7,6 +7,7 @@ import { ExtensionsSettings } from '../components/ExtensionsSettings';
 import { routingStatusLabel } from '../components/ModelRoutingSettings';
 import type { RoutingClassifierStatus } from '@core/routing/LocalRoutingModel';
 import { hasLegacyPresetRates } from '@core/models/ModelSnapshot';
+import { getModelOperations, type ModelOperation, type OperationConfig } from '@core/models/ModelOperations';
 import { errorMessage } from '../format';
 import { capabilityLabels, categoryLabels, createSettingsDraft, providerDefaults, settingsPayload } from '../settingsForm';
 import type { ProviderCategory, SettingsDraft } from '../settingsForm';
@@ -19,7 +20,7 @@ type TestedEndpoint = { fingerprint: string; result: ConnectionResult };
 const providerInitials: Record<string, string> = { openai: 'OA', anthropic: 'AN', google: 'GG', deepseek: 'DS' };
 const initials = (provider: string, name: string) => providerInitials[provider] ?? (name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'AI');
 const unwrap = (result: unknown) => ((result as { model?: ModelConfig }).model ?? result) as ModelConfig;
-const fingerprint = (draft: SettingsDraft) => JSON.stringify([draft.provider, draft.baseURL, draft.apiKey, draft.modelId, draft.temperature, draft.enableThinking]);
+const fingerprint = (draft: SettingsDraft) => JSON.stringify([draft.provider, draft.baseURL, draft.apiKey, draft.modelId, draft.temperature, draft.enableThinking, draft.operations]);
 const modelDescription = (id: string) => /reason|thinking|\br1\b/i.test(id) ? '推理与深度思考' : /cod(e|er|ing)/i.test(id) ? '代码生成与开发' : /chat/i.test(id) ? '通用对话与日常任务' : '端点提供的模型';
 const endpointOrigin = (provider: string, baseURL?: string) => {
   try { return new URL(baseURL?.trim() || providerDefaults[provider] || '').origin; } catch { return ''; }
@@ -56,6 +57,8 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
   const tested = tests[selectedKey];
   const result = tested?.fingerprint === currentFingerprint ? tested.result : undefined;
   const supportsThinking = draft.provider === 'deepseek';
+  const supportsText = draft.operations['text.chat']?.protocol === 'text';
+  const imageOperation = draft.operations['image.generate'];
   const dirty = JSON.stringify(draft) !== JSON.stringify(createSettingsDraft(selected));
   const categoryLabel = categoryLabels[draft.providerCategory];
   const categoryValue = draft.providerCategory === 'official' ? 'official:' + draft.provider : draft.providerCategory;
@@ -99,6 +102,13 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
     return needle ? models.filter((model) => [model.name, model.modelId, model.baseURL, model.provider, categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]].some((value) => value?.toLowerCase().includes(needle))) : models;
   }, [models, query]);
   const change = (updates: Partial<SettingsDraft>) => { initialSelectionPending.current = false; setDraft((value) => ({ ...value, ...updates })); setNotice(null); };
+  const changeOperation = (operation: ModelOperation, enabled: boolean) => {
+    const operations = structuredClone(draft.operations);
+    if (enabled) operations[operation] = { protocol: operation === 'text.chat' ? 'text' : operation === 'image.generate' ? 'openai-images' : 'unconfigured', ...(operation === 'image.generate' ? { score: 70, defaults: { format: 'png' } } : {}) };
+    else delete operations[operation];
+    change({ operations, ...(!operations['text.chat'] ? { primary: false } : {}) });
+  };
+  const updateImageOperation = (updates: Partial<OperationConfig>) => change({ operations: { ...draft.operations, 'image.generate': { ...imageOperation!, ...updates } } });
   const switchEndpoint = (model?: ModelConfig) => {
     if (busy) return;
     initialSelectionPending.current = false;
@@ -134,10 +144,11 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
     finally { setBusy(null); }
   };
   const testConnection = async () => {
+    if (!supportsText) { setNotice({ tone: 'error', text: '媒体模型请通过实际生成验证；文本连通测试不适用于当前用途。' }); return; }
     setBusy('testing'); setNotice(null);
     try {
       if (!draft.modelId.trim()) throw new Error('请先选择或添加模型 ID');
-      const response = await needBridge().models.testConnection({ ...connectionInput(), modelId: draft.modelId.trim(), temperature: draft.temperature, enableThinking: draft.enableThinking, contextWindow: Number(draft.contextWindow) });
+      const response = await needBridge().models.testConnection({ ...connectionInput(), modelId: draft.modelId.trim(), temperature: draft.temperature, enableThinking: draft.enableThinking, contextWindow: Number(draft.contextWindow), operations: draft.operations });
       setTests((value) => ({ ...value, [selectedKey]: { fingerprint: currentFingerprint, result: response } }));
       if (!response.success) setNotice({ tone: 'error', text: response.demo ? '未验证真实端点：当前没有已保存的 API Key。' : '连接失败：' + (response.error || '端点没有返回有效响应') });
       else setNotice({ tone: 'success', text: response.demo ? '当前为本地演示模式，请配置密钥后验证真实连接。' : '连接成功 · ' + (response.latency ?? 0) + 'ms，已验证当前表单中的端点与模型。' });
@@ -210,12 +221,13 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
             {visibleModels.map((model) => {
               const test = tests[model.id];
               const result = test?.fingerprint === fingerprint(createSettingsDraft(model)) ? test.result : undefined;
+              const operationLabels = Object.keys(getModelOperations(model)).map((operation) => ({ 'text.chat': '文本', 'image.generate': '图片', 'video.generate': '视频' } as Record<string, string>)[operation]).filter(Boolean).join(' / ');
               return <button key={model.id} className={'endpoint-item ' + (selectedId === model.id ? 'selected ' : '') + (model.enabled ? '' : 'is-disabled')} disabled={Boolean(busy)} aria-pressed={selectedId === model.id} onClick={() => switchEndpoint(model)}>
                 <span className={'avatar ' + model.provider}>{initials(model.provider, model.name)}</span>
                 <span className="endpoint-copy">
                   <span className="endpoint-name"><strong>{model.name}</strong>{result?.success && !result.demo ? <span className="latency mono"><Zap size={10} />{result.latency ?? 0}ms</span> : result && !result.success ? <span className="latency bad">失败</span> : <i className={'state-dot ' + (model.enabled ? 'on' : '')} />}</span>
                   <span className="endpoint-url mono">{model.baseURL || providerDefaults[model.provider] || '自定义端点'}</span>
-                  <span className="endpoint-tags">{model.isPrimary && model.enabled && (model.hasApiKey || model.provider === 'custom') && <span className="tag solid">● 使用中</span>}<span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.credentialError ? <span className="tag solid">凭据需重新输入</span> : !model.hasApiKey && model.provider !== 'custom' ? <span className="tag">未配置 Key · 不参与路由</span> : !model.enabled ? <span className="tag">未启用</span> : null}</span>
+                  <span className="endpoint-tags">{model.isPrimary && model.enabled && (model.hasApiKey || model.provider === 'custom') && <span className="tag solid">● 使用中</span>}<span className="tag">{operationLabels}</span><span className="tag">{categoryLabels[model.providerCategory ?? (model.provider === 'custom' ? 'compatible_gateway' : 'official')]}</span>{model.credentialError ? <span className="tag solid">凭据需重新输入</span> : !model.hasApiKey && model.provider !== 'custom' ? <span className="tag">未配置 Key · 不参与路由</span> : !model.enabled ? <span className="tag">未启用</span> : null}</span>
                 </span>
               </button>;
             })}
@@ -227,7 +239,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
           <div className="detail-head">
             <span className="avatar solid">{selected ? initials(draft.provider, draft.name) : <Plus size={17} />}</span>
             <div className="detail-head-copy"><div className="detail-title"><h3>{draft.name || '添加模型端点'}</h3><span className={'status-pill settings-connection-badge ' + status.tone}><i className="live-dot" />{busy === 'testing' ? '正在测试连接…' : status.text}</span></div><p className="mono">{draft.modelId ? 'ID: ' + draft.modelId + ' · ' + categoryLabel : '配置一个端点，让合适的模型随时就绪'}</p></div>
-            <button className={'button ' + (draft.primary ? 'primary' : 'outline')} disabled={Boolean(busy)} title={draft.primary ? '点击恢复自动路由，保存后生效' : '固定使用此模型执行任务，保存后生效'} onClick={() => { change({ primary: !draft.primary, ...(draft.primary ? {} : { enabled: true }) }); setNotice({ tone: 'success', text: draft.primary ? '保存后恢复自动路由。' : '保存后将此模型设为主力路由。' }); }}><CircleCheck size={14} />{draft.primary ? selected?.isPrimary && !dirty ? '主力路由 / 使用中' : '主力路由 · 待保存' : '设为主力路由'}</button>
+            <button className={'button ' + (draft.primary ? 'primary' : 'outline')} disabled={Boolean(busy) || !supportsText} title={!supportsText ? '主力路由只适用于文本模型' : draft.primary ? '点击恢复自动路由，保存后生效' : '固定使用此模型执行文本任务，保存后生效'} onClick={() => { change({ primary: !draft.primary, ...(draft.primary ? {} : { enabled: true }) }); setNotice({ tone: 'success', text: draft.primary ? '保存后恢复自动路由。' : '保存后将此模型设为文本主力路由。' }); }}><CircleCheck size={14} />{draft.primary ? selected?.isPrimary && !dirty ? '主力路由 / 使用中' : '主力路由 · 待保存' : '设为主力路由'}</button>
           </div>
           <div className="detail-form" ref={scrollRef} aria-busy={Boolean(busy)}>
             {legacyRates && <div className="settings-pricing-diagnostic" role="status">当前配置沿用旧预设费率，请按服务商价格核对；显示费用为配置估算。这不代表已确认费率错误。</div>}
@@ -240,6 +252,37 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
                 </div>
                 <Field label="API 地址 (Base URL)"><input className="input mono" value={draft.baseURL} onChange={(event) => change({ baseURL: event.target.value })} placeholder="https://your-provider.example.com/v1" spellCheck={false} /></Field>
                 <Field label="API Key 密钥" hint={hasSavedKey ? '已安全保存 · 留空保留现有密钥' : draft.provider === 'custom' ? '本地或免密服务可留空' : '密钥仅保存在本机'}><span className="input-with-action"><input className="input mono" type={showKey ? 'text' : 'password'} value={draft.apiKey} onChange={(event) => change({ apiKey: event.target.value })} placeholder={hasSavedKey ? '已保存，输入新值可替换' : '输入 API Key'} autoComplete="new-password" spellCheck={false} /><button type="button" className="input-action" aria-label={showKey ? '隐藏密钥' : '显示密钥'} onClick={() => setShowKey((value) => !value)}>{showKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></span></Field>
+              </section>
+              <section className="form-section">
+                <div className="form-section-head"><span><Zap size={15} />模型用途与协议</span><small>按能力参与自由调度</small></div>
+                <div className="operation-options" role="group" aria-label="模型用途">
+                  {([['text.chat', '文本对话与工具'], ['image.generate', '图片生成'], ['video.generate', '视频生成']] as const).map(([operation, label]) => <label key={operation} className="operation-option"><input type="checkbox" aria-label={label} checked={Boolean(draft.operations[operation])} onChange={(event) => changeOperation(operation, event.target.checked)} /><span>{label}</span></label>)}
+                </div>
+                <p className="settings-draft-note">模型可支持多种用途。系统针对每次工作按能力、约束和路由策略选择模型；视觉理解能力不代表支持生成图片。</p>
+                {imageOperation && <div className="operation-configuration">
+                  <div className="form-grid two">
+                    <Field label="图片协议"><select className="input" aria-label="图片协议" value={imageOperation.protocol} onChange={() => undefined}><option value="openai-images">OpenAI Images</option></select></Field>
+                    <Field label="图片生成评分（0–100）"><input className="input mono" type="number" min="0" max="100" value={imageOperation.score ?? ''} onChange={(event) => updateImageOperation({ score: event.target.value === '' ? undefined : Number(event.target.value) })} /></Field>
+                    <Field label="单次图片预估费用（USD）" hint="用于预算预留"><input className="input mono" type="number" min="0" step="0.001" value={imageOperation.estimatedCostUsd ?? ''} placeholder="未配置时费用未知" onChange={(event) => updateImageOperation({ estimatedCostUsd: event.target.value === '' ? undefined : Number(event.target.value) })} /></Field>
+                    <Field label="预估生成耗时（秒）"><input className="input mono" type="number" min="0.001" step="1" value={imageOperation.expectedDurationMs === undefined ? '' : imageOperation.expectedDurationMs / 1000} onChange={(event) => updateImageOperation({ expectedDurationMs: event.target.value === '' ? undefined : Number(event.target.value) * 1000 })} /></Field>
+                    <Field label="支持的尺寸" hint="逗号分隔"><input className="input mono" value={imageOperation.limits?.sizes?.join(', ') ?? ''} placeholder="1024x1024, 1536x1024" onChange={(event) => updateImageOperation({ limits: { ...imageOperation.limits, sizes: event.target.value.trim() ? event.target.value.split(',').map((value) => value.trim()).filter(Boolean) : undefined } })} /></Field>
+                    <Field label="默认图片格式"><select className="input" value={imageOperation.defaults?.format ?? ''} onChange={(event) => updateImageOperation({ defaults: { ...imageOperation.defaults, format: event.target.value ? event.target.value as 'png' | 'jpeg' | 'webp' : undefined } })}><option value="">使用端点默认</option><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></Field>
+                  </div>
+                  <p className="settings-draft-note">尺寸留空时使用端点默认，不能保证指定尺寸或比例。</p>
+                  <div className="operation-options" role="group" aria-label="支持的图片格式">
+                    {(['png', 'jpeg', 'webp'] as const).map((format) => <label key={format} className="operation-option"><input type="checkbox" aria-label={'支持 ' + format.toUpperCase()} checked={imageOperation.limits?.formats?.includes(format) ?? false} onChange={(event) => { const formats = event.target.checked ? [...(imageOperation.limits?.formats ?? []), format] : imageOperation.limits?.formats?.filter((value) => value !== format); updateImageOperation({ limits: { ...imageOperation.limits, formats: formats?.length ? formats : undefined } }); }} /><span>{format.toUpperCase()}</span></label>)}
+                  </div>
+                  <div className="operation-options" role="group" aria-label="支持的图片质量">
+                    {([['auto', '自动'], ['low', '低'], ['medium', '中'], ['high', '高']] as const).map(([quality, label]) => <label key={quality} className="operation-option"><input type="checkbox" aria-label={'支持质量 ' + label} checked={imageOperation.limits?.qualities?.includes(quality) ?? false} onChange={(event) => { const qualities = event.target.checked ? [...(imageOperation.limits?.qualities ?? []), quality] : imageOperation.limits?.qualities?.filter((value) => value !== quality); updateImageOperation({ limits: { ...imageOperation.limits, qualities: qualities?.length ? qualities : undefined } }); }} /><span>{label}质量</span></label>)}
+                  </div>
+                  <p className="settings-draft-note">仅勾选端点已支持的格式和质量；未勾选表示未声明该能力。</p>
+                  <label className="operation-option"><input type="checkbox" checked={imageOperation.limits?.transparentBackground === true} onChange={(event) => updateImageOperation({ limits: { ...imageOperation.limits, transparentBackground: event.target.checked } })} /><span>支持透明背景</span></label>
+                  <div className="form-grid three">
+                    {([['inputTextPerMillion', '文字输入 / 百万 Token'], ['inputImagePerMillion', '图片输入 / 百万 Token'], ['outputImagePerMillion', '图片输出 / 百万 Token']] as const).map(([key, label]) => <Field key={key} label={label} hint="USD"><input className="input mono" type="number" min="0" step="0.01" value={imageOperation.pricing?.[key] ?? ''} placeholder="费用未知" onChange={(event) => updateImageOperation({ pricing: { ...imageOperation.pricing, [key]: event.target.value === '' ? undefined : Number(event.target.value) } })} /></Field>)}
+                  </div>
+                  <p className="settings-draft-note">请按实际端点能力填写。图片协议通过生成任务验证，文本连通测试仅验证文本用途。</p>
+                </div>}
+                {draft.operations['video.generate'] && <p className="settings-draft-note" role="status">视频用途已记录；视频协议尚未接入，当前不会参与执行。接入后将与其他可用视频模型共同参与路由。</p>}
               </section>
               <section className="form-section">
                 <div className="form-section-head"><span><Radio size={15} />模型列表</span><small className="model-sync-status">{draft.availableModels.length ? <><CloudDownload size={12} />{modelSource === 'fetched' ? '已从 API 获取' : modelSource === 'manual' ? '含手动添加' : '已配置'}</> : '获取在线列表，或手动添加模型'}</small></div>
@@ -268,7 +311,7 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
             </fieldset>
           </div>
           {notice && <div className={'settings-notice ' + notice.tone} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'success' ? <CircleCheck size={14} /> : <X size={14} />}<span>{notice.text}</span><button className="icon-button" aria-label="关闭提示" onClick={() => setNotice(null)}><X size={12} /></button></div>}
-          <footer className="detail-foot"><span className="foot-note"><ShieldCheck size={14} /><span>{dirty ? '配置有未保存的修改' : '配置已关联至本地环境'}</span></span><div className="foot-actions">{selected && <button className="button danger" disabled={Boolean(busy)} title="删除此模型配置" onClick={() => void removeSelected()}><Trash2 size={13} />删除模型</button>}<button className="button soft" disabled={Boolean(busy) || !draft.modelId.trim()} onClick={() => void testConnection()}>{busy === 'testing' && <LoaderCircle size={13} className="spinning" />}{busy === 'testing' ? '测试中…' : '连通测试'}</button><button className="button outline" disabled={busy === 'saving'} onClick={onClose}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.name.trim() || !draft.modelId.trim()} onClick={() => void save()}>{busy === 'saving' && <LoaderCircle size={13} className="spinning" />}{busy === 'saving' ? '保存中…' : '保存配置'}</button></div></footer>
+          <footer className="detail-foot"><span className="foot-note"><ShieldCheck size={14} /><span>{dirty ? '配置有未保存的修改' : '配置已关联至本地环境'}</span></span><div className="foot-actions">{selected && <button className="button danger" disabled={Boolean(busy)} title="删除此模型配置" onClick={() => void removeSelected()}><Trash2 size={13} />删除模型</button>}<button className="button soft" disabled={Boolean(busy) || !draft.modelId.trim() || !supportsText} title={!supportsText ? "媒体模型通过实际生成任务验证" : undefined} onClick={() => void testConnection()}>{busy === 'testing' && <LoaderCircle size={13} className="spinning" />}{busy === 'testing' ? '测试中…' : '连通测试'}</button><button className="button outline" disabled={busy === 'saving'} onClick={onClose}>取消</button><button className="button primary" disabled={Boolean(busy) || !draft.name.trim() || !draft.modelId.trim()} onClick={() => void save()}>{busy === 'saving' && <LoaderCircle size={13} className="spinning" />}{busy === 'saving' ? '保存中…' : '保存配置'}</button></div></footer>
         </main>
       </div>}
     </section>

@@ -28,4 +28,18 @@ describe('response output rendering', () => {
     expect(markup).toContain('<code>npm install</code>');
     expect(markup).toContain('<strong>开始</strong>');
   });
+
+  it('renders a saved image without requiring a text answer or exposing file paths', () => {
+    const markup = renderToStaticMarkup(createElement(OutputView, { content: '', loading: false, emptyState: false, artifacts: [{ id: 'asset-1', kind: 'image', mimeType: 'image/png', fileName: 'generated.png', modelId: 'image-model', configurationId: 'image-config', jobId: 'job-1', width: 1024, height: 1024 }] }));
+    expect(markup).toContain('newai-media://asset/asset-1');
+    expect(markup).toContain('image-model');
+    expect(markup).toContain('另存为');
+    expect(markup).not.toContain('输出会显示在这里');
+  });
+
+  it('shows the generating job while no image has arrived', () => {
+    const markup = renderToStaticMarkup(createElement(OutputView, { content: '', loading: true, emptyState: false, mediaJobs: [{ id: 'job-1', operation: 'image.generate', status: 'running', modelId: 'image-model' }] }));
+    expect(markup).toContain('图片 · 正在生成');
+    expect(markup).not.toContain('正在规划并执行任务');
+  });
 });

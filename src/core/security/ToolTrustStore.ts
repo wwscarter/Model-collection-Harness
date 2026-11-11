@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { atomicRuleWrite } from '@core/agent/RuleFiles';
 
 export type ToolTrust = 'ask' | 'auto' | 'disabled';
-export const MODE_CONTROLLED_TOOLS = new Set(['run_command', 'write', 'edit']);
+export const MODE_CONTROLLED_TOOLS = new Set(['run_command', 'write', 'edit', 'materialize_asset']);
 export function toolTrustName(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_:./-]{0,199}$/.test(value)) throw new Error('工具名称无效');
   return value;

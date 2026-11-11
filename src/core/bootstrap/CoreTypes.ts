@@ -1,4 +1,5 @@
 import type { ModelConfig } from '@core/models/ModelConfig';
+import type { MediaExecutionService } from '@core/media/MediaExecutionService';
 import type { RunDependencies, RunEmit, RunRequest } from '@core/agent/RunCoordinator';
 import type { ApprovalDecision, ApprovalMode, ToolApprovalRequest } from '@core/security/ApprovalPolicy';
 import type { VerifyCommand } from '@core/verify/VerificationTypes';
@@ -77,6 +78,7 @@ export interface CoreRunOptions {
 }
 
 export interface CoreServices {
+  media: MediaExecutionService;
   host: CoreHost;
   options: CreateCoreOptions;
   dataDir: string;

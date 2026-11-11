@@ -7,13 +7,15 @@ import { chooseRevisionModel } from '../RunOrchestrator';
 import { buildRevisionPrompt, hasCode, shouldRevise, verifyCodeAnswer } from '../VerificationService';
 import type { RunContext } from './RunContext';
 import { costOf, errorUsage, estimateTokens, limitedStop, limitMessage } from './runHelpers';
+import { resolveMediaCompletion } from './mediaCompletion';
 
 /** Optionally verify and revise a code answer. */
 export async function verifyStage(ctx: RunContext): Promise<void> {
+  if (resolveMediaCompletion(ctx.deps.media?.listJobs(ctx.runId, ctx.sessionId) ?? [], ctx.mediaFailures, { runId: ctx.runId, sessionId: ctx.sessionId }).blocked) return;
   // Project changes were reviewed while the live execution session could still
   // edit files and rerun checks. Only legacy answer-only runs use this stage.
   if (ctx.projectVerification) return;
-  if (!['tool_limit', 'budget_limit', 'length'].includes(ctx.result.stopReason ?? '') && (ctx.decision.strategy === 'plan+verify' || ctx.decision.strategy === 'escalate') && hasCode(ctx.result.content)) {
+  if (!limitedStop(ctx.result.stopReason) && (ctx.decision.strategy === 'plan+verify' || ctx.decision.strategy === 'escalate') && hasCode(ctx.result.content)) {
     const verifierModel = selectUtilityModel(ctx.deps.models.getEnabledModels().filter((candidate) => candidate.id !== ctx.executionModel.id && ctx.deps.quota.isAvailable(candidate)), ctx.executionModel.id, ctx.deps.routingSettings?.utilityModelId);
     if (verifierModel) {
       const verificationSpan = ctx.trace.child('audit', 'model-verify', { modelId: verifierModel.id, modelSnapshot: snapshotModel(verifierModel) });
