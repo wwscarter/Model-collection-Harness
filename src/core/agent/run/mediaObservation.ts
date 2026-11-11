@@ -10,7 +10,7 @@ export function createMediaObserver(deps: RunDependencies, trace: TraceSpanHandl
       const key = job.id + ':' + index;
       let observed = attempts.get(key);
       if (!observed) {
-        observed = { span: trace.child('model', 'media.generate', { modelId: attempt.configurationId, operation: job.operation, jobId: job.id, agentId: job.agentId, reason: attempt.reason, protocol: attempt.protocol }), invocationId: deps.observability.recordInvocationStart(runId, attempt.configurationId), ended: false };
+        observed = { span: trace.child('model', 'media.generate', { modelId: attempt.configurationId, modelSnapshot: attempt.modelSnapshot, operation: job.operation, jobId: job.id, agentId: job.agentId, reason: attempt.reason, protocol: attempt.protocol }), invocationId: deps.observability.recordInvocationStart(runId, attempt.configurationId), ended: false };
         attempts.set(key, observed);
       }
       if (observed.ended || attempt.status === 'submitting') return;

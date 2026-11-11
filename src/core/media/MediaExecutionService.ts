@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ModelConfig } from '../models/ModelConfig';
 import { getModelOperations } from '../models/ModelOperations';
+import { snapshotModel } from '../models/ModelSnapshot';
 import { BudgetExceededError } from '../routing/RunBudget';
 import { normalizeMediaRequest, routeMediaRequest } from './MediaRouting';
 import { ImageProviderError, OpenAIImagesProvider } from './providers/OpenAIImagesProvider';
@@ -172,7 +173,7 @@ export class MediaExecutionService {
       const attemptIndex = job.attempts.length;
       const reservationId = job.id + ':' + attemptIndex;
       let reserved = false, sent = false;
-      const attempt = { configurationId: model.id, modelId: model.modelId, protocol: 'openai-images', startedAt: new Date().toISOString(), status: 'submitting' as const, reason: candidate.reason };
+      const attempt = { configurationId: model.id, modelId: model.modelId, protocol: 'openai-images', modelSnapshot: snapshotModel(model), startedAt: new Date().toISOString(), status: 'submitting' as const, reason: candidate.reason };
       job.attempts.push(attempt);
       job.modelId = model.modelId; job.configurationId = model.id;
       job.estimatedCostUsd = candidate.estimatedCostUsd;

@@ -1,4 +1,5 @@
 import type { ModelConfig } from '../models/ModelConfig';
+import type { ModelSnapshot } from '../models/ModelSnapshot';
 export type MediaOperation = 'image.generate' | 'video.generate';
 export type MediaFormat = 'png' | 'jpeg' | 'webp';
 export interface MediaRequest {
@@ -31,6 +32,7 @@ export interface MediaAttempt {
   configurationId: string;
   modelId: string;
   protocol: string;
+  modelSnapshot?: ModelSnapshot;
   startedAt: string;
   status: 'submitting' | 'succeeded' | 'failed' | 'unknown';
   reason: string;

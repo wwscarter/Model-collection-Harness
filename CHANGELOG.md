@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-11-11
+
+### Media generation and routing
+
+- Register text, image and video operations in the same model/endpoint settings; dynamically select compatible image models for each request.
+- Allow automatically scheduled executors and read-only collaborators to request images through shared media tools, with root-task budgets, deduplication and safe retry boundaries.
+- Add an OpenAI Images adapter for Base64 PNG/JPEG/WebP, local asset storage, project export, conversation restoration and result cards.
+- Keep media-only models out of text planning, summaries, review and fallback; mark tasks incomplete when required media fails. Video configuration is available, but a video provider adapter is not yet connected.
+
+### Desktop and reliability
+
+- Separate run history from the monitoring overview and add model-call trees and timelines with actual model snapshots.
+- Preserve the expanded settings navigation, compact tool-trust table and focus handling improvements.
+- Allow Ollama to choose its available accelerator instead of forcing CPU inference.
+- Package macOS Intel x64 DMG and ZIP artifacts; signing and notarization require a configured Apple identity.
+
 ## 0.2.1 — 2026-11-11
 
 ### UI

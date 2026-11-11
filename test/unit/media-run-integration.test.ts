@@ -158,6 +158,7 @@ describe('media generation in the shared core run pipeline', () => {
     expect(core.media.readAsset(artifacts[0].id).bytes).toEqual(Buffer.from(png, 'base64'));
     expect(core.media.listJobs('direct-image')[0]).toMatchObject({ sessionId: 'direct-session', assistantMessageId: 'direct-assistant', status: 'succeeded' });
     expect(core.observability.getTrace('direct-image')?.run.status).toBe('success');
+    expect(core.observability.getTrace('direct-image')?.spans.find((span) => span.name === 'media.generate')?.attributes).toMatchObject({ modelSnapshot: { configurationId: 'image', modelId: 'image', operations: { 'image.generate': { protocol: 'openai-images' } } } });
     expect(events.filter((event) => event.channel === 'session:completed')).toHaveLength(1);
     expect(core.runningTasks.size).toBe(0);
   });
