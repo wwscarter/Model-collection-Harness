@@ -8,6 +8,7 @@ import type { ModelConfig } from '../../src/core/models/ModelConfig';
 import type { MediaArtifact, MediaResult } from '../../src/core/media/MediaTypes';
 import type { RunDependencies } from '../../src/core/agent/RunCoordinator';
 import { DEFAULT_ROUTING_SETTINGS } from '../../src/core/routing/RoutingSettings';
+import { pngImage } from '../helpers/png';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9xkAAAAASUVORK5CYII=';
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -29,6 +30,7 @@ async function fixture(options: {
   invokeStreamed?: RunDependencies['invokeStreamed'];
   createProvider?: RunDependencies['createProvider'];
   sdk?: boolean;
+  imageSize?: [number, number];
 } = {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'newai-media-run-')));
   cleanup.push(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -48,7 +50,7 @@ async function fixture(options: {
         response.end(JSON.stringify({ error: { message: 'Unexpected text request in media integration fixture' } })); return;
       }
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ data: [{ b64_json: png }] }));
+      response.end(JSON.stringify({ data: [{ b64_json: options.imageSize ? pngImage(...options.imageSize) : png }] }));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -68,6 +70,43 @@ async function fixture(options: {
 }
 
 describe('media generation in the shared core run pipeline', () => {
+  it('sends the next supported size for an explicit minimum and persists the original requirement', async () => {
+    const { core, requests, directory } = await fixture({ imageSize: [2048, 1152], models: (baseURL) => {
+      const image = imageModel('image', baseURL);
+      image.operations!['image.generate']!.limits = { sizes: ['1672x941', '2048x1152', '2560x1440'] };
+      return [image];
+    } });
+    const output = await core.run({ runId: 'minimum-image', sessionId: 'minimum-session', prompt: '生成一张至少1920×1080的16:9图片' });
+    expect(output.artifacts).toEqual([expect.objectContaining({ width: 2048, height: 1152 })]);
+    expect(requests).toEqual([{ path: '/v1/images/generations', body: { model: 'image', prompt: '生成一张至少1920×1080的16:9图片', size: '2048x1152', n: 1, output_format: 'png' } }]);
+    const job = core.media.listJobs('minimum-image')[0];
+    expect(job.request).toMatchObject({ minSize: '1920x1080', aspectRatio: '16:9' });
+    const saved = JSON.parse(fs.readFileSync(path.join(directory, 'media', 'jobs', job.id + '.json'), 'utf8'));
+    expect(saved.request).toMatchObject({ minSize: '1920x1080', aspectRatio: '16:9' });
+    expect(saved.artifacts).toEqual(output.artifacts);
+  });
+
+  it('keeps a compound run incomplete when a retry drops fields still required by its prompt', async () => {
+    const invoke: RunDependencies['invokeStreamed'] = async (model, _prompt, _max, onDelta, options) => {
+      const tool = options!.mediaTools!.find((candidate) => candidate.name === 'request_media')!;
+      for (const revision of [0, 1]) {
+        const args = { operation: 'image.generate', prompt: '目标画布：1920×1080，16:9。', artifactSlot: 'landing.hero', revision, ...(revision === 0 ? { size: '1920x1080', aspectRatio: '16:9' } : {}) };
+        const toolCallId = 'drop-constraints-' + revision;
+        options!.onToolEvent?.({ toolCallId, toolName: tool.name, status: 'running', args });
+        const result = await tool.execute(toolCallId, args, options!.signal, undefined, {} as never);
+        expect(result.isError).toBe(true);
+        options!.onToolEvent?.({ toolCallId, toolName: tool.name, status: 'failed', details: result.details });
+      }
+      onDelta('页面已完成。');
+      return { modelId: model.id, content: '页面已完成。', inputTokens: 25, outputTokens: 9 };
+    };
+    const { core, requests } = await fixture({ invokeStreamed: invoke });
+    const output = await core.run({ runId: 'size-required', sessionId: 'size-session', prompt: '开发一个页面并生成1920×1080背景图', includeProjectContext: false });
+    expect(output.stopReason).toBe('media_incomplete');
+    expect(output.output).toContain('尚未完整交付');
+    expect(requests).toEqual([]);
+    expect(core.media.listArtifacts('size-required')).toEqual([]);
+  });
   it('publishes a single confirmation and binds execution to the reviewed media request', async () => {
     const { core, requests, events } = await fixture();
     const output = await core.run({ runId: 'confirmed-image', sessionId: 'confirmation-session', prompt: '生成一张海报', planningMode: 'confirm' });

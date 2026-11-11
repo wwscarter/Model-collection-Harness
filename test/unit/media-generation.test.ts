@@ -9,6 +9,7 @@ import { createMediaTools } from '../../src/core/media/MediaTools';
 import { normalizeMediaArtifacts, type MediaExecutionContext } from '../../src/core/media/MediaTypes';
 import { resolveImagesEndpoint } from '../../src/core/media/providers/OpenAIImagesProvider';
 import { BudgetExceededError } from '../../src/core/routing/RunBudget';
+import { pngImage } from '../helpers/png';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9xkAAAAASUVORK5CYII=';
 const directories: string[] = [];
@@ -45,9 +46,34 @@ describe('dynamic media model routing', () => {
     candidate.operations = { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1536x864'], formats: ['webp'], qualities: ['high'] } } };
     expect(routeMediaRequest({ ...request, size: '1536x864', format: 'webp', quality: 'high' }, [candidate])[0].request).toMatchObject({ size: '1536x864', format: 'webp', quality: 'high' });
   });
+  it('selects the nearest declared size only for an explicit minimum, preserving exact sizes', () => {
+    const candidate = model('image', 80, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['2560x1440', '1672x941', '2048x1152'] } } } });
+    const routed = routeMediaRequest({ ...request, minSize: '1920x1080', aspectRatio: '16:9' }, [candidate])[0];
+    expect(routed.request.size).toBe('2048x1152');
+    expect(routed.request.minSize).toBe('1920x1080');
+    expect(routed.reason).toContain('不小于目标的最近档位 2048x1152');
+    expect(() => routeMediaRequest({ ...request, size: '1920x1080', aspectRatio: '16:9' }, [candidate])).toThrow('不支持指定精确尺寸 1920x1080');
+  });
+  it('rejects a declared size set whose largest matching ratio is still below the target', () => {
+    const candidate = model('gpt-image', 80, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1672x941', '2560x1024'] } } } });
+    expect(() => routeMediaRequest({ ...request, minSize: '1920x1080' }, [candidate])).toThrow('没有不小于目标尺寸 1920x1080');
+    expect(() => routeMediaRequest({ ...request, size: '1672x941', minSize: '1920x1080' }, [candidate])).toThrow('精确图片尺寸小于');
+  });
+  it('uses a declared default size for a matching ratio and respects explicit size limits', () => {
+    const candidate = model('default', 80, { operations: { 'image.generate': { protocol: 'openai-images', defaults: { size: '1920x1080' } } } });
+    expect(routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])[0].request.size).toBe('1920x1080');
+    candidate.operations!['image.generate']!.limits = { sizes: ['1024x1024'] };
+    expect(() => routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])).toThrow('没有满足指定比例');
+  });
+  it('does not infer gateway size support from a model name', () => {
+    const candidate = model('gpt-image', 80, { modelId: 'gpt-image-2.6-sunburst' });
+    expect(() => routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])).toThrow('模型与端点 → 图片生成 → 支持的尺寸');
+    expect(() => routeMediaRequest({ ...request, minSize: '1920x1080' }, [candidate])).toThrow('无法保证最小尺寸');
+  });
   it('rejects invalid and excessive requested dimensions before routing', () => {
     expect(() => routeMediaRequest({ ...request, size: '0x0' }, [model('image')])).toThrow('WIDTHxHEIGHT');
     expect(() => routeMediaRequest({ ...request, size: '32768x32768' }, [model('image')])).toThrow('超出应用限制');
+    expect(() => routeMediaRequest({ ...request, minSize: '32768x32768' }, [model('image')])).toThrow('超出应用限制');
   });
   it('never uses legacy text or unconfigured video models', () => {
     expect(() => routeMediaRequest(request, [model('text', 100, { operations: undefined })])).toThrow('没有满足');
@@ -67,6 +93,40 @@ describe('dynamic media model routing', () => {
 });
 
 describe('media protocol and durable execution', () => {
+  it('keeps prompt dimensions when a tool retry removes structured constraints and bumps its revision', async () => {
+    const { service, fetcher } = fixture([model('gpt-image')]);
+    const tool = createMediaTools(service, context)[0];
+    const prompt = '生成一张风景图片。目标画布：1920×1080，16:9 横幅。';
+    for (const args of [
+      { ...request, prompt, size: '1920x1080', aspectRatio: '16:9' },
+      { ...request, prompt, revision: 1 },
+    ]) {
+      const result = await tool.execute('call', args, undefined, undefined, {} as never);
+      expect(result).toMatchObject({ isError: true, details: { code: 'MEDIA_MODEL_UNAVAILABLE', required: true } });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(service.listJobs()).toHaveLength(2);
+    for (const job of service.listJobs()) expect(job).toMatchObject({ status: 'failed', attempts: [], request: { size: '1920x1080', aspectRatio: '16:9' } });
+  });
+  it('rejects a tool parameter that contradicts explicit prompt dimensions before generation', async () => {
+    const { service, fetcher } = fixture();
+    await expect(service.execute({ ...request, prompt: '目标画布：1920×1080', size: '1672x941' }, context)).rejects.toMatchObject({ code: 'MEDIA_CONSTRAINT_CONFLICT' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('rejects an undersized real PNG without resubmitting or reporting a completed asset', async () => {
+    const candidate = model('wide', 90, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['2048x1152'] } } } });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: pngImage(1672, 941) }] })));
+    const { service, directory } = fixture([candidate, { ...candidate, id: 'fallback' }], fetcher);
+    const input = { ...request, prompt: '生成至少1920×1080的16:9风景图片' };
+    await expect(service.execute(input, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN', message: expect.stringContaining('1672x941 小于要求的最小尺寸 1920x1080') });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(service.listArtifacts(context.rootRunId)).toEqual([]);
+    const [, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toMatchObject({ size: '2048x1152' });
+    const restored = new MediaExecutionService({ dataDir: directory, models: { getAllModels: () => [candidate] }, fetch: fetcher as typeof fetch });
+    await expect(restored.execute(input, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it('preserves gateway paths/query and refuses text endpoint addresses', () => {
     expect(resolveImagesEndpoint('https://gateway.example/proxy/v1?tenant=x')).toBe('https://gateway.example/proxy/v1/images/generations?tenant=x');
     expect(resolveImagesEndpoint('https://gateway.example/v1/images/generations')).toBe('https://gateway.example/v1/images/generations');
@@ -186,7 +246,7 @@ describe('media protocol and durable execution', () => {
     const constrained = model('wide', 90, { operations: { 'image.generate': { protocol: 'openai-images', score: 90, limits: { sizes: ['1536x864'] } } } });
     const { service } = fixture([constrained]);
     await expect(service.execute({ ...request, aspectRatio: '16:9' }, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
-    expect(service.listJobs()[0]).toMatchObject({ status: 'unknown', error: '图片接口返回尺寸与请求不符' });
+    expect(service.listJobs()[0]).toMatchObject({ status: 'unknown', error: '图片接口返回尺寸与请求不符：实际 1x1，请求 1536x864' });
   });
   it('deletes session media after active creation settles without recreating deleted assets', async () => {
     let finish!: () => void; const pending = new Promise<void>((resolve) => { finish = resolve; });

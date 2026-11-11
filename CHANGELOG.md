@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-11-11
+
+### Image dimension requirements
+
+- Apply explicit prompt constraints to both direct image generation and agent media tools, preventing retries that remove structured fields from bypassing the requested dimensions.
+- Keep exact `size` requirements unchanged; add `minSize` and explicit minimum-size wording to select the smallest declared output that meets both dimension bounds and the requested aspect ratio.
+- Report missing model size configuration with its settings location and report actual dimensions when an image fails validation, preserving the existing protection against automatic resubmission.
+
 ## 0.3.0 — 2026-11-11
 
 ### Media generation and routing

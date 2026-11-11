@@ -94,4 +94,8 @@ describe('request operation shortcut', () => {
     expect(() => extractExplicitMediaConstraints('制作5秒或10秒的视频')).toThrow('多个不同视频时长');
     expect(() => extractExplicitMediaConstraints('生成1536x864尺寸的1:1图片')).toThrow('尺寸与画面比例不一致');
   });
+
+  it.each(['生成一张至少1920×1080的16:9图片', '生成一张不小于1920x1080的16:9图片', 'Generate an image, at least 1920x1080, 16:9', 'Generate an image, minimum size: 1920x1080, 16:9'])('preserves minimum dimensions explicitly: %s', (prompt) => {
+    expect(extractExplicitMediaConstraints(prompt)).toEqual({ minSize: '1920x1080', aspectRatio: '16:9' });
+  });
 });

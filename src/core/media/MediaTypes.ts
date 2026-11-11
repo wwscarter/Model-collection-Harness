@@ -8,7 +8,10 @@ export interface MediaRequest {
   purpose?: string;
   artifactSlot?: string;
   revision?: number;
+  /** Exact output dimensions; never silently replaced by another size. */
   size?: string;
+  /** Optional minimum dimensions; routing selects the smallest declared size meeting both bounds. */
+  minSize?: string;
   aspectRatio?: string;
   format?: MediaFormat;
   transparentBackground?: boolean;

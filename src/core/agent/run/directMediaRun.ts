@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { supportsOperation } from '@core/models/ModelOperations';
 import { snapshotModel } from '@core/models/ModelSnapshot';
-import { routeMediaRequest } from '@core/media/MediaRouting';
+import { resolveMediaRequest, routeMediaRequest } from '@core/media/MediaRouting';
 import type { MediaOperation, MediaRequest } from '@core/media/MediaTypes';
 import { RunBudget } from '@core/routing/RunBudget';
 import { DEFAULT_ROUTING_SETTINGS } from '@core/routing/RoutingSettings';
@@ -9,7 +9,6 @@ import { PlanController } from '@core/planning/PlanController';
 import { planningMode } from '@core/planning/PlanTypes';
 import type { RunDependencies, RunEmit, RunRequest } from './RunTypes';
 import { createMediaObserver } from './mediaObservation';
-import { extractExplicitMediaConstraints } from '@core/routing/RequestOperation';
 
 /** Pure media requests share the same service as agent tools, without a text-model call. */
 export async function executeDirectMedia(request: RunRequest, operation: MediaOperation, deps: RunDependencies, emit: RunEmit): Promise<Record<string, unknown>> {
@@ -18,16 +17,7 @@ export async function executeDirectMedia(request: RunRequest, operation: MediaOp
   const sessionId = request.sessionId ?? request.taskId ?? randomUUID(), runId = request.runId ?? randomUUID();
   const assistantMessageId = request.assistantMessageId ?? runId + '-assistant';
   const identity = { sessionId, taskId: request.taskId ?? sessionId, runId, assistantMessageId };
-  const inferred = extractExplicitMediaConstraints(request.prompt);
-  if (operation === 'image.generate') delete inferred.durationSeconds;
-  const constraints: Omit<MediaRequest, 'operation' | 'prompt' | 'purpose' | 'artifactSlot' | 'revision' | 'preference'> = { ...inferred };
-  for (const key of ['size', 'aspectRatio', 'format', 'transparentBackground', 'durationSeconds'] as const) {
-    const fromPrompt = inferred[key], fromControl = request.media?.[key];
-    if (fromPrompt !== undefined && fromControl !== undefined && fromPrompt !== fromControl)
-      throw new Error('MEDIA_CONSTRAINT_CONFLICT：文字要求与显式媒体参数中的 ' + key + ' 不一致');
-    if (fromPrompt === undefined && fromControl !== undefined) Object.assign(constraints, { [key]: fromControl });
-  }
-  const input: MediaRequest = { ...request.media, ...constraints, operation, prompt: request.prompt, artifactSlot: 'direct' };
+  const input: MediaRequest = resolveMediaRequest({ ...request.media, operation, prompt: request.prompt, artifactSlot: 'direct' });
   const allModels = deps.models.getAllModels();
   if (request.pinnedModelId && !allModels.some((model) => model.id === request.pinnedModelId && supportsOperation(model, operation))) throw new Error('MODEL_OPERATION_MISMATCH：指定模型不支持本轮媒体操作');
   const candidates = routeMediaRequest(input, allModels.filter((model) => (!request.pinnedModelId || model.id === request.pinnedModelId) && deps.quota.isAvailable(model)));

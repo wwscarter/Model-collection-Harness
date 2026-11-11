@@ -3,6 +3,7 @@ import type { ModelOperation } from '@core/models/ModelOperations';
 export type RequestOperationMode = 'auto' | ModelOperation;
 export interface ExplicitMediaConstraints {
   size?: string;
+  minSize?: string;
   aspectRatio?: string;
   format?: 'png' | 'jpeg' | 'webp';
   transparentBackground?: boolean;
@@ -53,10 +54,16 @@ function negated(text: string, kind: 'image' | 'video'): boolean {
 export function extractExplicitMediaConstraints(prompt: string): ExplicitMediaConstraints {
   const text = prompt.toLocaleLowerCase();
   const constraints: ExplicitMediaConstraints = {};
-  const sizes = new Set([...text.matchAll(/(?<![\d:])([1-9]\d{1,4})\s*[x×]\s*([1-9]\d{1,4})(?!\d)/g)]
-    .map((match) => Number(match[1]) + 'x' + Number(match[2])));
+  const sizes = new Set<string>(), minimumSizes = new Set<string>();
+  for (const match of text.matchAll(/(?<![\d:])([1-9]\d{1,4})\s*[x×]\s*([1-9]\d{1,4})(?!\d)/g)) {
+    const prefix = text.slice(Math.max(0, match.index! - 40), match.index);
+    const minimum = /(?:至少|不小于|不低于|最小|最低)(?:目标|图片|画布|尺寸|分辨率|为|是|的|[:：=]|\s)*$|(?:at\s+least|minimum|min\.?)(?:\s+(?:image|canvas|size|dimensions|resolution))?\s*[:=]?\s*$/i.test(prefix);
+    (minimum ? minimumSizes : sizes).add(Number(match[1]) + 'x' + Number(match[2]));
+  }
   if (sizes.size > 1) throw new Error('请求中包含多个不同图片尺寸，请只指定一个尺寸');
   if (sizes.size === 1) constraints.size = [...sizes][0];
+  if (minimumSizes.size > 1) throw new Error('请求中包含多个不同最小图片尺寸，请只指定一个下限');
+  if (minimumSizes.size === 1) constraints.minSize = [...minimumSizes][0];
 
   const ratioTokens = [...text.matchAll(/(?<!\d)(\d{1,3})\s*:\s*(\d{1,3})(?!\d)/g)];
   const knownRatios = new Set(['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '9:21']);

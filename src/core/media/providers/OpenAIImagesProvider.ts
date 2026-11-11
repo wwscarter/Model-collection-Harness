@@ -1,5 +1,6 @@
 import type { ModelConfig } from '../../models/ModelConfig';
 import { MediaError, type GeneratedImage, type MediaRequest } from '../MediaTypes';
+import { sizeAtLeast } from '../MediaRouting';
 
 export class ImageProviderError extends MediaError {
   constructor(message: string, readonly safeToRetry: boolean) { super(safeToRetry ? 'MEDIA_PROVIDER_REJECTED' : 'MEDIA_RESULT_UNKNOWN', message); }
@@ -104,7 +105,9 @@ export class OpenAIImagesProvider {
     const images = data.data.map((item: any) => decodeGeneratedImage(item?.b64_json)) as GeneratedImage[];
     for (const image of images) {
       if (request.format && image.extension !== request.format) throw new ImageProviderError('图片接口返回格式与请求不符', false);
-      if (request.size && request.size !== image.width + 'x' + image.height) throw new ImageProviderError('图片接口返回尺寸与请求不符', false);
+      const actualSize = image.width + 'x' + image.height;
+      if (request.minSize && !sizeAtLeast(actualSize, request.minSize)) throw new ImageProviderError('图片接口返回尺寸 ' + actualSize + ' 小于要求的最小尺寸 ' + request.minSize, false);
+      if (request.size && request.size !== actualSize) throw new ImageProviderError('图片接口返回尺寸与请求不符：实际 ' + actualSize + '，请求 ' + request.size, false);
       if (request.aspectRatio) {
         const [widthRatio, heightRatio] = request.aspectRatio.split(':').map(Number);
         if (!widthRatio || !heightRatio || Math.abs(image.width / image.height - widthRatio / heightRatio) > 0.01) throw new ImageProviderError('图片接口返回比例与请求不符', false);
