@@ -102,7 +102,7 @@ export async function compactStage(ctx: RunContext): Promise<void> {
       summaryModelId: summaryModel?.id,
     }
   });
-  ctx.emit('session:model-switched', { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, ...ctx.decision, modelId: ctx.model.id, role: 'execution', planningModelId: ctx.planningModelId });
+  ctx.emit('session:model-switched', { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, ...ctx.decision, modelId: ctx.model.id, actualModelId: ctx.model.modelId, role: 'execution', planningModelId: ctx.planningModelId });
   if (!ctx.executionCandidates.length)
     throw new Error('没有可执行的模型，请检查凭据与配额');
   ctx.executionModel = ctx.model;

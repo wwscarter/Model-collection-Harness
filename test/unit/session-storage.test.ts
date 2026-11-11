@@ -115,6 +115,43 @@ describe('SessionStorage', () => {
     storage.close();
   });
 
+  it('persists actual execution identity, fallback attempts and inspectable child activity', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-activity-session-'));
+    const file = path.join(directory, 'sessions.db');
+    const now = new Date('2026-11-11T09:00:00.000Z');
+    const message = { id: 'a1', role: 'assistant' as const, content: 'Final answer', runId: 'run-1', modelUsed: 'claude-config', actualModelId: 'claude-opus-5-5',
+      executionAttempts: [{ id: 'attempt-0', index: 0, modelId: 'gpt-config', actualModelId: 'gpt-6.1-sol', modelName: 'GPT', status: 'failed' as const, startedAt: now.toISOString(), finishedAt: '2026-11-11T09:00:01.000Z', durationMs: 1000, error: 'Provider unavailable' }, { id: 'attempt-1', index: 1, modelId: 'claude-config', actualModelId: 'claude-opus-5-5', modelName: 'Claude', status: 'completed' as const, startedAt: '2026-11-11T09:00:01.000Z', durationMs: 1000, reason: 'Fallback' }],
+      agents: [{ id: 'child', modelId: 'reviewer-config', actualModelId: 'reviewer-upstream-v1', modelName: 'Reviewer', role: 'review', task: 'Check the implementation', status: 'cancelled' as const, content: 'Partial findings', error: '用户取消', startedAt: now.toISOString(), finishedAt: '2026-11-11T09:00:02.000Z', durationMs: 2000, stopReason: 'cancelled', tools: [{ id: 'tool-1', toolName: 'read', status: 'completed' as const, label: 'src/main.ts', summary: 'Read entry', durationMs: 5 }] }],
+    };
+    let storage = new SessionStorage(file);
+    try {
+      storage.save({ id: 'activity', title: 'Activity', prompt: '', output: message.content, messages: [message], createdAt: now, updatedAt: now });
+      storage.close(); storage = new SessionStorage(file);
+      expect(storage.get('activity')!.messages).toEqual([message]);
+    } finally { storage.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('normalizes activity by whitelist and bounds nested history payloads', () => {
+    const storage = new SessionStorage(':memory:');
+    const now = new Date('2026-11-11T09:00:00.000Z');
+    const tools = Array.from({ length: 60 }, (_, index) => ({ id: 'tool-' + index, toolName: 'read', status: 'completed', label: 'x'.repeat(500), summary: 's'.repeat(3000), durationMs: -1, args: { token: 'secret' }, details: { raw: 'private' } }));
+    const agent = { id: 'child', modelId: 'config', actualModelId: 'upstream', modelName: 'Reviewer', status: 'completed', content: 'c'.repeat(45000), role: 'r'.repeat(200), task: 't'.repeat(5000), tools, apiKey: 'private-api-key' };
+    const attempts = [{ id: 'attempt', index: 0, modelId: 'config', actualModelId: 'upstream', modelName: 'Reviewer', status: 'failed', startedAt: now.toISOString(), reason: 'r'.repeat(3000), apiKey: 'private-api-key' }, { id: 'bad', index: -1, modelId: 'config', actualModelId: 'upstream', modelName: 'Reviewer', status: 'failed', startedAt: now.toISOString() }];
+    try {
+      storage.save({ id: 'bounded', title: 'Bounded', prompt: '', output: 'Final', createdAt: now, updatedAt: now, messages: [{ id: 'a1', role: 'assistant', content: 'Final', agents: [agent, agent, ...Array.from({ length: 10 }, (_, index) => ({ ...agent, id: 'extra-' + index, content: 'report' }))] as never, executionAttempts: attempts as never }] });
+      const saved = storage.get('bounded')!.messages![0];
+      expect(saved.agents!.length).toBeLessThanOrEqual(8);
+      expect(saved.agents!.filter((item) => item.id === 'child')).toHaveLength(1);
+      const child = saved.agents![0];
+      expect(child.content).toHaveLength(40000); expect(child.role).toHaveLength(100); expect(child.task).toHaveLength(4000);
+      expect(child.tools).toHaveLength(50);
+      expect(child.tools![0]).toEqual({ id: 'tool-0', toolName: 'read', status: 'completed', label: 'x'.repeat(300), summary: 's'.repeat(2000) });
+      expect(saved.executionAttempts).toHaveLength(1); expect(saved.executionAttempts![0].reason).toHaveLength(2000);
+      expect(JSON.stringify(saved)).not.toContain('private-api-key');
+      expect(JSON.stringify(saved)).not.toContain('secret');
+    } finally { storage.close(); }
+  });
+
   it('persists per-session routing and assistant duration', () => {
     const storage = new SessionStorage(':memory:');
     const now = new Date('2026-01-01T00:00:00.000Z');

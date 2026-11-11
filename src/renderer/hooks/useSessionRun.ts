@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { RunTrace, SessionMetrics, BudgetLimitNotice } from '../types';
-import { appendAssistantChunk, type ChatAgentMessage, historyForModel, preparePendingTurn, setLatestAssistantDuration, settleAssistantTools, stripAssistantProcess, type ToolCallUpdate, updateAssistantAgent, updateAssistantMedia, updateLatestAssistantAttribution, updateLatestAssistantContent, upsertAssistantTool } from '../sessionMessages';
+import { type ChatMessage, type ChatAgentMessage, historyForModel, preparePendingTurn, setLatestAssistantDuration, settleAssistantTools, settleAssistantActivity, stripAssistantProcess, type ToolCallUpdate, updateAssistantAgent, updateAssistantMedia, updateAssistantAttribution, mergeAssistantAgents, upsertAssistantAgentTool, upsertAssistantTool } from '../sessionMessages';
+import { normalizeExecutionAttempts, type ExecutionAttempt } from '@core/agent/RunActivity';
 import { completeSessionMetrics, type SessionRunTiming } from '../sessionMetrics';
 import { errorMessage } from '../format';
 import { shouldSubmitPromptKey } from '../promptKeyboard';
@@ -9,6 +10,30 @@ import { useSessionState } from './useSessionState';
 import type { SessionVerificationEvent, VerificationMode } from '../verificationTypes';
 import type { PlanningMode } from '@core/planning/PlanTypes';
 import { useSessionPlans } from './useSessionPlans';
+
+type TurnIdentity = { assistantMessageId?: string; runId?: string };
+function eventMessage(session: Session, event: TurnIdentity): ChatMessage | undefined {
+  const target = event.assistantMessageId ? session.messages.find((message) => message.role === 'assistant' && message.id === event.assistantMessageId)
+    : event.runId ? [...session.messages].reverse().find((message) => message.role === 'assistant' && message.runId === event.runId)
+    : [...session.messages].reverse().find((message) => message.role === 'assistant');
+  if (target && event.runId && target.runId && target.runId !== event.runId) return undefined;
+  return target;
+}
+interface TurnResult extends TurnIdentity {
+  output?: string; modelUsed?: string | { id?: string; name?: string; modelId?: string };
+  actualModelId?: string;
+  planningModelId?: string; agentMessages?: unknown; executionAttempts?: unknown; artifacts?: unknown[];
+}
+function mergeTurnResult(messages: ChatMessage[], targetId: string, result: TurnResult): ChatMessage[] {
+  const modelUsed = typeof result.modelUsed === 'string' ? result.modelUsed : result.modelUsed?.id || result.modelUsed?.name;
+  const actualModelId = result.actualModelId ?? (typeof result.modelUsed === 'object' ? result.modelUsed?.modelId : undefined);
+  let next = messages.map((message) => message.id === targetId && message.role === 'assistant' ? { ...message, content: result.output ?? '' } : message);
+  for (const attempt of normalizeExecutionAttempts(result.executionAttempts)) next = updateAssistantAttribution(next, { messageId: targetId, runId: result.runId, modelUsed: attempt.modelId, actualModelId: attempt.actualModelId, attempt });
+  next = updateAssistantAttribution(next, { messageId: targetId, runId: result.runId, modelUsed, actualModelId, planningModelId: result.planningModelId });
+  next = mergeAssistantAgents(next, targetId, result.agentMessages);
+  next = updateAssistantMedia(next, { messageId: targetId, artifacts: result.artifacts });
+  return settleAssistantActivity(next, targetId, 'completed');
+}
 
 /** Owns one active run and folds its IPC events into the session snapshots. */
 export function useSessionRun() {
@@ -25,6 +50,12 @@ export function useSessionRun() {
   const [projectReloadKey, setProjectReloadKey] = useState(0);
   const [liveTrace, setLiveTrace] = useState<RunTrace>();
   const currentRunIdRef = useRef<string | undefined>(undefined);
+  const finishedMessageIdsRef = useRef(new Set<string>());
+  const finishMessage = (messageId: string) => {
+    const finished = finishedMessageIdsRef.current;
+    finished.add(messageId);
+    if (finished.size > 1000) finished.delete(finished.values().next().value!);
+  };
   const includeProjectContext = true;
   const runTimingRef = useRef<SessionRunTiming | null>(null);
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
@@ -71,57 +102,56 @@ export function useSessionRun() {
       }
     });
     const unsubscribeChunk = window.amd?.on('session:chunk', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; delta?: string };
+      const event = payload as TurnIdentity & { sessionId?: string; taskId?: string; delta?: string };
       const id = event.sessionId || event.taskId;
-      if (!id || !event.delta) return;
+      if (!id || !event.delta || deletedSessionIdsRef.current.has(id)) return;
+      const session = sessionsRef.current.find((candidate) => candidate.id === id);
+      const target = session && eventMessage(session, event);
+      if (!target || finishedMessageIdsRef.current.has(target.id) || (event.runId && event.runId !== currentRunIdRef.current)) return;
       const timing = runTimingRef.current;
-      // The full output may beat queued stream events over IPC; do not append it twice.
       if (timing?.sessionId === id && timing.completedAt !== undefined) return;
       if (timing?.sessionId === id && timing.ttftMs === undefined) timing.ttftMs = performance.now() - timing.startedAt;
-      setSessions((existing) => existing.map((session) => {
-        if (session.id !== id) return session;
-        const messages = appendAssistantChunk(session.messages, event.delta!);
-        return { ...session, messages, output: messages.slice().reverse().find((message) => message.role === 'assistant')?.content || '' };
+      setSessions((existing) => existing.map((candidate) => {
+        if (candidate.id !== id) return candidate;
+        const messages = candidate.messages.map((message) => message.id === target.id ? { ...message, content: message.content + event.delta } : message);
+        return { ...candidate, messages, output: messages.slice().reverse().find((message) => message.role === 'assistant')?.content || '' };
       }));
     });
     const unsubscribeModel = window.amd?.on('session:model-switched', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; modelId?: string; role?: 'routing' | 'planning' | 'execution' | 'orchestrator'; planningModelId?: string; confidence?: number };
+      const event = payload as TurnIdentity & { sessionId?: string; taskId?: string; modelId?: string; actualModelId?: string; attempt?: ExecutionAttempt; role?: 'routing' | 'planning' | 'execution' | 'orchestrator'; planningModelId?: string; confidence?: number };
       const id = event.sessionId || event.taskId;
-      if (!id || !event.modelId) return;
-      const timing = runTimingRef.current;
-      if (timing?.sessionId === id && event.confidence !== undefined) timing.routeConfidence = event.confidence;
+      if (!id || !event.modelId || deletedSessionIdsRef.current.has(id)) return;
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
-        if (event.role === 'routing') return { ...session, routeConfidence: event.confidence };
-        if (event.role === 'orchestrator') return { ...session, modelUsed: event.modelId };
-        if (event.role === 'planning') return { ...session, messages: updateLatestAssistantAttribution(session.messages, { planningModelId: event.modelId }) };
-        if (event.role === 'execution') return {
-          ...session,
-          modelUsed: event.modelId,
-          routeConfidence: event.confidence,
-          messages: updateLatestAssistantAttribution(session.messages, { modelUsed: event.modelId, planningModelId: event.planningModelId }),
-        };
+        const target = eventMessage(session, event);
+        if (!target || finishedMessageIdsRef.current.has(target.id)) return session;
+        const latest = [...session.messages].reverse().find((message) => message.role === 'assistant')?.id === target.id;
+        const timing = runTimingRef.current;
+        if (latest && timing?.sessionId === id && event.confidence !== undefined) timing.routeConfidence = event.confidence;
+        if (event.role === 'routing') return latest ? { ...session, routeConfidence: event.confidence } : session;
+        if (event.role === 'planning') return { ...session, messages: updateAssistantAttribution(session.messages, { messageId: target.id, runId: event.runId, planningModelId: event.modelId }) };
+        if (event.role === 'execution' || event.role === 'orchestrator') {
+          const messages = updateAssistantAttribution(session.messages, { messageId: target.id, runId: event.runId, modelUsed: event.modelId, actualModelId: event.actualModelId, planningModelId: event.planningModelId, attempt: event.attempt });
+          return { ...session, messages, ...(latest ? { modelUsed: messages.find((message) => message.id === target.id)?.modelUsed, routeConfidence: event.confidence ?? session.routeConfidence } : {}) };
+        }
         return session;
       }));
     });
     const unsubscribeAgent = window.amd?.on('session:agent-update', (payload) => {
-      const event = payload as { sessionId?: string; assistantMessageId?: string; agentId?: string; modelId?: string; modelName?: string; status?: ChatAgentMessage['status']; delta?: string; content?: string; error?: string };
-      if (!event.sessionId || !event.assistantMessageId || !event.agentId) return;
-      setSessions((existing) => existing.map((session) => session.id === event.sessionId ? {
-        ...session,
-        messages: updateAssistantAgent(session.messages, event.assistantMessageId!, {
-          agentId: event.agentId!, modelId: event.modelId, modelName: event.modelName, status: event.status, delta: event.delta, content: event.content, error: event.error,
-        }),
+      const event = payload as Partial<ChatAgentMessage> & TurnIdentity & { sessionId?: string; agentId?: string; delta?: string };
+      if (!event.sessionId || !event.assistantMessageId || !event.agentId || deletedSessionIdsRef.current.has(event.sessionId) || finishedMessageIdsRef.current.has(event.assistantMessageId)) return;
+      setSessions((existing) => existing.map((session) => session.id === event.sessionId && eventMessage(session, event) ? {
+        ...session, messages: updateAssistantAgent(session.messages, event.assistantMessageId!, { ...event, agentId: event.agentId! }),
       } : session));
     });
     const unsubscribeTool = window.amd?.on('session:tool-call', (payload) => {
-      const event = payload as Partial<ToolCallUpdate> & { sessionId?: string; assistantMessageId?: string; agentId?: string };
-      if (event.status === 'completed' && ['write', 'edit', 'run_command'].includes(event.toolName ?? '')) setProjectReloadKey((key) => key + 1);
-      // Sub-agent tool calls are folded into their own report; only the main answer shows cards.
-      if (!event.sessionId || !event.assistantMessageId || event.agentId || !event.toolCallId || !event.toolName || !event.status) return;
-      setSessions((existing) => existing.map((session) => session.id === event.sessionId ? {
-        ...session,
-        messages: upsertAssistantTool(session.messages, event.assistantMessageId!, event as ToolCallUpdate),
+      const event = payload as Partial<ToolCallUpdate> & TurnIdentity & { sessionId?: string; agentId?: string };
+      if (!event.sessionId || !event.assistantMessageId || !event.toolCallId || !event.toolName || !event.status || deletedSessionIdsRef.current.has(event.sessionId) || finishedMessageIdsRef.current.has(event.assistantMessageId)) return;
+      if (event.status === 'completed' && ['write', 'edit', 'run_command'].includes(event.toolName)) setProjectReloadKey((key) => key + 1);
+      setSessions((existing) => existing.map((session) => session.id === event.sessionId && eventMessage(session, event) ? {
+        ...session, messages: event.agentId
+          ? upsertAssistantAgentTool(session.messages, event.assistantMessageId!, event.agentId, event as ToolCallUpdate)
+          : upsertAssistantTool(session.messages, event.assistantMessageId!, event as ToolCallUpdate),
       } : session));
     });
     const unsubscribeTrace = window.amd?.on('session:trace', (payload) => {
@@ -149,21 +179,25 @@ export function useSessionRun() {
     const unsubscribeMediaJob = window.amd?.on('session:media-job', applyMediaEvent);
     const unsubscribeMediaArtifact = window.amd?.on('session:media-artifact', applyMediaEvent);
     const unsubscribe = window.amd?.on('session:completed', (payload) => {
-      const event = payload as { sessionId?: string; taskId?: string; runId?: string; assistantMessageId?: string; artifacts?: unknown[]; output?: string; stopReason?: string; modelUsed?: string | { id?: string; name?: string }; planningModelId?: string; decision?: { confidence?: number }; metrics?: SessionMetrics; budgetLimit?: BudgetLimitNotice };
+      const event = payload as TurnResult & { sessionId?: string; taskId?: string; stopReason?: string; decision?: { confidence?: number }; metrics?: SessionMetrics; budgetLimit?: BudgetLimitNotice };
       const id = event.sessionId || event.taskId;
       if (!id || deletedSessionIdsRef.current.has(id)) return;
-      const modelUsed = typeof event.modelUsed === 'string' ? event.modelUsed : event.modelUsed?.id || event.modelUsed?.name;
-      const stopReason = event.stopReason ?? event.metrics?.stopReason ?? sessionsRef.current.find((session) => session.id === id)?.metrics?.stopReason;
-      const sourceMetrics = event.metrics ?? sessionsRef.current.find((session) => session.id === id)?.metrics;
-      const metrics = withRunTiming(event.budgetLimit ? { ...sourceMetrics, budgetLimit: event.budgetLimit } : sourceMetrics, id, event.decision?.confidence, Boolean(event.output), stopReason);
+      const source = sessionsRef.current.find((session) => session.id === id);
+      const target = source && eventMessage(source, event);
+      if (!source || !target || finishedMessageIdsRef.current.has(target.id)) return;
+      const latest = [...source.messages].reverse().find((message) => message.role === 'assistant')?.id === target.id;
+      const stopReason = event.stopReason ?? event.metrics?.stopReason ?? source.metrics?.stopReason;
+      const sourceMetrics = event.metrics ?? source.metrics;
+      const metrics = latest ? withRunTiming(event.budgetLimit ? { ...sourceMetrics, budgetLimit: event.budgetLimit } : sourceMetrics, id, event.decision?.confidence, Boolean(event.output), stopReason) : undefined;
       setSessions((existing) => existing.map((session) => {
         if (session.id !== id) return session;
-        let messages = updateLatestAssistantContent(session.messages, event.output ?? '', modelUsed, event.planningModelId);
-        messages = updateAssistantMedia(messages, { messageId: event.assistantMessageId, artifacts: event.artifacts });
-        if (metrics?.latencyMs !== undefined) messages = setLatestAssistantDuration(messages, metrics.latencyMs);
-        return { ...session, messages, output: event.output ?? '', modelUsed, runId: event.runId ?? session.runId, routeConfidence: metrics?.routeConfidence, metrics };
+        let messages = mergeTurnResult(session.messages, target.id, event);
+        if (metrics?.latencyMs !== undefined) messages = setLatestAssistantDuration(messages, metrics.latencyMs, target.id);
+        const modelUsed = messages.find((message) => message.id === target.id)?.modelUsed;
+        return { ...session, messages, ...(latest ? { output: event.output ?? '', modelUsed, runId: event.runId ?? session.runId, routeConfidence: metrics?.routeConfidence, metrics } : {}) };
       }));
-      setCompletionNotice(true);
+      finishMessage(target.id);
+      if (latest) setCompletionNotice(true);
     });
     return () => { unsubscribeVerification?.(); unsubscribeChunk?.(); unsubscribeModel?.(); unsubscribeAgent?.(); unsubscribeTool?.(); unsubscribeTrace?.(); unsubscribeMediaJob?.(); unsubscribeMediaArtifact?.(); unsubscribe?.(); };
   }, []);
@@ -183,8 +217,8 @@ export function useSessionRun() {
     // Keep the first title; overwriting it on every follow-up made sessions impossible to find.
     const title = currentSession.messages.length ? currentSession.title : prompt.slice(0, 36);
     const messageId = crypto.randomUUID();
-    const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined);
-    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, runId: undefined, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, audit: undefined, auditResult: undefined, rating: undefined, updatedAt: new Date() };
+    const messages = preparePendingTurn(currentSession.messages, messageId, prompt, editingMessageId ?? undefined).map((message) => message.id === messageId + '-assistant' ? { ...message, runId } : message);
+    const submittedSession: Session = { ...currentSession, prompt: '', userMessage: prompt, output: '', messages, title, runId, metrics: undefined, modelUsed: undefined, routeConfidence: undefined, audit: undefined, auditResult: undefined, rating: undefined, updatedAt: new Date() };
     cancelRequestedRef.current = false;
     runTimingRef.current = { sessionId: currentSession.id, startedAt: performance.now() };
     setLiveElapsedMs(0);
@@ -225,15 +259,16 @@ export function useSessionRun() {
       const output = String(raw.output || '');
       const sourceMetrics = raw.metrics ?? latestSession.metrics;
       const metrics = withRunTiming(raw.budgetLimit ? { ...sourceMetrics, budgetLimit: raw.budgetLimit } : sourceMetrics, currentSession.id, raw.decision?.confidence, Boolean(output), raw.stopReason ?? raw.metrics?.stopReason ?? latestSession.metrics?.stopReason);
-      let completedMessages = updateLatestAssistantContent(latestSession.messages, output, modelUsed, raw.planningModelId);
-      completedMessages = updateAssistantMedia(completedMessages, { messageId: messageId + '-assistant', artifacts: raw.artifacts });
+      let completedMessages = mergeTurnResult(latestSession.messages, messageId + '-assistant', { ...raw, output, runId: raw.runId ?? runId });
       const elapsedMs = metrics?.latencyMs ?? (runTimingRef.current?.sessionId === currentSession.id ? performance.now() - runTimingRef.current.startedAt : undefined);
       if (elapsedMs !== undefined) completedMessages = setLatestAssistantDuration(completedMessages, elapsedMs);
+      finishMessage(messageId + '-assistant');
       const persistedMessages = stripAssistantProcess(completedMessages);
-      const completedSession: Session = { ...latestSession, messages: persistedMessages, output, modelUsed, runId: raw.runId ?? runId, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
+      const completedSession: Session = { ...latestSession, messages: persistedMessages, output, modelUsed: modelUsed ?? latestSession.modelUsed, runId: raw.runId ?? runId, routeConfidence: metrics?.routeConfidence, metrics, audit: raw.audit, auditResult: raw.audit, taskType: raw.decision?.taskType, updatedAt: new Date() };
       setSessions((existing) => existing.map((session) => session.id === currentSession.id ? completedSession : session));
       await saveSession(completedSession);
     } catch (cause) {
+      finishMessage(messageId + '-assistant');
       if (deletedSessionIdsRef.current.has(currentSession.id)) return;
       setVerificationEvents((existing) => {
         const event = existing[currentSession.id];
@@ -242,10 +277,8 @@ export function useSessionRun() {
       setSessionError({ sessionId: currentSession.id, message: errorMessage(cause) });
       const latestSession = sessionsRef.current.find((session) => session.id === currentSession.id);
       if (latestSession) {
-        const settledMessages = settleAssistantTools(latestSession.messages, `${messageId}-assistant`).map((message) => message.id !== `${messageId}-assistant` || !message.agents ? message : {
-          ...message,
-          agents: message.agents.map((agent) => agent.status === 'queued' || agent.status === 'running' ? { ...agent, status: 'failed' as const, error: errorMessage(cause) } : agent),
-        });
+        const cancelled = cancelRequestedRef.current || /取消/.test(errorMessage(cause));
+        const settledMessages = settleAssistantActivity(settleAssistantTools(latestSession.messages, `${messageId}-assistant`), `${messageId}-assistant`, cancelled ? 'cancelled' : 'failed', errorMessage(cause));
         const failedSession: Session = { ...latestSession, runId, messages: stripAssistantProcess(settledMessages), updatedAt: new Date() };
         setSessions((existing) => existing.map((session) => session.id === currentSession.id ? failedSession : session));
         try { await saveSession(failedSession); }

@@ -76,6 +76,134 @@ afterEach(async () => {
 });
 
 describe('workbench task controls', () => {
+  it('shows the actual fallback executor after failure and preserves its historical identity', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const base = { sessionId: 's1', assistantMessageId: request.assistantMessageId, runId: request.runId, role: 'execution' };
+    const first = { id: 'attempt-gpt', index: 0, modelId: 'gpt-config', actualModelId: 'gpt-6.1-sol', modelName: 'GPT', startedAt: '2026-11-11T09:28:00.000Z' };
+    const second = { id: 'attempt-claude', index: 1, modelId: 'claude-config', actualModelId: 'claude-opus-5-5', modelName: 'Claude', startedAt: '2026-11-11T09:28:30.000Z', reason: 'GPT 服务器过载，切换备用模型' };
+    await act(async () => {
+      listeners.get('session:model-switched')!({ ...base, modelId: first.modelId, actualModelId: first.actualModelId, attempt: { ...first, status: 'failed', error: 'Our servers are currently overloaded' } });
+      listeners.get('session:model-switched')!({ ...base, modelId: second.modelId, actualModelId: second.actualModelId, attempt: { ...second, status: 'running' } });
+    });
+    expect(container.querySelector('.assistant-title strong')!.textContent).toBe('claude-opus-5-5');
+    expect(container.querySelector('[aria-label="主模型切换"]')?.textContent).toContain('gpt-6.1-sol');
+    expect(container.querySelector('[aria-label="子智能体活动"]')).toBeNull();
+    await act(async () => {
+      listeners.get('session:model-switched')!({ ...base, modelId: second.modelId, actualModelId: second.actualModelId, attempt: { ...second, status: 'failed', error: 'Service temporarily unavailable' } });
+      rejectRun(new Error('Service temporarily unavailable'));
+    });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.messages.at(-1)).toMatchObject({ runId: request.runId, modelUsed: 'claude-config', actualModelId: 'claude-opus-5-5', executionAttempts: [{ status: 'failed' }, { status: 'failed' }] });
+    listModels.mockResolvedValue([{ id: 'claude-config', provider: 'custom', name: 'Edited name', modelId: 'different-model-after-edit', enabled: true }]);
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('.assistant-title strong')!.textContent).toBe('claude-opus-5-5');
+    expect(container.querySelector('.chat-model-line')!.textContent).toContain('claude-opus-5-5');
+    expect(container.querySelector('[aria-label="主模型切换"]')?.textContent).toContain('Service temporarily unavailable');
+  });
+
+  it('keeps clickable subagent tasks, tool activity and reports after completion and reopening', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const identity = { sessionId: 's1', assistantMessageId: request.assistantMessageId, runId: request.runId };
+    const agent = { id: 'review-agent', modelId: 'review-config', actualModelId: 'review-model-v1', modelName: 'Review', role: '风险审查', task: '检查图片路由与失败恢复', content: '', startedAt: '2026-11-11T09:30:00.000Z' };
+    await act(async () => {
+      listeners.get('session:agent-update')!({ ...identity, ...agent, agentId: agent.id, status: 'running' });
+      listeners.get('session:tool-call')!({ ...identity, agentId: agent.id, toolCallId: 'agent-read', toolName: 'read', status: 'running', args: { path: 'src/core/media/MediaRouting.ts' } });
+    });
+    const board = container.querySelector('[aria-label="子智能体活动"]')!;
+    expect(board).not.toBeNull();
+    expect(board.textContent).toContain('风险审查');
+    await click('[aria-label="子智能体活动"] summary');
+    expect(board.querySelector('details')?.open).toBe(true);
+    expect(board.textContent).toContain(agent.task);
+    expect(board.textContent).toContain('src/core/media/MediaRouting.ts');
+    const tool = { id: 'agent-read', toolName: 'read', status: 'completed', label: 'src/core/media/MediaRouting.ts', summary: '读取完成', durationMs: 12 };
+    const completedAgent = { ...agent, status: 'completed', content: '已确认不会再拦截尺寸', tools: [tool], durationMs: 500 };
+    await act(async () => {
+      listeners.get('session:tool-call')!({ ...identity, agentId: agent.id, toolCallId: tool.id, toolName: tool.toolName, status: 'completed', summary: tool.summary, durationMs: tool.durationMs });
+      resolveRun({ ...identity, output: '主回答完成', modelUsed: { id: 'main-config', modelId: 'actual-main-v1' }, agentMessages: [completedAgent] });
+    });
+    expect(container.querySelector('[aria-label="子智能体活动"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="子智能体活动"] details')?.getAttribute('open')).not.toBeNull();
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.messages.at(-1)).toMatchObject({ actualModelId: 'actual-main-v1', agents: [{ actualModelId: 'review-model-v1', task: agent.task, status: 'completed', content: completedAgent.content, tools: [tool] }] });
+    listSessions.mockResolvedValue([saved]);
+    await remount();
+    expect(container.querySelector('[aria-label="子智能体活动"]')).not.toBeNull();
+    await click('[aria-label="子智能体活动"] summary');
+    expect(container.querySelector('[aria-label="子智能体活动"]')!.textContent).toContain(completedAgent.content);
+    expect(container.querySelector('[aria-label="子智能体活动"]')!.textContent).toContain('review-model-v1');
+  });
+
+  it('recovers subagent activity and executor snapshots from final results when live events were missed', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const agent = { id: 'report-only', modelId: 'worker-config', modelName: 'Worker', actualModelId: 'worker-v1', role: '方案', task: '检查实施路径', status: 'completed', content: '最终子报告' };
+    const attempt = { id: 'attempt-final', index: 0, modelId: 'main-config', actualModelId: 'main-v1', modelName: 'Main', status: 'completed', startedAt: '2026-11-11T09:30:00.000Z' };
+    await act(async () => { resolveRun({ runId: request.runId, output: '完成', agentMessages: [agent], executionAttempts: [attempt] }); });
+    expect(container.querySelector('.assistant-title strong')!.textContent).toBe('main-v1');
+    expect(save.mock.calls.at(-1)![0].messages.at(-1)).toMatchObject({ agents: [agent], executionAttempts: [attempt] });
+  });
+
+  it('preserves cancelled subagent status and tool evidence without marking it completed', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const identity = { sessionId: 's1', assistantMessageId: request.assistantMessageId, runId: request.runId };
+    await act(async () => {
+      listeners.get('session:agent-update')!({ ...identity, agentId: 'cancel-agent', modelId: 'worker', modelName: 'Worker', status: 'running', task: '尚未完成的检查' });
+      listeners.get('session:tool-call')!({ ...identity, agentId: 'cancel-agent', toolCallId: 'cancel-read', toolName: 'read', status: 'running', args: { path: 'README.md' } });
+    });
+    await click('[aria-label="停止任务"]');
+    await act(async () => { rejectRun(new Error('任务已取消')); });
+    const saved = save.mock.calls.at(-1)![0];
+    expect(saved.messages.at(-1).agents).toEqual([expect.objectContaining({ status: 'cancelled', task: '尚未完成的检查', tools: [expect.objectContaining({ id: 'cancel-read', status: 'failed' })] })]);
+    expect(container.querySelector('[aria-label="子智能体活动"]')).not.toBeNull();
+  });
+
+  it('does not let delayed model or completion events change the next turn', async () => {
+    await click('[aria-label="执行任务"]');
+    const first = execute.mock.calls[0][0];
+    await act(async () => { resolveRun({ output: '第一轮结果', modelUsed: { id: 'first', modelId: 'first-v1' } }); });
+    const input = container.querySelector<HTMLTextAreaElement>('[aria-label="描述任务"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '第二轮问题');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click('[aria-label="执行任务"]');
+    const second = execute.mock.calls[1][0];
+    await act(async () => {
+      listeners.get('session:model-switched')!({ sessionId: 's1', assistantMessageId: second.assistantMessageId, runId: second.runId, role: 'execution', modelId: 'second', actualModelId: 'second-v1' });
+      listeners.get('session:model-switched')!({ sessionId: 's1', assistantMessageId: first.assistantMessageId, runId: first.runId, role: 'execution', modelId: 'first', actualModelId: 'first-v1' });
+      listeners.get('session:completed')!({ sessionId: 's1', assistantMessageId: first.assistantMessageId, runId: first.runId, output: '第一轮结果', modelUsed: { id: 'first', modelId: 'first-v1' } });
+      listeners.get('session:agent-update')!({ sessionId: 's1', assistantMessageId: second.assistantMessageId, runId: first.runId, agentId: 'wrong-run', modelId: 'wrong', modelName: 'Wrong', status: 'running' });
+    });
+    expect([...container.querySelectorAll('.assistant-title strong')].at(-1)!.textContent).toBe('second-v1');
+    expect(container.querySelector('[aria-label="子智能体活动"]')).toBeNull();
+    await act(async () => { resolveRun({ output: '第二轮结果', modelUsed: { id: 'second', modelId: 'second-v1' } }); });
+    expect(save.mock.calls.at(-1)![0].messages.at(-1)).toMatchObject({ actualModelId: 'second-v1', content: '第二轮结果' });
+  });
+
+  it('ignores late chunks and newly reported running agents after a turn has already failed', async () => {
+    await click('[aria-label="执行任务"]');
+    const request = execute.mock.calls[0][0];
+    const identity = { sessionId: 's1', assistantMessageId: request.assistantMessageId, runId: request.runId };
+    await act(async () => {
+      listeners.get('session:model-switched')!({ ...identity, role: 'execution', modelId: 'executor', actualModelId: 'actual-executor' });
+      rejectRun(new Error('连接已断开'));
+    });
+    await act(async () => {
+      listeners.get('session:chunk')!({ ...identity, delta: '不应出现的迟到输出' });
+      listeners.get('session:agent-update')!({ ...identity, agentId: 'late-worker', modelId: 'late', modelName: 'Late worker', status: 'running', content: '迟到报告' });
+      listeners.get('session:tool-call')!({ ...identity, agentId: 'late-worker', toolCallId: 'late-read', toolName: 'read', status: 'running' });
+      listeners.get('session:model-switched')!({ ...identity, role: 'execution', modelId: 'wrong', actualModelId: 'wrong-late-model' });
+    });
+    expect(container.querySelector('[aria-label="子智能体活动"]')).toBeNull();
+    expect(container.textContent).not.toContain('不应出现的迟到输出');
+    expect(container.querySelector('.assistant-title strong')!.textContent).toBe('actual-executor');
+  });
+
   it('opens run history from the monitoring overview and returns to the unchanged conversation', async () => {
     window.amd!.getDashboard = vi.fn(async () => ({
       range: { from: new Date(0).toISOString(), to: new Date().toISOString() },

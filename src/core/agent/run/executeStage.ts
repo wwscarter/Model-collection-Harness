@@ -8,6 +8,7 @@ import { BudgetExceededError } from '@core/routing/RunBudget';
 import { ProjectVerificationSession } from './projectVerification';
 import type { RunContext } from './RunContext';
 import { costOf, errorUsage, estimateTokens, limitedStop, limitMessage, PARTIAL_AGENT_NOTICE } from './runHelpers';
+import type { ExecutionAttempt } from '../RunActivity';
 
 /** Stream the answer with usage accounting and fallback. */
 export async function executeStage(ctx: RunContext): Promise<void> {
@@ -43,6 +44,21 @@ export async function executeStage(ctx: RunContext): Promise<void> {
     ctx.deps.quota.reserve(candidate);
     ctx.executionSpan.setAttributes({ modelId: candidate.id, modelSnapshot: snapshotModel(candidate), attemptIndex: index });
     const attemptInvocationId = ctx.deps.observability.recordInvocationStart(ctx.runId, candidate.id);
+    const startedMs = Date.now();
+    const previousAttempt = ctx.executionAttempts.at(-1);
+    const attempt: ExecutionAttempt = { id: `${ctx.assistantMessageId}-attempt-${index + 1}`, index, modelId: candidate.id, actualModelId: candidate.modelId, modelName: candidate.name,
+      status: 'running', startedAt: new Date(startedMs).toISOString(),
+      reason: previousAttempt ? `主执行模型回退：${previousAttempt.actualModelId}；${previousAttempt.error ?? '前一次执行未完成'}`.slice(0, 2000) : '执行本轮主任务' };
+    ctx.executionAttempts.push(attempt);
+    const publishAttempt = () => ctx.emit('session:model-switched', {
+      sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, modelId: candidate.id, actualModelId: candidate.modelId,
+      modelSnapshot: snapshotModel(candidate), role: 'execution', planningModelId: ctx.planningModelId, fallback: Boolean(previousAttempt), reason: attempt.reason, attempt: { ...attempt },
+    });
+    const finishAttempt = (status: ExecutionAttempt['status'], error?: string) => {
+      Object.assign(attempt, { status, finishedAt: new Date().toISOString(), durationMs: Date.now() - startedMs, ...(error ? { error: error.slice(0, 2000) } : {}) });
+      publishAttempt();
+    };
+    publishAttempt();
     let emittedText = false;
     let emittedTool = false;
     try {
@@ -50,7 +66,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
       const attemptResult = await ctx.invokeStreamed(candidate, finalPrompt, ctx.executionContextBudget.maxOutputTokens, (delta) => {
         emittedText = true;
         chunkIndex += 1;
-        ctx.emit('session:chunk', { sessionId: ctx.sessionId, taskId: ctx.taskId, delta, index: chunkIndex, modelId: candidate.id });
+        ctx.emit('session:chunk', { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, delta, index: chunkIndex, modelId: candidate.id, actualModelId: candidate.modelId });
       }, {
         history: ctx.finalContext.history, summary: ctx.finalContext.summary, skipHistoryTrim: true, enableTools: ctx.enableTools, projectRoot: ctx.projectRoot, signal: ctx.controller.signal, onToolEvent: (event) => {
           if (event.status === 'running')
@@ -76,6 +92,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
       ctx.traceAttempts.push({ index, status: limitedStop(ctx.result.stopReason) ? 'failed' : 'success', modelSnapshot: snapshotModel(candidate), inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, estimatedCost: executionCost, ...(limitedStop(ctx.result.stopReason) ? { error: ctx.budgetLimit?.message ?? limitMessage(ctx.result.stopReason) } : {}) });
       ctx.executionSpan.setAttributes({ fallbackAttempts: ctx.fallbackAttempts, attempts: [...ctx.traceAttempts] });
       ctx.executionSpan.end({ status: limitedStop(ctx.result.stopReason) ? 'failed' : 'success', error: limitMessage(ctx.result.stopReason), inputTokens: attemptResult.inputTokens, outputTokens: attemptResult.outputTokens, cost: executionCost, attributes: { stopReason: ctx.result.stopReason } });
+      finishAttempt(limitedStop(ctx.result.stopReason) ? 'failed' : 'completed', limitedStop(ctx.result.stopReason) ? ctx.budgetLimit?.message ?? limitMessage(ctx.result.stopReason) : undefined);
       break;
     }
     catch (error) {
@@ -86,6 +103,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
       ctx.executionSpan.setAttributes({ attempts: [...ctx.traceAttempts] });
       ctx.metrics = ctx.deps.observability.recordInvocationEnd(attemptInvocationId, usage.inputTokens, usage.outputTokens, candidate.costPer1kTokens, 'failure', message);
       ctx.executionModel = candidate;
+      finishAttempt(ctx.deps.controller.signal.aborted ? 'cancelled' : 'failed', message);
       const canFallback = shouldFallback({ index, total: ctx.executionCandidates.length, emittedText, emittedTool, error });
       if (!canFallback) {
         ctx.executionSpan.end({ status: ctx.deps.controller.signal.aborted ? 'cancelled' : 'failed', error: message, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cost: costOf(usage.inputTokens, usage.outputTokens, candidate) });

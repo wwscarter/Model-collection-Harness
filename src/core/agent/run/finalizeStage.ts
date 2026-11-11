@@ -88,9 +88,6 @@ export async function finalizeStage(ctx: RunContext): Promise<Record<string, unk
   if (ctx.metrics && !mediaBlocked && !projectCheckUnverified && !limitedStop(ctx.result.stopReason)) {
     ctx.recordGrowth({ modelId: ctx.executionModel.id, taskType: ctx.decision.taskType, success: !projectCheckFailed, completed: !projectCheckFailed, actualCost: ctx.metrics.totalCost, estimatedCost: ctx.decision.estimatedCost, actualLatency: ctx.metrics.latency, estimatedLatency: ctx.decision.estimatedDuration, auditApproval: audit?.passed });
   }
-  if (ctx.executionModel.id !== ctx.model.id) {
-    ctx.emit('session:model-switched', { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, ...ctx.decision, modelId: ctx.executionModel.id, role: 'execution', planningModelId: ctx.planningModelId, fallback: true });
-  }
   const stopReason = ctx.result.stopReason;
   if (ctx.budgetLimit)
     ctx.budgetLimit.estimatedCost = ctx.totalCost;
@@ -98,6 +95,7 @@ export async function finalizeStage(ctx: RunContext): Promise<Record<string, unk
   const runMetrics = { ...ctx.metrics, startTime: new Date(ctx.startedAt), endTime: new Date(), inputTokens: ctx.totalInputTokens, outputTokens: ctx.totalOutputTokens, totalCost: ctx.totalCost, latency: Date.now() - ctx.startedAt, stopReason, ...(ctx.budgetLimit ? { budgetLimit: ctx.budgetLimit } : {}) };
   const output = { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, output: ctx.result.content, stopReason, modelUsed: publicModel(ctx.executionModel), modelsUsed: ctx.deps.observability.getTaskMetrics(ctx.runId).modelsUsed, fallbackAttempts: ctx.fallbackAttempts, planningModelId: ctx.planningModelId, pinnedModelId: ctx.pinned?.id, decision: ctx.decision, orchestration: ctx.orchestration ? { orchestratorModelId: ctx.planningModelId, planningModelId: ctx.planningModelId, executorModelId: ctx.executionModel.id, synthesizerModelId: ctx.executionModel.id, mode: ctx.orchestration.mode, taskType: ctx.orchestration.taskType, complexity: ctx.orchestration.complexity, reason: ctx.orchestration.reason, plan: ctx.orchestration.plan, subagents: ctx.orchestration.subagents, verify: ctx.orchestration.verify } : undefined, metrics: runMetrics, verification: ctx.verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages: ctx.agentMessages, toolCalls: ctx.toolCalls.map(({ details: _details, ...call }) => call), project: ctx.projectContext ? { root: ctx.projectContext.root, files: ctx.projectContext.files.map((file) => file.path), tokenCount: ctx.projectContext.tokenCount, truncated: ctx.projectContext.truncated, skippedFiles: ctx.projectContext.skippedFiles } : undefined };
   Object.assign(output, ctx.budgetLimit ? { budgetLimit: ctx.budgetLimit } : {}, ctx.projectVerification ? { projectVerification: ctx.projectVerification } : {});
+  Object.assign(output, { actualModelId: ctx.executionModel.modelId, executionAttempts: ctx.executionAttempts.map((attempt) => ({ ...attempt })) });
   if (ctx.deps.media) Object.assign(output, { artifacts: media.jobs.flatMap((job) => job.artifacts), mediaJobs: media.jobs });
   if (mediaBlocked) Object.assign(output, { mediaFailures: media.failures });
   Object.assign(runMetrics, { costStatus: ctx.mediaCostStatus });

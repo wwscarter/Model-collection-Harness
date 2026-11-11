@@ -1,3 +1,4 @@
+import { normalizeAgents, normalizeExecutionAttempts, type AgentActivity, type ActivityTool, type ExecutionAttempt } from '../agent/RunActivity';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,30 +33,19 @@ export interface SessionRecord {
   updatedAt: Date;
 }
 
-export interface SessionAgentRecord {
-  id: string;
-  modelId: string;
-  modelName: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  content: string;
-  error?: string;
-}
+export interface SessionAgentRecord extends AgentActivity {}
 
 /** A tool call shown on an assistant message (web search, page fetch, file read). */
-export interface SessionToolRecord {
-  id: string;
-  toolName: string;
-  status: 'running' | 'completed' | 'failed';
-  label?: string;
-  summary?: string;
-  durationMs?: number;
-}
+export interface SessionToolRecord extends ActivityTool {}
 
 export interface SessionMessageRecord {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   modelUsed?: string;
+  runId?: string;
+  actualModelId?: string;
+  executionAttempts?: ExecutionAttempt[];
   planningModelId?: string;
   durationMs?: number;
   agents?: SessionAgentRecord[];
@@ -158,32 +148,18 @@ export class SessionStorage {
         role: message.role,
         content: message.content,
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
+        ...(typeof message.runId === 'string' ? { runId: message.runId.slice(0, 300) } : {}),
+        ...(typeof message.actualModelId === 'string' ? { actualModelId: message.actualModelId.slice(0, 300) } : {}),
+        ...(Array.isArray(message.executionAttempts) ? { executionAttempts: normalizeExecutionAttempts(message.executionAttempts) } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
         ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
-        ...(Array.isArray(message.agents) ? { agents: this.normalizeAgents(message.agents) } : {}),
+        ...(Array.isArray(message.agents) ? { agents: normalizeAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: this.normalizeTools(message.tools) } : {}),
         ...(Array.isArray(message.artifacts) ? { artifacts: normalizeArtifacts(message.artifacts) } : {}),
         ...(Array.isArray(message.mediaJobs) ? { mediaJobs: normalizeMediaJobs(message.mediaJobs) } : {}),
       }];
     });
     return messages.length || value.length === 0 ? messages : undefined;
-  }
-
-  private normalizeAgents(value: unknown[]): SessionAgentRecord[] {
-    return value.flatMap((value): SessionAgentRecord[] => {
-      if (!value || typeof value !== 'object') return [];
-      const agent = value as Partial<SessionAgentRecord>;
-      if (typeof agent.id !== 'string' || typeof agent.modelId !== 'string' || typeof agent.modelName !== 'string' || typeof agent.content !== 'string') return [];
-      if (agent.status !== 'queued' && agent.status !== 'running' && agent.status !== 'completed' && agent.status !== 'failed') return [];
-      return [{
-        id: agent.id,
-        modelId: agent.modelId,
-        modelName: agent.modelName,
-        status: agent.status,
-        content: agent.content,
-        ...(typeof agent.error === 'string' ? { error: agent.error } : {}),
-      }];
-    });
   }
 
   private normalizeTools(value: unknown[]): SessionToolRecord[] {

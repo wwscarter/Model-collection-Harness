@@ -1,3 +1,4 @@
+import { normalizeAgents, normalizeActivityTools, normalizeExecutionAttempts, type ActivityTool, type AgentActivity, type ExecutionAttempt } from '@core/agent/RunActivity';
 import { normalizeArtifacts, normalizeMediaJobs, type MediaArtifact, type MediaJobSummary } from './mediaTypes';
 
 export interface ChatMessage {
@@ -5,6 +6,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   modelUsed?: string;
+  runId?: string;
+  actualModelId?: string;
+  executionAttempts?: ExecutionAttempt[];
   planningModelId?: string;
   durationMs?: number;
   agents?: ChatAgentMessage[];
@@ -14,14 +18,7 @@ export interface ChatMessage {
 }
 
 /** A tool call the model made while answering (web search, page fetch, file read). */
-export interface ChatToolCall {
-  id: string;
-  toolName: string;
-  status: 'running' | 'completed' | 'failed';
-  label?: string;
-  summary?: string;
-  durationMs?: number;
-}
+export interface ChatToolCall extends ActivityTool {}
 
 export interface ToolCallUpdate {
   toolCallId: string;
@@ -32,14 +29,7 @@ export interface ToolCallUpdate {
   durationMs?: number;
 }
 
-export interface ChatAgentMessage {
-  id: string;
-  modelId: string;
-  modelName: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  content: string;
-  error?: string;
-}
+export interface ChatAgentMessage extends AgentActivity {}
 
 type SessionMessageSource = {
   messages?: unknown;
@@ -49,7 +39,7 @@ type SessionMessageSource = {
   title?: unknown;
 };
 
-export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
+export function restoreMessages(record: SessionMessageSource, options: { inactive?: boolean } = {}): ChatMessage[] {
   if (Array.isArray(record.messages)) {
     const messages = record.messages.flatMap((value, index): ChatMessage[] => {
       if (!value || typeof value !== 'object') return [];
@@ -60,15 +50,18 @@ export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
         role: message.role,
         content: message.content,
         ...(typeof message.modelUsed === 'string' ? { modelUsed: message.modelUsed } : {}),
+        ...(typeof message.runId === 'string' ? { runId: message.runId.slice(0, 300) } : {}),
+        ...(typeof message.actualModelId === 'string' ? { actualModelId: message.actualModelId.slice(0, 300) } : {}),
+        ...(Array.isArray(message.executionAttempts) ? { executionAttempts: normalizeExecutionAttempts(message.executionAttempts) } : {}),
         ...(typeof message.planningModelId === 'string' ? { planningModelId: message.planningModelId } : {}),
         ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
-        ...(Array.isArray(message.agents) ? { agents: restoreAgents(message.agents) } : {}),
+        ...(Array.isArray(message.agents) ? { agents: normalizeAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: restoreTools(message.tools) } : {}),
         ...(Array.isArray(message.artifacts) ? { artifacts: normalizeArtifacts(message.artifacts) } : {}),
         ...(Array.isArray(message.mediaJobs) ? { mediaJobs: normalizeMediaJobs(message.mediaJobs) } : {}),
       }];
     });
-    if (messages.length) return messages;
+    if (messages.length) return options.inactive ? restoreInactiveActivity(messages) : messages;
   }
 
   const output = typeof record.output === 'string' ? record.output : '';
@@ -80,6 +73,19 @@ export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
   if (previousInput) messages.push({ id: 'legacy-user', role: 'user', content: previousInput });
   if (output) messages.push({ id: 'legacy-assistant', role: 'assistant', content: output });
   return messages;
+}
+
+/** A restored conversation has no live task; preserve evidence without showing stale spinners. */
+function restoreInactiveActivity(messages: ChatMessage[]): ChatMessage[] {
+  const error = '会话已恢复，未收到本次活动完成状态';
+  const settleTools = (tools: ActivityTool[] | undefined) => tools?.map((tool) => tool.status === 'running' ? { ...tool, status: 'failed' as const } : tool);
+  return messages.map((message) => message.role !== 'assistant' ? message : { ...message,
+    ...(message.agents ? { agents: message.agents.map((agent) => ({ ...agent,
+      ...(['queued', 'running'].includes(agent.status) ? { status: 'cancelled' as const, error } : {}),
+      ...(agent.tools ? { tools: settleTools(agent.tools) } : {}),
+    })) } : {}),
+    ...(message.executionAttempts ? { executionAttempts: message.executionAttempts.map((attempt) => attempt.status === 'running' ? { ...attempt, status: 'cancelled' as const, error } : attempt) } : {}),
+  });
 }
 
 export function appendAssistantChunk(messages: ChatMessage[], delta: string): ChatMessage[] {
@@ -126,47 +132,114 @@ export function preparePendingTurn(
   return [...messages, { id: `${messageId}-user`, role: 'user', content }, assistantMessage];
 }
 
+const terminalActivity = (status: string): boolean => ['completed', 'failed', 'cancelled'].includes(status);
+
+function mergeTools(existing: ActivityTool[] = [], incoming: ActivityTool[] = []): ActivityTool[] {
+  const tools = new Map(existing.map((tool) => [tool.id, tool]));
+  for (const tool of incoming) {
+    const previous = tools.get(tool.id);
+    if (previous && previous.status !== 'running' && tool.status === 'running') continue;
+    tools.set(tool.id, { ...previous, ...tool });
+  }
+  return normalizeActivityTools([...tools.values()]);
+}
+
+function mergeAgent(previous: AgentActivity | undefined, incoming: Partial<AgentActivity> & { id: string }, delta?: string): AgentActivity | undefined {
+  const stale = Boolean(previous && terminalActivity(previous.status) && (!incoming.status || ['queued', 'running'].includes(incoming.status)));
+  const update = Object.fromEntries(Object.entries(incoming).filter(([, value]) => value !== undefined));
+  const candidate = {
+    id: incoming.id, modelId: incoming.modelId ?? previous?.modelId ?? incoming.id, modelName: incoming.modelName ?? previous?.modelName ?? incoming.modelId ?? 'subagent',
+    status: incoming.status ?? previous?.status ?? 'running', content: previous?.content ?? '', ...previous, ...update,
+  } as AgentActivity;
+  if (stale && previous) {
+    candidate.status = previous.status; candidate.content = previous.content;
+    candidate.error = previous.error; candidate.finishedAt = previous.finishedAt; candidate.durationMs = previous.durationMs; candidate.stopReason = previous.stopReason;
+  } else {
+    candidate.content = incoming.content !== undefined ? incoming.content : delta ? (previous?.content ?? '') + delta : previous?.content ?? '';
+    if (incoming.status === 'completed' && incoming.error === undefined) delete candidate.error;
+  }
+  if (previous?.tools || incoming.tools) candidate.tools = mergeTools(previous?.tools, incoming.tools);
+  return normalizeAgents([candidate])[0];
+}
+
 export function updateAssistantAgent(
   messages: ChatMessage[],
   messageId: string,
-  update: { agentId: string; modelId?: string; modelName?: string; status?: ChatAgentMessage['status']; delta?: string; content?: string; error?: string },
+  update: Partial<Omit<AgentActivity, 'id'>> & { agentId: string; delta?: string },
 ): ChatMessage[] {
   return messages.map((message) => {
     if (message.id !== messageId || message.role !== 'assistant') return message;
-    const agents = message.agents ?? [];
-    const existing = agents.find((agent) => agent.id === update.agentId);
-    if (!existing) {
-      return {
-        ...message,
-        agents: [...agents, {
-          id: update.agentId,
-          modelId: update.modelId ?? update.agentId,
-          modelName: update.modelName ?? update.modelId ?? 'subagent',
-          status: update.status ?? 'running',
-          content: update.content ?? update.delta ?? '',
-          ...(update.error ? { error: update.error } : {}),
-        }],
-      };
+    const agents = message.agents ?? [], existing = agents.find((agent) => agent.id === update.agentId);
+    const { agentId, delta, ...fields } = update;
+    const merged = mergeAgent(existing, { ...fields, id: agentId }, delta);
+    if (!merged) return message;
+    return { ...message, agents: normalizeAgents(existing ? agents.map((agent) => agent.id === agentId ? merged : agent) : [...agents, merged]) };
+  });
+}
+
+/** Completion payloads repair missed live events without replaying report text. */
+export function mergeAssistantAgents(messages: ChatMessage[], messageId: string, agents: unknown): ChatMessage[] {
+  return normalizeAgents(agents).reduce((current, agent) => { const { id, ...fields } = agent; return updateAssistantAgent(current, messageId, { agentId: id, ...fields }); }, messages);
+}
+
+export function upsertAssistantAgentTool(messages: ChatMessage[], messageId: string, agentId: string, update: ToolCallUpdate): ChatMessage[] {
+  const message = messages.find((item) => item.id === messageId && item.role === 'assistant');
+  if (!message) return messages;
+  const agent = message.agents?.find((item) => item.id === agentId);
+  const previous = agent?.tools?.find((tool) => tool.id === update.toolCallId);
+  const label = describeToolArgs(update.args) ?? previous?.label;
+  const tool: ActivityTool = { id: update.toolCallId, toolName: update.toolName, status: update.status,
+    ...(label ? { label } : {}), ...(update.summary === undefined ? {} : { summary: update.summary }), ...(update.durationMs === undefined ? {} : { durationMs: update.durationMs }) };
+  // A terminal agent cannot acquire a newly running tool from a delayed event.
+  if (agent && terminalActivity(agent.status) && tool.status === 'running') return messages;
+  return updateAssistantAgent(messages, messageId, { agentId, tools: mergeTools(agent?.tools, [tool]) });
+}
+
+export function updateAssistantAttribution(messages: ChatMessage[], update: { messageId?: string; runId?: string; modelUsed?: string; actualModelId?: string; planningModelId?: string; attempt?: ExecutionAttempt }): ChatMessage[] {
+  const target = update.messageId ?? [...messages].reverse().find((message) => message.role === 'assistant')?.id;
+  return messages.map((message) => {
+    if (message.role !== 'assistant' || message.id !== target || (message.runId && update.runId && message.runId !== update.runId)) return message;
+    const attempts = new Map((message.executionAttempts ?? []).map((attempt) => [attempt.id, attempt]));
+    const incoming = normalizeExecutionAttempts(update.attempt ? [update.attempt] : [])[0];
+    const latestIndex = Math.max(-1, ...[...attempts.values()].map((attempt) => attempt.index));
+    if (incoming) {
+      const previous = attempts.get(incoming.id);
+      if (!previous || !terminalActivity(previous.status) || incoming.status !== 'running') attempts.set(incoming.id, { ...previous, ...incoming });
     }
-    return {
-      ...message,
-      agents: agents.map((agent) => agent.id !== update.agentId ? agent : {
-        ...agent,
-        ...(update.modelId ? { modelId: update.modelId } : {}),
-        ...(update.modelName ? { modelName: update.modelName } : {}),
-        ...(update.status ? { status: update.status } : {}),
-        ...(update.content !== undefined ? { content: update.content } : update.delta ? { content: `${agent.content}${update.delta}` } : {}),
-        ...(update.error ? { error: update.error } : {}),
-      }),
+    const stale = incoming && incoming.index < latestIndex;
+    return { ...message,
+      ...(update.runId ? { runId: update.runId.slice(0, 300) } : {}),
+      ...(!stale && update.modelUsed ? { modelUsed: update.modelUsed.slice(0, 300) } : {}),
+      ...(!stale && update.actualModelId ? { actualModelId: update.actualModelId.slice(0, 300) } : {}),
+      ...(update.planningModelId ? { planningModelId: update.planningModelId.slice(0, 300) } : {}),
+      ...(incoming ? { executionAttempts: normalizeExecutionAttempts([...attempts.values()].sort((left, right) => left.index - right.index)) } : {}),
     };
   });
 }
 
 export function updateLatestAssistantAttribution(messages: ChatMessage[], update: { modelUsed?: string; planningModelId?: string }): ChatMessage[] {
-  let messageIndex = messages.length - 1;
-  while (messageIndex >= 0 && messages[messageIndex].role !== 'assistant') messageIndex -= 1;
-  if (messageIndex < 0) return messages;
-  return messages.map((message, index) => index === messageIndex ? { ...message, ...update } : message);
+  return updateAssistantAttribution(messages, update);
+}
+
+/** End only activities that are still pending; keep completed/error evidence intact. */
+export function settleAssistantActivity(messages: ChatMessage[], messageId: string, status: 'completed' | 'failed' | 'cancelled', error?: string): ChatMessage[] {
+  const finishedAt = new Date().toISOString();
+  const settleTools = (tools: ActivityTool[] | undefined) => tools?.map((tool) => tool.status === 'running' ? { ...tool, status: 'failed' as const } : tool);
+  const elapsed = (startedAt?: string) => startedAt && Number.isFinite(Date.parse(startedAt)) ? Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)) : undefined;
+  return messages.map((message) => {
+    if (message.id !== messageId || message.role !== 'assistant') return message;
+    return { ...message,
+      ...(message.tools ? { tools: settleTools(message.tools) } : {}),
+      ...(message.agents ? { agents: message.agents.map((agent) => {
+        const tools = agent.tools ? { tools: settleTools(agent.tools) } : {};
+        if (terminalActivity(agent.status)) return { ...agent, ...tools };
+        const agentStatus = status === 'completed' ? 'failed' as const : status;
+        const agentError = error ?? (status === 'completed' ? '本轮已结束，未收到完成状态' : undefined);
+        return { ...agent, status: agentStatus, finishedAt, ...(elapsed(agent.startedAt) === undefined ? {} : { durationMs: elapsed(agent.startedAt) }), ...(agentError ? { error: agentError } : {}), ...tools };
+      }) } : {}),
+      ...(message.executionAttempts ? { executionAttempts: message.executionAttempts.map((attempt) => terminalActivity(attempt.status) ? attempt : { ...attempt, status, finishedAt, durationMs: elapsed(attempt.startedAt), ...(error ? { error } : {}) }) } : {}),
+    };
+  });
 }
 
 export function setLatestAssistantDuration(messages: ChatMessage[], durationMs: number, messageId?: string): ChatMessage[] {
@@ -193,11 +266,11 @@ export function updateAssistantMedia(messages: ChatMessage[], update: { messageI
   });
 }
 
-/** Process cards are live-only; persist the final answer without tool/agent traces. */
+/** Main tool rows remain transient; agent details and execution identity are durable. */
 export function stripAssistantProcess(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (message.role !== 'assistant') return message;
-    const { agents: _agents, tools: _tools, ...final } = message;
+    const { tools: _tools, ...final } = message;
     return final;
   });
 }
@@ -212,16 +285,6 @@ export function updateLatestAssistantContent(messages: ChatMessage[], content: s
     ...(modelUsed ? { modelUsed } : {}),
     ...(planningModelId ? { planningModelId } : {}),
   } : message);
-}
-
-function restoreAgents(values: unknown[]): ChatAgentMessage[] {
-  return values.flatMap((value): ChatAgentMessage[] => {
-    if (!value || typeof value !== 'object') return [];
-    const agent = value as Partial<ChatAgentMessage>;
-    if (typeof agent.id !== 'string' || typeof agent.modelId !== 'string' || typeof agent.modelName !== 'string' || typeof agent.content !== 'string') return [];
-    if (agent.status !== 'queued' && agent.status !== 'running' && agent.status !== 'completed' && agent.status !== 'failed') return [];
-    return [{ id: agent.id, modelId: agent.modelId, modelName: agent.modelName, status: agent.status, content: agent.content, ...(typeof agent.error === 'string' ? { error: agent.error } : {}) }];
-  });
 }
 
 const TOOL_LABEL_KEYS = ['query', 'url', 'path', 'command', 'processId'];

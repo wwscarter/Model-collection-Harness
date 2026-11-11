@@ -12,6 +12,7 @@ import type { ToolTrustApi } from './toolTrustTypes';
 import type { PlanDecision, PlanningMode, RunPlan } from '@core/planning/PlanTypes';
 import type { ModelOperations } from '@core/models/ModelOperations';
 import type { MediaArtifact } from './mediaTypes';
+import type { AgentActivity, ExecutionAttempt } from '@core/agent/RunActivity';
 
 export interface ModelCapability { type: string; score: number; }
 
@@ -132,7 +133,11 @@ export interface ExecutionResult {
   artifacts?: MediaArtifact[];
   stopReason?: string;
   runId?: string;
-  modelUsed?: string;
+  assistantMessageId?: string;
+  modelUsed?: string | { id?: string; name?: string; modelId?: string };
+  actualModelId?: string;
+  agentMessages?: AgentActivity[];
+  executionAttempts?: ExecutionAttempt[];
   metrics?: SessionMetrics;
   budgetLimit?: BudgetLimitNotice;
   auditResult?: { passed?: boolean; score?: number; issueCount?: number };

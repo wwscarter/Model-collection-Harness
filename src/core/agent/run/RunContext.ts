@@ -33,6 +33,7 @@ import { createMediaTools } from '@core/media/MediaTools';
 import type { MediaExecutionContext } from '@core/media/MediaTypes';
 import { createMediaObserver } from './mediaObservation';
 import { recordMediaToolOutcome, type MediaDependencyFailure } from './mediaCompletion';
+import type { AgentActivity, ActivityTool, ExecutionAttempt } from '../RunActivity';
 
 export interface RunContext {
   request: RunRequest;
@@ -96,11 +97,12 @@ export interface RunContext {
   executionModel: ModelConfig;
   metrics?: ModelInvocation;
   fallbackAttempts: string[];
+  executionAttempts: ExecutionAttempt[];
   traceAttempts: Array<{ index: number; status: 'success' | 'failed'; modelSnapshot: ReturnType<typeof snapshotModel>; error?: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number }>;
   result: ModelResponse;
   agentReports: Array<{ modelName: string; content: string; stopReason?: string }>;
   failedAgentCount: number;
-  agentMessages: Array<{ id: string; modelId: string; modelName: string; status: 'queued' | 'running' | 'completed' | 'failed'; content: string; error?: string; stopReason?: string }>;
+  agentMessages: AgentActivity[];
   finalContext: ReturnType<typeof assembleContext>;
   verification?: { modelId: string; approved: boolean; score: number; issueCount: number; revised: boolean; auditModelId?: string };
   projectVerification?: VerificationOutcome;
@@ -265,6 +267,8 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   ctx.history = sanitizeHistory(ctx.request.history);
   ctx.enableTools = ctx.request.enableTools !== false;
   ctx.toolCalls = [];
+  ctx.agentMessages = [];
+  ctx.executionAttempts = [];
   ctx.mediaFailures = [];
   ctx.successfulFileWrites = [];
   ctx.traceFinished = false;
@@ -281,6 +285,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     ctx.deps.traces.finishRun(ctx.runId, { status, error, inputTokens: ctx.totalInputTokens, outputTokens: ctx.totalOutputTokens, cost: ctx.totalCost });
   };
   ctx.emitToolEvent = (agentId: string | undefined, event: ToolEvent) => {
+    const traceToolId = JSON.stringify([agentId ?? '', event.toolCallId]);
     if (!agentId) {
       const index = ctx.toolCalls.findIndex((call) => call.toolCallId === event.toolCallId);
       const merged = index >= 0 ? { ...ctx.toolCalls[index], ...event, args: event.args ?? ctx.toolCalls[index].args } : event;
@@ -293,14 +298,28 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       const file = (merged.args as { path?: unknown } | undefined)?.path;
       if (merged.status === 'completed' && ['write', 'edit'].includes(merged.toolName) && typeof file === 'string' && file)
         ctx.successfulFileWrites.push(file);
+    } else {
+      const agent = ctx.agentMessages.find((candidate) => candidate.id === agentId);
+      if (agent) {
+        const tools = agent.tools ?? [];
+        const previous = tools.find((tool) => tool.id === event.toolCallId);
+        const args = event.args && typeof event.args === 'object' ? event.args as Record<string, unknown> : {};
+        const label = ['query', 'url', 'path', 'command', 'processId'].map((key) => args[key]).find((value): value is string => typeof value === 'string' && Boolean(value));
+        const stale = previous && previous.status !== 'running' && event.status === 'running';
+        const next: ActivityTool = { id: event.toolCallId, toolName: event.toolName, status: stale ? previous.status : event.status,
+          ...(label || previous?.label ? { label: (label ?? previous!.label)!.slice(0, 300) } : {}),
+          ...(event.summary ?? previous?.summary ? { summary: (stale ? previous?.summary : event.summary ?? previous?.summary)?.slice(0, 2000) } : {}),
+          ...((event.durationMs ?? previous?.durationMs) !== undefined ? { durationMs: event.durationMs ?? previous?.durationMs } : {}) };
+        agent.tools = previous ? tools.map((tool) => tool.id === event.toolCallId ? next : tool) : tools.length < 50 ? [...tools, next] : tools;
+      }
     }
     if (event.status === 'running') {
       const parent = agentId ? ctx.agentSpans.get(agentId) : ctx.executionSpan;
       if (parent)
-        ctx.toolSpans.set(event.toolCallId, parent.child('tool', event.toolName, { toolCallId: event.toolCallId }));
+        ctx.toolSpans.set(traceToolId, parent.child('tool', event.toolName, { toolCallId: event.toolCallId, ...(agentId ? { agentId } : {}) }));
     }
     else {
-      const span = ctx.toolSpans.get(event.toolCallId);
+      const span = ctx.toolSpans.get(traceToolId);
       const metadata = event.toolName === 'run_command' && event.details && typeof event.details === 'object'
         ? event.details as { sandbox?: Record<string, unknown>; policy?: { category?: string; decision?: string; outsideProject?: boolean } } : undefined;
       span?.end({
@@ -312,7 +331,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
           ...(metadata?.policy ? { policy: { category: metadata.policy.category, decision: metadata.policy.decision, outsideProject: metadata.policy.outsideProject } } : {}),
         },
       });
-      ctx.toolSpans.delete(event.toolCallId);
+      ctx.toolSpans.delete(traceToolId);
     }
     if (['request_media', 'materialize_asset'].includes(event.toolName)) {
       const callId = JSON.stringify([agentId ?? '', event.toolCallId]);

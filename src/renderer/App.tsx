@@ -14,7 +14,9 @@ import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
 import { VerificationStatus } from './components/VerificationStatus';
 import { PlanCard } from './components/PlanCard';
-import { Copy, Pencil, UsersRound } from 'lucide-react';
+import { Copy, Pencil } from 'lucide-react';
+import { AgentActivityList } from './components/AgentActivityList';
+import { ExecutionAttempts } from './components/ExecutionAttempts';
 import { useSessionRun } from './hooks/useSessionRun';
 import { useWorkspace } from './hooks/useWorkspace';
 
@@ -61,16 +63,17 @@ export default function App() {
             const live = isCurrentRunning && index === currentSession.messages.length - 1;
             if (message.role === 'user') return <div key={message.id} className="user-message-row"><div className="user-message-bubble"><div className="user-message-text">{message.content}</div><div className="user-message-footer"><button className="message-icon-button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button><button className="message-icon-button" title="编辑消息" aria-label="编辑消息" disabled={isLoading} onClick={() => startMessageEdit(message)}><Pencil size={14} strokeWidth={1.8} /></button></div></div></div>;
             return <div key={message.id} className="assistant-turn">
-              {live && !message.content && !message.artifacts?.length && !message.mediaJobs?.length && !currentVerification && !sessionPlans.some((plan) => plan.assistantMessageId === message.id) && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
+              {live && !message.modelUsed && !message.actualModelId && !message.executionAttempts?.length && !message.agents?.length && !message.content && !message.artifacts?.length && !message.mediaJobs?.length && !currentVerification && !sessionPlans.some((plan) => plan.assistantMessageId === message.id) && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
               {sessionPlans.filter((plan) => plan.assistantMessageId === message.id).map((plan) => <PlanCard key={plan.runId} record={plan} active={live} onDecision={decidePlan} />)}
               <article className="assistant-card">
                 <header className="assistant-card-header">
-                  <span className="assistant-title"><i className={live ? 'live-dot pulse' : 'live-dot'} /><strong>{modelLabel(message.modelUsed) ?? (live ? '正在选择执行模型' : 'newAi')}</strong>{message.planningModelId && <small className="planning-attribution">规划：{modelLabel(message.planningModelId)}</small>}{formatDuration(live ? liveElapsedMs : message.durationMs) && <small className="assistant-duration">{formatDuration(live ? liveElapsedMs : message.durationMs)}</small>}</span>
+                  <span className="assistant-title"><i className={live ? 'live-dot pulse' : 'live-dot'} /><strong>{message.actualModelId || modelLabel(message.modelUsed) || (live ? '正在选择执行模型' : 'newAi')}</strong>{message.planningModelId && <small className="planning-attribution">规划：{modelLabel(message.planningModelId)}</small>}{formatDuration(live ? liveElapsedMs : message.durationMs) && <small className="assistant-duration">{formatDuration(live ? liveElapsedMs : message.durationMs)}</small>}</span>
                   {live ? <span className="streaming-badge mono">Streaming</span> : message.content && <button className="message-icon-button" title="复制回复" aria-label="复制回复" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button>}
                 </header>
+                <ExecutionAttempts attempts={message.executionAttempts ?? []} />
+                <AgentActivityList agents={message.agents ?? []} />
                 {live && !!message.tools?.length && <ToolCallList tools={message.tools} />}
                 <OutputView content={message.content} loading={live && Boolean(message.content)} emptyState={false} artifacts={message.artifacts} mediaJobs={message.mediaJobs} />
-                {live && !!message.agents?.length && <section className="agent-board" aria-label="并行子智能体报告"><div className="agent-board-heading"><UsersRound size={15} /><strong>子智能体报告</strong><span>{message.agents.filter((agent) => agent.status === 'completed').length}/{message.agents.length} 完成</span></div>{message.agents.map((agent) => <div className="agent-report" key={agent.id}><header><strong>{agent.modelName}</strong><span className={`agent-status ${agent.status}`}>{({ queued: '等待中', running: '分析中', completed: '已完成', failed: '失败' })[agent.status]}</span></header>{agent.content ? <OutputView content={agent.content} loading={agent.status === 'running'} emptyState={false} /> : agent.status === 'running' ? <p className="agent-placeholder">正在独立分析…</p> : null}{agent.error && <div className="agent-error">{agent.error}</div>}</div>)}</section>}
               </article>
             </div>;
           }) : <WorkbenchWelcome projectName={projectList.find((project) => project.id === currentSession.projectId)?.name} onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => currentSession.projectId && projectList.some((project) => project.id === currentSession.projectId) ? setProjectDrawerOpen(true) : setShowNewProject(true)} />}

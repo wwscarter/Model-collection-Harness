@@ -220,6 +220,89 @@ describe('RunCoordinator', () => {
     } finally { cleanup(); }
   });
 
+  it('publishes actual execution identity for both failed fallback attempts before the run rejects', async () => {
+    const models = [model('gpt', { name: 'GPT', modelId: 'gpt-6.1-sol' }), model('claude', { name: 'Claude', modelId: 'claude-opus-5-5' })];
+    const events: Array<{ channel: string; payload: any }> = [];
+    const { deps, traceStore, cleanup } = makeDeps(models, async (current, _prompt, _max, onDelta, options) => {
+      if (current.id === 'gpt') throw new Error('Our servers are currently overloaded. Please try again later.');
+      options!.onToolEvent?.({ toolCallId: 'read-entry', toolName: 'read', status: 'running', args: { path: 'src/main.ts' } });
+      options!.onToolEvent?.({ toolCallId: 'read-entry', toolName: 'read', status: 'completed', summary: 'Read entry point' });
+      onDelta('Inspecting the entry point.');
+      throw new Error('Service temporarily unavailable, please retry later');
+    });
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' } };
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'fallback', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'gpt', fallbackModelIds: ['claude'] } },
+    ] });
+    try {
+      await expect(executeRun({ sessionId: 'session-1', runId: 'failed-fallback', assistantMessageId: 'fallback-answer', prompt: 'Inspect the code', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }))).rejects.toThrow('Service temporarily unavailable');
+      const attempts = events.filter((event) => event.channel === 'session:model-switched' && event.payload.attempt).map((event) => event.payload);
+      expect(attempts.map((event) => [event.actualModelId, event.attempt.status])).toEqual([
+        ['gpt-6.1-sol', 'running'], ['gpt-6.1-sol', 'failed'], ['claude-opus-5-5', 'running'], ['claude-opus-5-5', 'failed'],
+      ]);
+      for (const event of attempts) expect(event).toMatchObject({ runId: 'failed-fallback', assistantMessageId: 'fallback-answer', role: 'execution', modelSnapshot: { modelId: event.actualModelId } });
+      expect(attempts.at(-1)).toMatchObject({ modelId: 'claude', actualModelId: 'claude-opus-5-5', fallback: true, attempt: { error: 'Service temporarily unavailable, please retry later', durationMs: expect.any(Number), finishedAt: expect.any(String), reason: expect.stringContaining('overloaded') } });
+      expect(events.find((event) => event.channel === 'session:chunk')?.payload).toMatchObject({ runId: 'failed-fallback', assistantMessageId: 'fallback-answer', modelId: 'claude', actualModelId: 'claude-opus-5-5' });
+      expect(events.some((event) => event.channel === 'session:agent-update')).toBe(false);
+      expect(traceStore.getTrace('failed-fallback')?.run.status).toBe('failed');
+    } finally { cleanup(); }
+  });
+
+  it('emits a queued collaborator roster and returns task, timing, actual identity and tool outcomes', async () => {
+    const models = [model('executor', { isPrimary: true }), model('a', { name: 'Analysis A', modelId: 'actual-a' }), model('b', { name: 'Analysis B', modelId: 'actual-b' })];
+    const events: Array<{ channel: string; payload: any }> = [];
+    const { deps, traceStore, cleanup } = makeDeps(models, async (current, _prompt, _max, onDelta, options) => {
+      if (options?.agentId) {
+        options.onToolEvent?.({ toolCallId: 'shared-tool-id', toolName: 'read', status: 'running', args: { path: current.id + '.ts' } });
+        await Promise.resolve();
+        options.onToolEvent?.({ toolCallId: 'shared-tool-id', toolName: 'read', status: current.id === 'a' ? 'completed' : 'failed', summary: current.id === 'a' ? 'Read module' : 'Module unavailable', durationMs: 12 });
+        if (current.id === 'a') options.onToolEvent?.({ toolCallId: 'unfinished-tool', toolName: 'web_fetch', status: 'running', args: { url: 'https://example.com' } });
+      }
+      onDelta(current.id + ' report');
+      return { content: current.id + ' report', inputTokens: 1, outputTokens: 1, modelId: current.id };
+    });
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' } };
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'parallel', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'parallel', collaboratorModelIds: ['a', 'b'] } },
+    ] });
+    try {
+      const output = await executeRun({ sessionId: 'session-1', runId: 'agents-durable', assistantMessageId: 'agents-answer', prompt: 'Compare implementation options', includeProjectContext: false }, deps, (channel, payload) => events.push({ channel, payload }));
+      const lifecycle = events.filter((event) => event.channel === 'session:agent-update').map((event) => event.payload);
+      expect(lifecycle.slice(0, 2).map((event) => [event.modelId, event.status])).toEqual([['a', 'queued'], ['b', 'queued']]);
+      expect(lifecycle[0]).toMatchObject({ assistantMessageId: 'agents-answer', runId: 'agents-durable', actualModelId: 'actual-a', role: '方案分析', task: '独立方案与实现路径' });
+      expect(lifecycle.some((event) => event.modelId === 'a' && event.status === 'running' && event.delta === 'a report')).toBe(true);
+      expect(output).toMatchObject({ actualModelId: 'executor', executionAttempts: [{ status: 'completed', actualModelId: 'executor' }], agentMessages: [
+        { modelId: 'a', actualModelId: 'actual-a', status: 'completed', role: '方案分析', task: '独立方案与实现路径', content: 'a report', startedAt: expect.any(String), finishedAt: expect.any(String), durationMs: expect.any(Number), tools: [
+          { id: 'shared-tool-id', status: 'completed', label: 'a.ts', summary: 'Read module', durationMs: 12 },
+          { id: 'unfinished-tool', status: 'failed', label: 'https://example.com' },
+        ] },
+        { modelId: 'b', actualModelId: 'actual-b', status: 'completed', task: '风险、限制与失败恢复', tools: [{ id: 'shared-tool-id', status: 'failed', label: 'b.ts', summary: 'Module unavailable' }] },
+      ] });
+      const readSpans = traceStore.getTrace('agents-durable')?.spans.filter((span) => span.name === 'read');
+      expect(readSpans?.map((span) => span.status).sort()).toEqual(['failed', 'success']);
+      expect(readSpans?.map((span) => span.parentSpanId)[0]).not.toBe(readSpans?.map((span) => span.parentSpanId)[1]);
+    } finally { cleanup(); }
+  });
+
+  it('terminates every queued collaborator when cancellation arrives before any agent starts', async () => {
+    const models = [model('executor', { isPrimary: true }), model('a'), model('b')];
+    const invoke = vi.fn(async (current: ModelConfig) => ({ content: 'unused', inputTokens: 0, outputTokens: 0, modelId: current.id }));
+    const { deps, cleanup } = makeDeps(models, invoke);
+    deps.routingSettings = { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' } };
+    deps.routing = new RoutingPolicyEngine(new AgentRouter(deps.models), { version: 1, defaults: { strategy: 'single' }, rules: [
+      { id: 'parallel', enabled: true, priority: 1, when: {}, then: { primaryModelId: 'executor', strategy: 'parallel', collaboratorModelIds: ['a', 'b'] } },
+    ] });
+    const events: any[] = [];
+    try {
+      await expect(executeRun({ sessionId: 'session-1', runId: 'cancel-queued-agents', prompt: 'Compare options', includeProjectContext: false }, deps, (channel, payload: any) => {
+        if (channel === 'session:agent-update') { events.push(payload); if (payload.status === 'queued') deps.controller.abort(); }
+      })).rejects.toThrow('任务已取消');
+      expect(events.map((event) => event.status)).toEqual(['queued', 'queued', 'cancelled', 'cancelled']);
+      for (const event of events.filter((item) => item.status === 'cancelled')) expect(event).toMatchObject({ finishedAt: expect.any(String), durationMs: 0, error: '任务已取消' });
+      expect(invoke).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
   it('extends summaries past forty history messages and invalidates edited prefixes', async () => {
     const summarize = vi.spyOn(summaryService, 'summarizeContext').mockResolvedValue(undefined);
     const invocations: Array<Parameters<RunDependencies['invokeStreamed']>[4]> = [];

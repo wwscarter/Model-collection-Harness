@@ -2,6 +2,8 @@ import { supportsOperation } from '@core/models/ModelOperations';
 import { hasUsableCredentials, type ModelConfig } from '../models/ModelConfig';
 
 const agentPerspectives = ['独立方案与实现路径', '风险、限制与失败恢复', '测试方案、验收标准与遗漏点', '替代方案与取舍比较'];
+export function parallelAgentPerspective(index: number): string { return agentPerspectives[index % agentPerspectives.length]; }
+export function parallelAgentRole(index: number): string { return ['方案分析', '风险审查', '测试验证', '方案比较'][index % agentPerspectives.length]; }
 
 /**
  * For high-complexity work, pair the execution model with a separate reasoning
@@ -40,7 +42,7 @@ export function buildPlannedTask(task: string, plan: string): string {
 }
 
 export function buildParallelAgentPrompt(task: string, index: number): string {
-  const perspective = agentPerspectives[index % agentPerspectives.length];
+  const perspective = parallelAgentPerspective(index);
   return `You are an independent analysis subagent. Focus on: ${perspective}. Use the available tools (such as web search) when the task needs current or external information; never claim to have used a tool you did not call, and do not modify files. Give a concise, concrete analysis that directly addresses the user's task.\n\nUser task:\n${task}`;
 }
 

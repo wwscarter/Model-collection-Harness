@@ -60,7 +60,7 @@ export function useSessionState() {
     return model ? model.modelId || model.name : id;
   };
   const latestAssistant = currentSession?.messages.slice().reverse().find((message) => message.role === 'assistant');
-  const bannerModels = [modelLabel(latestAssistant?.planningModelId), modelLabel(latestAssistant?.modelUsed ?? currentSession?.modelUsed)].filter(Boolean).join(' + ') || '自动调度';
+  const bannerModels = [modelLabel(latestAssistant?.planningModelId), latestAssistant?.actualModelId ?? modelLabel(latestAssistant?.modelUsed ?? currentSession?.modelUsed)].filter(Boolean).join(' + ') || '自动调度';
   useEffect(() => {
     setEditingMessageId(null);
     promptBeforeEditingRef.current = '';
@@ -83,7 +83,7 @@ export function useSessionState() {
     void window.amd?.sessions.list().then((records) => {
       if (!active) return;
       const restored = records.map((record) => ({
-        id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record),
+        id: String(record.id), title: String(record.title || '未命名会话'), prompt: String(record.prompt || ''), userMessage: String(record.userMessage || ''), output: String(record.output || ''), messages: restoreMessages(record, { inactive: true }),
         modelUsed: record.modelUsed ? String(record.modelUsed) : undefined, runId: record.runId ? String(record.runId) : undefined, metrics: record.metrics as SessionMetrics | undefined,
         audit: record.auditResult as Session['audit'], auditResult: record.auditResult as Session['auditResult'],
         routeConfidence: restoreRouteConfidence(record),
