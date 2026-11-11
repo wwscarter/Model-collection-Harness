@@ -8,14 +8,14 @@ export interface MediaRequest {
   purpose?: string;
   artifactSlot?: string;
   revision?: number;
-  /** Exact output dimensions; never silently replaced by another size. */
+  /** Endpoint size parameter, e.g. WIDTHxHEIGHT or auto; provider decides support. */
   size?: string;
-  /** Optional minimum dimensions; routing selects the smallest declared size meeting both bounds. */
+  /** Desired minimum dimensions forwarded in the generation prompt, not enforced locally. */
   minSize?: string;
   aspectRatio?: string;
-  format?: MediaFormat;
+  format?: string;
   transparentBackground?: boolean;
-  quality?: 'auto' | 'low' | 'medium' | 'high';
+  quality?: string;
   durationSeconds?: number;
   preference?: 'quality' | 'cost' | 'speed';
 }

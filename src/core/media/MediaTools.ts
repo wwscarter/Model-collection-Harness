@@ -12,17 +12,18 @@ function summary(job: MediaJob) { return { required: job.required, status: job.s
 export function createMediaTools(service: MediaExecutionService, context: MediaExecutionContext, options: { projectRoot?: string; allowExport?: boolean } = {}): ToolDefinition[] {
   const tools = [defineTool({
     name: 'request_media', label: '生成任务素材',
-    description: 'Generate a real image through the application media router. Any worker may submit a complete media requirement; the application dynamically chooses a compatible configured model. Use a stable artifactSlot for the same logical asset and revision=0; repeated requests reuse it. Change revision only when a new version is explicitly needed. Returns real saved asset references. Never invent image URLs. Video protocol is not connected yet and reports unavailable. Does not write project files.',
+    description: 'Generate a real image through the application media router. Any worker may submit a complete media requirement; the application chooses an enabled image endpoint. You choose generation parameters and assess the actual returned image dimensions and format against the task. The endpoint decides parameter support; no local capability declaration is required. Use a stable artifactSlot for the same logical asset and revision=0; repeated requests reuse it. Change revision only when a new version is explicitly needed. Returns real saved asset references and actual metadata; a succeeded job means a valid image was saved, not that all task requirements were met. Never invent image URLs. Video protocol is not connected yet and reports unavailable. Does not write project files.',
     promptSnippet: 'Request a real image asset; the application chooses the image model dynamically',
     parameters: Type.Object({
       operation: literal(['image.generate', 'video.generate']),
       prompt: Type.String({ minLength: 1, maxLength: 32000 }),
       artifactSlot: Type.String({ minLength: 1, maxLength: 160, description: 'Stable logical asset slot, e.g. landing.hero. Reuse across retries and workers.' }),
       purpose: Type.Optional(Type.String({ maxLength: 2000 })), revision: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-      size: Type.Optional(Type.String({ pattern: /^\d{2,5}x\d{2,5}$/.source, description: 'Exact output dimensions. Preserve user requirements even on retries; dimensions in the prompt are also enforced.' })),
-      minSize: Type.Optional(Type.String({ pattern: /^\d{2,5}x\d{2,5}$/.source, description: 'Minimum width and height, only when larger output is acceptable. Selects the smallest declared size meeting both bounds and aspectRatio. Never replace an exact size requirement with this.' })),
-      aspectRatio: Type.Optional(Type.String({ pattern: /^\d{1,3}:\d{1,3}$/.source })),
-      format: Type.Optional(literal(['png', 'jpeg', 'webp'])), quality: Type.Optional(literal(['auto', 'low', 'medium', 'high'])),
+      size: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'Optional endpoint size parameter, e.g. 1920x1080 or auto. Sent unchanged; the provider decides support.' })),
+      minSize: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'Desired minimum dimensions included in the prompt. The application does not choose a size tier or enforce the result.' })),
+      aspectRatio: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'Desired aspect ratio included in the generation prompt.' })),
+      format: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'Optional output_format parameter passed to the endpoint.' })),
+      quality: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: 'Optional quality parameter passed to the endpoint.' })),
       transparentBackground: Type.Optional(Type.Boolean()), durationSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), preference: Type.Optional(literal(['quality', 'cost', 'speed'])),
     }),
     async execute(_id, input, signal) {

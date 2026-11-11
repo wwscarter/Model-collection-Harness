@@ -201,18 +201,22 @@ describe('file preview consistency', () => {
 });
 
 describe('settings and project dialogs', () => {
-  it('saves media operations in the same model editor while disabling text-only actions', async () => {
-    const mediaModel: ModelConfig = { ...model, operations: { 'image.generate': { protocol: 'openai-images', score: 85, estimatedCostUsd: 0.1 } } };
+  it('saves existing media configurations without local generation capability controls', async () => {
+    const mediaModel: ModelConfig = { ...model, operations: { 'image.generate': { protocol: 'openai-images', score: 85, estimatedCostUsd: 0.1, limits: { sizes: ['1024x1024'], formats: ['png'], qualities: ['high'], transparentBackground: true } } } };
     const update = vi.fn(async (_id, payload) => ({ success: true, model: { ...mediaModel, ...payload } }));
     window.amd!.models = { list: vi.fn(async () => [mediaModel]), update, testConnection: vi.fn() } as unknown as AmdApi['models'];
     await render(createElement(Settings, { models: [mediaModel], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn() }));
     expect(container.querySelector<HTMLInputElement>('[aria-label="图片生成"]')!.checked).toBe(true);
     expect(button('连通测试').disabled).toBe(true);
     expect(button('设为主力路由').disabled).toBe(true);
-    await click(container.querySelector('[aria-label="支持 PNG"]')!);
-    await click(container.querySelector('[aria-label="支持质量 高"]')!);
+    expect(container.querySelector('[placeholder="1024x1024, 1536x1024"]')).toBeNull();
+    expect(container.querySelector('[aria-label="支持的图片格式"]')).toBeNull();
+    expect(container.querySelector('[aria-label="支持的图片质量"]')).toBeNull();
+    expect(container.querySelector('[aria-label="支持 PNG"]')).toBeNull();
+    expect(container.textContent).not.toContain('支持透明背景');
+    expect(container.textContent).toContain('尺寸、比例、质量、格式与透明背景由模型和服务端决定');
     await click(button('保存配置'));
-    expect(update.mock.calls[0][1].operations).toEqual({ 'image.generate': { ...mediaModel.operations!['image.generate'], limits: { formats: ['png'], qualities: ['high'] } } });
+    expect(update.mock.calls[0][1].operations).toEqual(mediaModel.operations);
     expect(window.amd!.models.testConnection).not.toHaveBeenCalled();
   });
 
@@ -223,6 +227,25 @@ describe('settings and project dialogs', () => {
     await click(container.querySelector('[aria-label="图片生成"]')!);
     await click(button('保存配置'));
     expect(update.mock.calls[0][1].operations['image.generate']).toMatchObject({ protocol: 'openai-images', defaults: { format: 'png' } });
+  });
+
+  it('shows an existing provider-defined default format and lets the user switch to endpoint defaults', async () => {
+    const mediaModel: ModelConfig = { ...model, operations: { 'image.generate': { protocol: 'openai-images', defaults: { format: 'vendor-format' }, limits: { formats: ['png'] } } } };
+    const update = vi.fn(async (_id, payload) => ({ success: true, model: { ...mediaModel, ...payload } }));
+    window.amd!.models = { list: vi.fn(async () => [mediaModel]), update } as unknown as AmdApi['models'];
+    await render(createElement(Settings, { models: [mediaModel], onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn() }));
+    const format = [...container.querySelectorAll<HTMLSelectElement>('select')].find((select) => [...select.options].some((option) => option.textContent === '使用端点默认'))!;
+    expect(format.value).toBe('vendor-format');
+    expect(format.selectedOptions[0].textContent).toBe('vendor-format（当前端点格式）');
+    await click(button('保存配置'));
+    expect(update.mock.calls[0][1].operations['image.generate'].defaults.format).toBe('vendor-format');
+    await act(async () => {
+      format.value = '';
+      format.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(format.selectedOptions[0].textContent).toBe('使用端点默认');
+    await click(button('保存配置'));
+    expect(update.mock.calls[1][1].operations['image.generate'].defaults.format).toBeUndefined();
   });
   it('selects models that arrive after settings opens without overwriting a started new draft', async () => {
     const props = { onClose: vi.fn(), onModelsChanged: vi.fn(), onOpenRouting: vi.fn() };

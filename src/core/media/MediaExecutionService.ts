@@ -5,7 +5,7 @@ import type { ModelConfig } from '../models/ModelConfig';
 import { getModelOperations } from '../models/ModelOperations';
 import { snapshotModel } from '../models/ModelSnapshot';
 import { BudgetExceededError } from '../routing/RunBudget';
-import { normalizeMediaRequest, resolveMediaRequest, routeMediaRequest } from './MediaRouting';
+import { normalizeMediaRequest, routeMediaRequest } from './MediaRouting';
 import { ImageProviderError, OpenAIImagesProvider } from './providers/OpenAIImagesProvider';
 import { MediaError, normalizeMediaArtifacts, type MediaArtifact, type MediaExecutionContext, type MediaJob, type MediaRequest, type MediaResult } from './MediaTypes';
 
@@ -127,7 +127,7 @@ export class MediaExecutionService {
     context.signal?.throwIfAborted();
     if (!context.rootRunId || !context.sessionId) throw new MediaError('MEDIA_INVALID_CONTEXT', '媒体请求缺少宿主运行身份');
     if (this.deletedSessions.has(context.sessionId)) throw new MediaError('MEDIA_SESSION_DELETED', '该会话已删除，不能创建媒体任务');
-    const request = resolveMediaRequest(input); const key = this.key(request, context.rootRunId, context.sessionId);
+    const request = normalizeMediaRequest(input); const key = this.key(request, context.rootRunId, context.sessionId);
     const previous = this.keys.get(key);
     let job: MediaJob | undefined;
     if (previous) {

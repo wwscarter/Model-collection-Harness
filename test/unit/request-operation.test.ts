@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractExplicitMediaConstraints, resolveRequestOperation } from '../../src/core/routing/RequestOperation';
+import { resolveRequestOperation } from '../../src/core/routing/RequestOperation';
 
 describe('request operation shortcut', () => {
   it.each([
@@ -71,31 +71,5 @@ describe('request operation shortcut', () => {
     expect(resolveRequestOperation('generate an image', 'text.chat')).toBe('text.chat');
     expect(resolveRequestOperation('hello', 'video.generate')).toBe('video.generate');
     expect(() => resolveRequestOperation('hello', 'audio.generate' as never)).toThrow('不支持');
-  });
-
-  it('extracts explicit image and video hard constraints without inventing defaults', () => {
-    expect(extractExplicitMediaConstraints('生成一张1536x864的透明背景PNG图片，比例16:9')).toEqual({ size: '1536x864', aspectRatio: '16:9', format: 'png', transparentBackground: true });
-    expect(extractExplicitMediaConstraints('生成一张图片，背景不需要透明，使用webp格式')).toEqual({ format: 'webp', transparentBackground: false });
-    expect(extractExplicitMediaConstraints('制作一个 5 秒的视频')).toEqual({ durationSeconds: 5 });
-    expect(extractExplicitMediaConstraints('Create a 5-second video')).toEqual({ durationSeconds: 5 });
-    expect(extractExplicitMediaConstraints('Make a video, 8 sec')).toEqual({ durationSeconds: 8 });
-    expect(extractExplicitMediaConstraints('生成一张10:30的钟表图片')).toEqual({});
-    expect(extractExplicitMediaConstraints('生成一张16:9的图片')).toEqual({ aspectRatio: '16:9' });
-    expect(extractExplicitMediaConstraints('画面比例设置为16:9，生成一张图片')).toEqual({ aspectRatio: '16:9' });
-    expect(extractExplicitMediaConstraints('不要透明背景，生成一张图片')).toEqual({ transparentBackground: false });
-    expect(extractExplicitMediaConstraints('生成一张图片')).toEqual({});
-  });
-
-  it('rejects conflicting explicit dimensions, formats, transparency, and durations', () => {
-    expect(() => extractExplicitMediaConstraints('生成一张1024x1024或1536x1024的图片')).toThrow('多个不同图片尺寸');
-    expect(() => extractExplicitMediaConstraints('生成16:9或9:16比例的图片')).toThrow('多个不同画面比例');
-    expect(extractExplicitMediaConstraints('生成一张透明背景但不要透明背景的图片')).toMatchObject({ transparentBackground: false });
-    expect(() => extractExplicitMediaConstraints('生成png或webp格式的图片')).toThrow('冲突的图片格式');
-    expect(() => extractExplicitMediaConstraints('制作5秒或10秒的视频')).toThrow('多个不同视频时长');
-    expect(() => extractExplicitMediaConstraints('生成1536x864尺寸的1:1图片')).toThrow('尺寸与画面比例不一致');
-  });
-
-  it.each(['生成一张至少1920×1080的16:9图片', '生成一张不小于1920x1080的16:9图片', 'Generate an image, at least 1920x1080, 16:9', 'Generate an image, minimum size: 1920x1080, 16:9'])('preserves minimum dimensions explicitly: %s', (prompt) => {
-    expect(extractExplicitMediaConstraints(prompt)).toEqual({ minSize: '1920x1080', aspectRatio: '16:9' });
   });
 });

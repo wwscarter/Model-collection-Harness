@@ -50,22 +50,44 @@ describe('executable model operations', () => {
     { 'video.generate': { protocol: 'openai-images' } },
     { 'text.chat': { protocol: 'text', score: 101 } },
     { 'image.generate': { protocol: 'openai-images', estimatedCostUsd: -1 } },
-    { 'image.generate': { protocol: 'openai-images', limits: { formats: ['gif'] } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1024x1024'] }, defaults: { size: '1536x1024' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { quality: 'xhigh' } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { qualities: ['xhigh'] } } },
     { 'image.generate': { protocol: 'openai-images', limits: { qualities: ['low', 'high', 'low'] } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { qualities: ['low'] }, defaults: { quality: 'high' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { size: 'auto' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { size: 'banana' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { size: '00x1024' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { size: '1024x00' } } },
-    { 'image.generate': { protocol: 'openai-images', defaults: { size: '99999x99999' } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['auto'] } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1024x0'] } } },
-    { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1024x1024', 'banana'] } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { sizes: '1024x1024' } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { formats: ['png', 1] } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { qualities: [] } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { sizes: [' '] } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { sizes: Array.from({ length: 101 }, (_, index) => String(index)) } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { formats: ['x'.repeat(101)] } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { transparentBackground: 'yes' } } },
+    { 'image.generate': { protocol: 'openai-images', limits: { unknown: [] } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { size: 1024 } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { quality: [] } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { format: false } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { size: '' } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { quality: ' '.repeat(5) } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { format: 'x'.repeat(101) } } },
+    { 'image.generate': { protocol: 'openai-images', defaults: { unknown: 'value' } } },
   ])('rejects invalid or incompatible capability metadata %j', (operations) => {
     expect(() => validateModelOperations(operations)).toThrow();
+  });
+
+  it('accepts provider-defined defaults independently of legacy capability lists and persists them', () => {
+    const operations: ModelOperations = { 'image.generate': {
+      protocol: 'openai-images',
+      defaults: { size: 'auto', quality: 'vendor-ultra', format: 'vendor-format' },
+      limits: { sizes: ['1024x1024', 'vendor-wide'], formats: ['png', 'vendor-legacy-format'], qualities: ['low', 'vendor-legacy-quality'] },
+    } };
+    expect(() => validateModelOperations(operations)).not.toThrow();
+    const storage = new ModelStorage(':memory:');
+    try {
+      storage.saveModel(model('custom-defaults', operations));
+      expect(storage.loadModel('custom-defaults')!.operations).toEqual(operations);
+    } finally { storage.close(); }
+  });
+
+  it('does not interpret provider dimension strings or legacy metadata as a local size policy', () => {
+    for (const size of ['1536x1024', 'auto', 'vendor-large', '99999x99999']) {
+      expect(() => validateModelOperations({ 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1024x1024'], formats: ['png'], qualities: ['low'] }, defaults: { size, format: 'gif', quality: 'xhigh' } } })).not.toThrow();
+    }
   });
 
   it('round-trips operations and pricing without leaking mutable input or snapshots', () => {

@@ -30,7 +30,9 @@ async function fixture(options: {
   invokeStreamed?: RunDependencies['invokeStreamed'];
   createProvider?: RunDependencies['createProvider'];
   sdk?: boolean;
+  sdkMediaRequest?: Record<string, unknown>;
   imageSize?: [number, number];
+  imageError?: { status: number; code: string; message: string };
 } = {}) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'newai-media-run-')));
   cleanup.push(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -41,13 +43,17 @@ async function fixture(options: {
       requests.push({ path: request.url!, body: JSON.parse(body || '{}') });
       if (options.sdk && request.url === '/v1/chat/completions') {
         const textCalls = requests.filter((entry) => entry.path === '/v1/chat/completions').length;
-        const delta = textCalls === 1 ? { tool_calls: [{ index: 0, id: 'sdk-media', type: 'function', function: { name: 'request_media', arguments: JSON.stringify({ operation: 'image.generate', prompt: 'A blue skyline', artifactSlot: 'landing.hero' }) } }] } : { content: '页面与真实配图已完成。' };
+        const delta = textCalls === 1 ? { tool_calls: [{ index: 0, id: 'sdk-media', type: 'function', function: { name: 'request_media', arguments: JSON.stringify(options.sdkMediaRequest ?? { operation: 'image.generate', prompt: 'A blue skyline', artifactSlot: 'landing.hero' }) } }] } : { content: '页面与真实配图已完成。' };
         response.writeHead(200, { 'content-type': 'text/event-stream' });
         response.end('data: ' + JSON.stringify({ choices: [{ index: 0, delta, finish_reason: textCalls === 1 ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 10 } }) + '\n\ndata: [DONE]\n\n'); return;
       }
       if (request.url !== '/v1/images/generations') {
         response.writeHead(500, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: { message: 'Unexpected text request in media integration fixture' } })); return;
+      }
+      if (options.imageError) {
+        response.writeHead(options.imageError.status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { code: options.imageError.code, message: options.imageError.message } })); return;
       }
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ data: [{ b64_json: options.imageSize ? pngImage(...options.imageSize) : png }] }));
@@ -70,42 +76,41 @@ async function fixture(options: {
 }
 
 describe('media generation in the shared core run pipeline', () => {
-  it('sends the next supported size for an explicit minimum and persists the original requirement', async () => {
-    const { core, requests, directory } = await fixture({ imageSize: [2048, 1152], models: (baseURL) => {
-      const image = imageModel('image', baseURL);
-      image.operations!['image.generate']!.limits = { sizes: ['1672x941', '2048x1152', '2560x1440'] };
-      return [image];
-    } });
-    const output = await core.run({ runId: 'minimum-image', sessionId: 'minimum-session', prompt: '生成一张至少1920×1080的16:9图片' });
-    expect(output.artifacts).toEqual([expect.objectContaining({ width: 2048, height: 1152 })]);
-    expect(requests).toEqual([{ path: '/v1/images/generations', body: { model: 'image', prompt: '生成一张至少1920×1080的16:9图片', size: '2048x1152', n: 1, output_format: 'png' } }]);
-    const job = core.media.listJobs('minimum-image')[0];
-    expect(job.request).toMatchObject({ minSize: '1920x1080', aspectRatio: '16:9' });
+  it('passes prompt-only image requirements unchanged to the endpoint and saves its actual output', async () => {
+    const { core, requests, directory } = await fixture({ imageSize: [1672, 941] });
+    const prompt = '生成一张至少1920×1080的16:9图片';
+    const output = await core.run({ runId: 'prompt-dimensions', sessionId: 'prompt-session', prompt });
+    expect(output.artifacts).toEqual([expect.objectContaining({ width: 1672, height: 941 })]);
+    expect(requests).toEqual([{ path: '/v1/images/generations', body: { model: 'image', prompt, n: 1 } }]);
+    const job = core.media.listJobs('prompt-dimensions')[0];
+    expect(job.request).toMatchObject({ prompt });
+    expect(job.request.size).toBeUndefined();
+    expect(job.request.minSize).toBeUndefined();
+    expect(job.request.aspectRatio).toBeUndefined();
     const saved = JSON.parse(fs.readFileSync(path.join(directory, 'media', 'jobs', job.id + '.json'), 'utf8'));
-    expect(saved.request).toMatchObject({ minSize: '1920x1080', aspectRatio: '16:9' });
+    expect(saved.request).toMatchObject({ prompt });
     expect(saved.artifacts).toEqual(output.artifacts);
   });
 
-  it('keeps a compound run incomplete when a retry drops fields still required by its prompt', async () => {
-    const invoke: RunDependencies['invokeStreamed'] = async (model, _prompt, _max, onDelta, options) => {
-      const tool = options!.mediaTools!.find((candidate) => candidate.name === 'request_media')!;
-      for (const revision of [0, 1]) {
-        const args = { operation: 'image.generate', prompt: '目标画布：1920×1080，16:9。', artifactSlot: 'landing.hero', revision, ...(revision === 0 ? { size: '1920x1080', aspectRatio: '16:9' } : {}) };
-        const toolCallId = 'drop-constraints-' + revision;
-        options!.onToolEvent?.({ toolCallId, toolName: tool.name, status: 'running', args });
-        const result = await tool.execute(toolCallId, args, options!.signal, undefined, {} as never);
-        expect(result.isError).toBe(true);
-        options!.onToolEvent?.({ toolCallId, toolName: tool.name, status: 'failed', details: result.details });
-      }
-      onDelta('页面已完成。');
-      return { modelId: model.id, content: '页面已完成。', inputTokens: 25, outputTokens: 9 };
-    };
-    const { core, requests } = await fixture({ invokeStreamed: invoke });
-    const output = await core.run({ runId: 'size-required', sessionId: 'size-session', prompt: '开发一个页面并生成1920×1080背景图', includeProjectContext: false });
-    expect(output.stopReason).toBe('media_incomplete');
-    expect(output.output).toContain('尚未完整交付');
-    expect(requests).toEqual([]);
-    expect(core.media.listArtifacts('size-required')).toEqual([]);
+  it('lets an undeclared image endpoint handle explicit dimensions and feeds actual metadata back to the text model', async () => {
+    const args = { operation: 'image.generate', prompt: 'A blue skyline', artifactSlot: 'landing.hero', size: '1920x1080', aspectRatio: '16:9', minSize: '1920x1080' };
+    const { core, requests } = await fixture({ sdk: true, sdkMediaRequest: args, imageSize: [1672, 941] });
+    const output = await core.run({ runId: 'endpoint-dimensions', sessionId: 'endpoint-session', prompt: '开发一个页面并生成1920×1080背景图', includeProjectContext: false });
+    const imageRequests = requests.filter((entry) => entry.path === '/v1/images/generations');
+    expect(imageRequests).toHaveLength(1);
+    expect(imageRequests[0].body).toEqual({ model: 'image', prompt: 'A blue skyline\n\nImage output requirements:\nRequested aspect ratio: 16:9.\nRequested minimum image dimensions (width x height): 1920x1080.', size: '1920x1080', n: 1 });
+    const artifacts = output.artifacts as MediaArtifact[];
+    expect(artifacts).toEqual([expect.objectContaining({ width: 1672, height: 941, mimeType: 'image/png' })]);
+    const textRequests = requests.filter((entry) => entry.path === '/v1/chat/completions');
+    expect(textRequests).toHaveLength(2);
+    const toolMessage = textRequests[1].body.messages.find((message: any) => message.role === 'tool');
+    const toolResult = JSON.stringify(toolMessage?.content);
+    expect(toolResult).toContain(artifacts[0].id);
+    expect(toolResult).toContain('1672');
+    expect(toolResult).toContain('941');
+    expect(output.stopReason).not.toBe('media_incomplete');
+    expect(core.media.listJobs('endpoint-dimensions')[0]).toMatchObject({ status: 'succeeded', request: args, attempts: [{ status: 'succeeded' }] });
+    expect(core.media.readAsset(artifacts[0].id).bytes).toEqual(Buffer.from(pngImage(1672, 941), 'base64'));
   });
   it('publishes a single confirmation and binds execution to the reviewed media request', async () => {
     const { core, requests, events } = await fixture();
@@ -116,10 +121,23 @@ describe('media generation in the shared core run pipeline', () => {
     expect(core.plans.latest('confirmed-image')).toMatchObject({ editable: false, status: 'completed' });
   });
 
-  it('rejects conflicting explicit media parameters before any generation', async () => {
+  it('leaves differing prompt and explicit parameters for the endpoint and retains actual image format', async () => {
     const { core, requests } = await fixture();
-    await expect(core.run({ prompt: '生成1536x864的PNG图片', media: { size: '1024x1024', format: 'webp' } })).rejects.toThrow('MEDIA_CONSTRAINT_CONFLICT');
-    expect(requests).toEqual([]);
+    const output = await core.run({ prompt: '生成1536x864的PNG图片', media: { size: '1024x1024', format: 'webp' } });
+    expect(requests).toEqual([{ path: '/v1/images/generations', body: { model: 'image', prompt: '生成1536x864的PNG图片', size: '1024x1024', output_format: 'webp', n: 1 } }]);
+    expect(output.artifacts).toEqual([expect.objectContaining({ width: 1, height: 1, mimeType: 'image/png' })]);
+  });
+
+  it('reports a real endpoint parameter rejection as an incomplete required media dependency', async () => {
+    const { core, requests } = await fixture({ sdk: true, sdkMediaRequest: { operation: 'image.generate', prompt: 'A blue skyline', artifactSlot: 'landing.hero', size: '1920x1080' }, imageError: { status: 400, code: 'unsupported_size', message: 'This endpoint does not accept size 1920x1080' } });
+    const output = await core.run({ runId: 'endpoint-rejection', sessionId: 'rejected-session', prompt: '开发一个页面并生成1920×1080背景图', includeProjectContext: false });
+    expect(requests.filter((entry) => entry.path === '/v1/images/generations')).toHaveLength(1);
+    expect(requests.filter((entry) => entry.path === '/v1/chat/completions')).toHaveLength(2);
+    expect(output.stopReason).toBe('media_incomplete');
+    expect(output.output).toContain('unsupported_size');
+    expect(output.output).toContain('This endpoint does not accept size 1920x1080');
+    expect(core.media.listArtifacts('endpoint-rejection')).toEqual([]);
+    expect(core.media.listJobs('endpoint-rejection')[0]).toMatchObject({ status: 'failed', attempts: [{ status: 'failed' }] });
   });
 
   it('reports a required failed media dependency in text and skips model verification and memory extraction', async () => {
@@ -192,7 +210,8 @@ describe('media generation in the shared core run pipeline', () => {
     const artifacts = output.artifacts as MediaArtifact[];
     expect(invocation).not.toHaveBeenCalled();
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ path: '/v1/images/generations', body: { model: 'image', prompt: '生成一张海边猫咪图片', n: 1, output_format: 'png' } });
+    expect(requests[0]).toMatchObject({ path: '/v1/images/generations', body: { model: 'image', prompt: '生成一张海边猫咪图片', n: 1 } });
+    expect(requests[0].body).not.toHaveProperty('output_format');
     expect(artifacts).toHaveLength(1);
     expect(core.media.readAsset(artifacts[0].id).bytes).toEqual(Buffer.from(png, 'base64'));
     expect(core.media.listJobs('direct-image')[0]).toMatchObject({ sessionId: 'direct-session', assistantMessageId: 'direct-assistant', status: 'succeeded' });

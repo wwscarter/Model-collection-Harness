@@ -32,7 +32,7 @@ export interface RunRequest {
   operation?: 'auto' | 'text.chat' | 'image.generate' | 'video.generate';
   /** Desktop preference, scoped to text execution. */
   textModelPreferenceId?: string;
-  media?: { size?: string; minSize?: string; aspectRatio?: string; format?: 'png' | 'jpeg' | 'webp'; quality?: 'auto' | 'low' | 'medium' | 'high'; transparentBackground?: boolean; durationSeconds?: number };
+  media?: { size?: string; minSize?: string; aspectRatio?: string; format?: string; quality?: string; transparentBackground?: boolean; durationSeconds?: number };
   taskType?: string;
   complexity?: 'low' | 'medium' | 'high';
   stream?: boolean;

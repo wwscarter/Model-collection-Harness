@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-11-11
+
+- Correct the 0.3.1 image-generation policy: delegate supported dimensions, formats, quality and background behavior to the model and endpoint instead of rejecting requests against local capability declarations.
+- Remove image capability declaration controls from settings while retaining protocol, routing scores, cost estimates, timing and default format. Existing capability metadata remains compatible but no longer blocks generation.
+- Pass explicit generation parameters through, keep natural-language requirements in the prompt, and hand actual returned image metadata to the model for task assessment. Aspect-ratio and minimum-size preferences no longer select local size tiers.
+
 ## 0.3.1 — 2026-11-11
 
 ### Image dimension requirements

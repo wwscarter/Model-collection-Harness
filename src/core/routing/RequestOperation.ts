@@ -1,14 +1,6 @@
 import type { ModelOperation } from '@core/models/ModelOperations';
 
 export type RequestOperationMode = 'auto' | ModelOperation;
-export interface ExplicitMediaConstraints {
-  size?: string;
-  minSize?: string;
-  aspectRatio?: string;
-  format?: 'png' | 'jpeg' | 'webp';
-  transparentBackground?: boolean;
-  durationSeconds?: number;
-}
 const MODES: readonly string[] = ['auto', 'text.chat', 'image.generate', 'video.generate'];
 
 /** Direct media is a shortcut for one clear deliverable; compound tasks retain their agent. */
@@ -48,55 +40,4 @@ function videoIntent(text: string): boolean {
 function negated(text: string, kind: 'image' | 'video'): boolean {
   const noun = kind === 'image' ? '(?:图(?:片|像)?|照片|海报|image|picture|photo|poster)' : '(?:视频|短片|动画|video|clip|animation)';
   return new RegExp('(?:不要|不需要|无需|别|不必|禁止)[^，。；,;\n]{0,12}' + noun + '|(?:do\\s+not|don[’\x27]t|no|without)\\s+(?:(?:generate|create|make|draw|any)\\s+){0,3}' + noun, 'i').test(text);
-}
-
-/** Extract only explicit media parameters; absent preferences remain unset. */
-export function extractExplicitMediaConstraints(prompt: string): ExplicitMediaConstraints {
-  const text = prompt.toLocaleLowerCase();
-  const constraints: ExplicitMediaConstraints = {};
-  const sizes = new Set<string>(), minimumSizes = new Set<string>();
-  for (const match of text.matchAll(/(?<![\d:])([1-9]\d{1,4})\s*[x×]\s*([1-9]\d{1,4})(?!\d)/g)) {
-    const prefix = text.slice(Math.max(0, match.index! - 40), match.index);
-    const minimum = /(?:至少|不小于|不低于|最小|最低)(?:目标|图片|画布|尺寸|分辨率|为|是|的|[:：=]|\s)*$|(?:at\s+least|minimum|min\.?)(?:\s+(?:image|canvas|size|dimensions|resolution))?\s*[:=]?\s*$/i.test(prefix);
-    (minimum ? minimumSizes : sizes).add(Number(match[1]) + 'x' + Number(match[2]));
-  }
-  if (sizes.size > 1) throw new Error('请求中包含多个不同图片尺寸，请只指定一个尺寸');
-  if (sizes.size === 1) constraints.size = [...sizes][0];
-  if (minimumSizes.size > 1) throw new Error('请求中包含多个不同最小图片尺寸，请只指定一个下限');
-  if (minimumSizes.size === 1) constraints.minSize = [...minimumSizes][0];
-
-  const ratioTokens = [...text.matchAll(/(?<!\d)(\d{1,3})\s*:\s*(\d{1,3})(?!\d)/g)];
-  const knownRatios = new Set(['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '9:21']);
-  const ratios = new Set(ratioTokens.filter((match) => knownRatios.has(Number(match[1]) + ':' + Number(match[2]))
-    || /(?:比例|画幅|宽高比|aspect\s*ratio|ratio)[^，。；,;\n]{0,12}$/i.test(text.slice(Math.max(0, match.index! - 28), match.index))
-    || /^(?:比例|画幅|宽高比|aspect\s*ratio|ratio)[^，。；,;\n]{0,12}/i.test(text.slice(match.index! + match[0].length, match.index! + match[0].length + 16)))
-    .map((match) => Number(match[1]) + ':' + Number(match[2])));
-  if (ratios.size > 1) throw new Error('请求中包含多个不同画面比例，请只指定一个比例');
-  if (ratios.size === 1) constraints.aspectRatio = [...ratios][0];
-  if (constraints.size && constraints.aspectRatio) {
-    const [width, height] = constraints.size.split('x').map(Number);
-    const [ratioWidth, ratioHeight] = constraints.aspectRatio.split(':').map(Number);
-    if (Math.abs(width / height - ratioWidth / ratioHeight) >= 0.01) throw new Error('图片尺寸与画面比例不一致，请确认后重试');
-  }
-
-  const formats = new Set<'png' | 'jpeg' | 'webp'>([
-    ...(/\bpng\b|png\s*格式|格式\s*png/.test(text) ? ['png' as const] : []),
-    ...(/\b(?:jpeg|jpg)\b|jpeg\s*格式|jpg\s*格式/.test(text) ? ['jpeg' as const] : []),
-    ...(/\bwebp\b|webp\s*格式/.test(text) ? ['webp' as const] : []),
-  ]);
-  if (formats.size > 1) throw new Error('请求中包含冲突的图片格式');
-  if (formats.size === 1) constraints.format = [...formats][0];
-
-  const asksTransparent = /透明(?:背景|底)|背景透明|transparent\s+background|transparent\s+bg/.test(text);
-  const deniesTransparent = /(?:不要|不需要|无需|别|不必)[^，。；,;\n]{0,12}(?:透明(?:背景|底)|背景透明)|(?:透明(?:背景|底)|背景透明)[^，。；,;\n]{0,12}(?:不要|不需要|无需|别|不必)|(?:背景|底色)[^，。；,;\n]{0,6}(?:不要|不需要|无需|别|不必)[^，。；,;\n]{0,6}透明|(?:背景|底色|background)\s*(?:不透明|opaque)|(?:opaque\s+background|solid\s+background)/.test(text);
-  const activeTransparent = asksTransparent && !deniesTransparent;
-  if (activeTransparent) constraints.transparentBackground = true;
-  else if (deniesTransparent) constraints.transparentBackground = false;
-
-  const durations = new Set([...text.matchAll(/(?<![\d.])(\d+(?:\.\d+)?)(?:\s*[-–]\s*|\s*)(?:秒钟|秒|seconds?|secs?)(?!\w)/g)].map((match) => Number(match[1])));
-  const shortDurations = [...text.matchAll(/(?<![\d.])(\d+(?:\.\d+)?)\s*s\b/g)].map((match) => Number(match[1]));
-  for (const seconds of shortDurations) durations.add(seconds);
-  if (durations.size > 1) throw new Error('请求中包含多个不同视频时长，请只指定一个时长');
-  if (durations.size === 1) constraints.durationSeconds = [...durations][0];
-  return constraints;
 }

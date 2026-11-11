@@ -26,10 +26,12 @@ const context: MediaExecutionContext = { rootRunId: 'run-1', sessionId: 'session
 const request = { operation: 'image.generate' as const, prompt: 'A blue city skyline', artifactSlot: 'landing.hero' };
 
 describe('dynamic media model routing', () => {
-  it('selects from multiple models and hard capability constraints dominate quality', () => {
-    const high = model('high', 99); const transparent = model('transparent', 70, { operations: { 'image.generate': { protocol: 'openai-images', score: 70, limits: { transparentBackground: true, sizes: ['1536x864'], formats: ['png'] } } } });
-    expect(routeMediaRequest({ ...request, transparentBackground: true, aspectRatio: '16:9' }, [high, transparent])[0].model.id).toBe('transparent');
-    expect(routeMediaRequest(request, [high, transparent])[0].model.id).toBe('high');
+  it('ranks enabled image endpoints without requiring generation capability metadata', () => {
+    const high = model('high', 99);
+    const declared = model('declared', 70, { operations: { 'image.generate': { protocol: 'openai-images', score: 70, limits: { transparentBackground: true, sizes: ['1536x864'], formats: ['png'] } } } });
+    const candidates = routeMediaRequest({ ...request, transparentBackground: true, aspectRatio: '16:9', size: '1920x1080' }, [declared, high]);
+    expect(candidates.map((candidate) => candidate.model.id)).toEqual(['high', 'declared']);
+    expect(candidates[0].request).toMatchObject({ size: '1920x1080', aspectRatio: '16:9', transparentBackground: true });
   });
   it('routes by estimated request cost or speed without treating unknown values as zero', () => {
     const cheap = model('cheap', 20, { operations: { 'image.generate': { protocol: 'openai-images', score: 20, estimatedCostUsd: 0.01, expectedDurationMs: 10000 } } });
@@ -38,45 +40,36 @@ describe('dynamic media model routing', () => {
     expect(routeMediaRequest({ ...request, preference: 'cost' }, [unknown, fast, cheap])[0].model.id).toBe('cheap');
     expect(routeMediaRequest({ ...request, preference: 'speed' }, [unknown, cheap, fast])[0].model.id).toBe('fast');
   });
-  it('requires configured quality, dimensions and output format for explicit hard constraints', () => {
-    const candidate = model('image');
-    expect(() => routeMediaRequest({ ...request, size: '1536x864' }, [candidate])).toThrow('未声明指定尺寸');
-    expect(() => routeMediaRequest({ ...request, format: 'webp' }, [candidate])).toThrow('未声明指定格式');
-    expect(() => routeMediaRequest({ ...request, quality: 'high' }, [candidate])).toThrow('未声明指定质量');
-    candidate.operations = { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1536x864'], formats: ['webp'], qualities: ['high'] } } };
-    expect(routeMediaRequest({ ...request, size: '1536x864', format: 'webp', quality: 'high' }, [candidate])[0].request).toMatchObject({ size: '1536x864', format: 'webp', quality: 'high' });
+  it('passes explicit values even when legacy capability lists disagree', () => {
+    const candidate = model('image', 90, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1024x1024'], formats: ['png'], qualities: ['low'], transparentBackground: false } } } });
+    const input = { ...request, size: '1920x1080', minSize: '4096x4096', aspectRatio: '1:1', format: 'jpeg', quality: 'provider-quality', transparentBackground: true };
+    expect(routeMediaRequest(input, [candidate])[0].request).toMatchObject(input);
   });
-  it('selects the nearest declared size only for an explicit minimum, preserving exact sizes', () => {
-    const candidate = model('image', 80, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['2560x1440', '1672x941', '2048x1152'] } } } });
-    const routed = routeMediaRequest({ ...request, minSize: '1920x1080', aspectRatio: '16:9' }, [candidate])[0];
-    expect(routed.request.size).toBe('2048x1152');
-    expect(routed.request.minSize).toBe('1920x1080');
-    expect(routed.reason).toContain('不小于目标的最近档位 2048x1152');
-    expect(() => routeMediaRequest({ ...request, size: '1920x1080', aspectRatio: '16:9' }, [candidate])).toThrow('不支持指定精确尺寸 1920x1080');
+  it('leaves prompt requirements and parameter combinations for the model and endpoint', () => {
+    const input = { ...request, prompt: '目标画布1920×1080，或1536×864；PNG图片，比例16:9。', size: 'auto', format: 'webp' };
+    const routed = routeMediaRequest(input, [model('gpt-image')])[0].request;
+    expect(routed).toMatchObject(input);
+    expect(routed.aspectRatio).toBeUndefined();
+    expect(routed.minSize).toBeUndefined();
   });
-  it('rejects a declared size set whose largest matching ratio is still below the target', () => {
-    const candidate = model('gpt-image', 80, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1672x941', '2560x1024'] } } } });
-    expect(() => routeMediaRequest({ ...request, minSize: '1920x1080' }, [candidate])).toThrow('没有不小于目标尺寸 1920x1080');
-    expect(() => routeMediaRequest({ ...request, size: '1672x941', minSize: '1920x1080' }, [candidate])).toThrow('精确图片尺寸小于');
+  it('preserves minimum and ratio goals without choosing a declared size tier', () => {
+    const candidate = model('image', 80, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['1672x941', '2048x1152'] } } } });
+    const routed = routeMediaRequest({ ...request, minSize: '1920x1080', aspectRatio: '16:9' }, [candidate])[0].request;
+    expect(routed).toMatchObject({ minSize: '1920x1080', aspectRatio: '16:9' });
+    expect(routed.size).toBeUndefined();
   });
-  it('uses a declared default size for a matching ratio and respects explicit size limits', () => {
-    const candidate = model('default', 80, { operations: { 'image.generate': { protocol: 'openai-images', defaults: { size: '1920x1080' } } } });
-    expect(routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])[0].request.size).toBe('1920x1080');
-    candidate.operations!['image.generate']!.limits = { sizes: ['1024x1024'] };
-    expect(() => routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])).toThrow('没有满足指定比例');
+  it('uses optional defaults without treating old limits as a whitelist', () => {
+    const candidate = model('default', 80, { operations: { 'image.generate': { protocol: 'openai-images', defaults: { size: '1920x1080', quality: 'high' }, limits: { sizes: ['1024x1024'], qualities: ['low'] } } } });
+    expect(routeMediaRequest(request, [candidate])[0].request).toMatchObject({ size: '1920x1080', quality: 'high' });
+    expect(routeMediaRequest({ ...request, size: 'auto', quality: 'provider-quality' }, [candidate])[0].request).toMatchObject({ size: 'auto', quality: 'provider-quality' });
   });
-  it('does not infer gateway size support from a model name', () => {
-    const candidate = model('gpt-image', 80, { modelId: 'gpt-image-2.6-sunburst' });
-    expect(() => routeMediaRequest({ ...request, aspectRatio: '16:9' }, [candidate])).toThrow('模型与端点 → 图片生成 → 支持的尺寸');
-    expect(() => routeMediaRequest({ ...request, minSize: '1920x1080' }, [candidate])).toThrow('无法保证最小尺寸');
-  });
-  it('rejects invalid and excessive requested dimensions before routing', () => {
-    expect(() => routeMediaRequest({ ...request, size: '0x0' }, [model('image')])).toThrow('WIDTHxHEIGHT');
-    expect(() => routeMediaRequest({ ...request, size: '32768x32768' }, [model('image')])).toThrow('超出应用限制');
-    expect(() => routeMediaRequest({ ...request, minSize: '32768x32768' }, [model('image')])).toThrow('超出应用限制');
+  it('validates transport field types while delegating dimension values to the provider', () => {
+    expect(() => routeMediaRequest({ ...request, size: 1920 as never }, [model('image')])).toThrow('图片参数 size');
+    expect(() => routeMediaRequest({ ...request, size: '' }, [model('image')])).toThrow('图片参数 size');
+    expect(routeMediaRequest({ ...request, size: '99999x99999' }, [model('image')])[0].request.size).toBe('99999x99999');
   });
   it('never uses legacy text or unconfigured video models', () => {
-    expect(() => routeMediaRequest(request, [model('text', 100, { operations: undefined })])).toThrow('没有满足');
+    expect(() => routeMediaRequest(request, [model('text', 100, { operations: undefined })])).toThrow('没有启用');
     expect(() => routeMediaRequest({ ...request, operation: 'video.generate' }, [model('video', 100, { operations: { 'video.generate': { protocol: 'unconfigured' } } })])).toThrow('视频生成协议');
   });
   it('persists a required failure when no candidate exists, then safely retries the same slot if capability appears', async () => {
@@ -93,38 +86,41 @@ describe('dynamic media model routing', () => {
 });
 
 describe('media protocol and durable execution', () => {
-  it('keeps prompt dimensions when a tool retry removes structured constraints and bumps its revision', async () => {
-    const { service, fetcher } = fixture([model('gpt-image')]);
+  it('submits image tool parameters without size declarations and saves the actual response', async () => {
+    const encoded = pngImage(1672, 941);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: encoded }] })));
+    const { service, directory } = fixture([model('gpt-image')], fetcher);
     const tool = createMediaTools(service, context)[0];
-    const prompt = '生成一张风景图片。目标画布：1920×1080，16:9 横幅。';
-    for (const args of [
-      { ...request, prompt, size: '1920x1080', aspectRatio: '16:9' },
-      { ...request, prompt, revision: 1 },
-    ]) {
-      const result = await tool.execute('call', args, undefined, undefined, {} as never);
-      expect(result).toMatchObject({ isError: true, details: { code: 'MEDIA_MODEL_UNAVAILABLE', required: true } });
-    }
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(service.listJobs()).toHaveLength(2);
-    for (const job of service.listJobs()) expect(job).toMatchObject({ status: 'failed', attempts: [], request: { size: '1920x1080', aspectRatio: '16:9' } });
-  });
-  it('rejects a tool parameter that contradicts explicit prompt dimensions before generation', async () => {
-    const { service, fetcher } = fixture();
-    await expect(service.execute({ ...request, prompt: '目标画布：1920×1080', size: '1672x941' }, context)).rejects.toMatchObject({ code: 'MEDIA_CONSTRAINT_CONFLICT' });
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-  it('rejects an undersized real PNG without resubmitting or reporting a completed asset', async () => {
-    const candidate = model('wide', 90, { operations: { 'image.generate': { protocol: 'openai-images', limits: { sizes: ['2048x1152'] } } } });
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: pngImage(1672, 941) }] })));
-    const { service, directory } = fixture([candidate, { ...candidate, id: 'fallback' }], fetcher);
-    const input = { ...request, prompt: '生成至少1920×1080的16:9风景图片' };
-    await expect(service.execute(input, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN', message: expect.stringContaining('1672x941 小于要求的最小尺寸 1920x1080') });
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(service.listArtifacts(context.rootRunId)).toEqual([]);
+    const input = { ...request, prompt: '目标画布1920×1080，16:9。', size: '1920x1080', aspectRatio: '16:9', minSize: '1920x1080', format: 'webp' };
+    const result = await tool.execute('call', input, undefined, undefined, {} as never);
+    expect(result.isError).not.toBe(true);
+    expect(result.details).toMatchObject({ status: 'succeeded', artifacts: [expect.objectContaining({ width: 1672, height: 941, mimeType: 'image/png' })] });
     const [, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(options.body))).toMatchObject({ size: '2048x1152' });
-    const restored = new MediaExecutionService({ dataDir: directory, models: { getAllModels: () => [candidate] }, fetch: fetcher as typeof fetch });
-    await expect(restored.execute(input, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
+    const body = JSON.parse(String(options.body));
+    expect(body).toMatchObject({ size: '1920x1080', output_format: 'webp' });
+    expect(body.prompt).toContain(input.prompt);
+    const artifact = service.listArtifacts(context.rootRunId)[0];
+    expect(service.readAsset(artifact.id).bytes).toEqual(Buffer.from(encoded, 'base64'));
+    const restored = new MediaExecutionService({ dataDir: directory, models: { getAllModels: () => [model('gpt-image')] }, fetch: fetcher as typeof fetch });
+    expect((await restored.execute(input, context)).artifacts).toEqual([artifact]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('submits prompt and explicit parameters even when they describe different targets', async () => {
+    const { service, fetcher } = fixture();
+    const input = { ...request, prompt: '目标画布：1920×1080', size: '1672x941' };
+    await expect(service.execute(input, context)).resolves.toMatchObject({ job: { status: 'succeeded' } });
+    const [, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toMatchObject({ prompt: input.prompt, size: '1672x941' });
+  });
+  it('can retry a previously blocked size request after reloading without editing model settings', async () => {
+    const { directory, fetcher } = fixture();
+    const input = { ...request, prompt: '目标画布：1920×1080，16:9', size: '1920x1080', aspectRatio: '16:9', revision: 1 };
+    const id = 'fbe51a76-e1b3-4e0c-8633-fbb43acef3dc', now = new Date().toISOString();
+    fs.writeFileSync(path.join(directory, 'media', 'jobs', id + '.json'), JSON.stringify({ id, required: true, operation: input.operation, rootRunId: context.rootRunId, sessionId: context.sessionId, artifactSlot: input.artifactSlot, revision: 1, request: input, status: 'failed', attempts: [], artifacts: [], createdAt: now, updatedAt: now, costStatus: 'unknown', error: '未声明指定尺寸能力' }));
+    const service = new MediaExecutionService({ dataDir: directory, models: { getAllModels: () => [model('gpt-image')] }, fetch: fetcher as typeof fetch });
+    const result = await service.execute(input, context);
+    expect(result.job).toMatchObject({ id, status: 'succeeded', attempts: [expect.objectContaining({ status: 'succeeded' })] });
+    expect(result.job.error).toBeUndefined();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it('preserves gateway paths/query and refuses text endpoint addresses', () => {
@@ -136,7 +132,7 @@ describe('media protocol and durable execution', () => {
     const { service, fetcher, directory } = fixture(); const result = await service.execute(request, context);
     const [url, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toContain('/images/generations?tenant=x');
-    expect(JSON.parse(String(options.body))).toEqual({ model: 'image-a', prompt: request.prompt, n: 1, output_format: 'png' });
+    expect(JSON.parse(String(options.body))).toEqual({ model: 'image-a', prompt: request.prompt, n: 1 });
     expect(options.headers).toEqual({ 'content-type': 'application/json' });
     expect(result.artifacts[0]).toMatchObject({ kind: 'image', width: 1, height: 1, modelId: 'image-a', configurationId: 'a' });
     expect(service.readAsset(result.artifacts[0].id).bytes.equals(Buffer.from(png, 'base64'))).toBe(true);
@@ -241,12 +237,6 @@ describe('media protocol and durable execution', () => {
     const { service } = fixture([model('a', 90), model('b', 80)], fetcher);
     await expect(service.execute(request, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
     expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-  it('marks a success response unknown when returned dimensions violate the routed size', async () => {
-    const constrained = model('wide', 90, { operations: { 'image.generate': { protocol: 'openai-images', score: 90, limits: { sizes: ['1536x864'] } } } });
-    const { service } = fixture([constrained]);
-    await expect(service.execute({ ...request, aspectRatio: '16:9' }, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
-    expect(service.listJobs()[0]).toMatchObject({ status: 'unknown', error: '图片接口返回尺寸与请求不符：实际 1x1，请求 1536x864' });
   });
   it('deletes session media after active creation settles without recreating deleted assets', async () => {
     let finish!: () => void; const pending = new Promise<void>((resolve) => { finish = resolve; });

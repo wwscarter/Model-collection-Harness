@@ -1,6 +1,5 @@
 import type { ModelConfig } from '../../models/ModelConfig';
 import { MediaError, type GeneratedImage, type MediaRequest } from '../MediaTypes';
-import { sizeAtLeast } from '../MediaRouting';
 
 export class ImageProviderError extends MediaError {
   constructor(message: string, readonly safeToRetry: boolean) { super(safeToRetry ? 'MEDIA_PROVIDER_REJECTED' : 'MEDIA_RESULT_UNKNOWN', message); }
@@ -81,6 +80,55 @@ async function boundedJson(response: Response): Promise<any> {
   } finally { reader.releaseLock(); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new ImageProviderError('图片接口未返回有效 JSON；生成状态未知', false); }
 }
+function imagePrompt(request: MediaRequest): string {
+  const requirements = [
+    ...(request.aspectRatio ? ['Requested aspect ratio: ' + request.aspectRatio + '.'] : []),
+    ...(request.minSize ? ['Requested minimum image dimensions (width x height): ' + request.minSize + '.'] : []),
+  ];
+  return requirements.length ? request.prompt + '\n\nImage output requirements:\n' + requirements.join('\n') : request.prompt;
+}
+function providerErrorReason(value: unknown, model: ModelConfig): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const detail = record.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : record;
+  const message = typeof detail.message === 'string' ? detail.message : undefined;
+  const code = typeof detail.code === 'string' || typeof detail.code === 'number' ? String(detail.code) : undefined;
+  if (!message && !code) return undefined;
+  const secrets = [model.apiKey];
+  try {
+    for (const [key, secret] of new URL(model.baseURL ?? '').searchParams) {
+      if (/^(?:api[_-]?key|key|access[_-]?token|token|auth(?:orization)?|password|client[_-]?secret|signature)$/i.test(key)) secrets.push(secret);
+    }
+  } catch { /* Endpoint validation reports malformed addresses separately. */ }
+  let reason = [code, message].filter(Boolean).join(' — ');
+  for (const secret of secrets.filter(Boolean).sort((left, right) => right.length - left.length)) {
+    for (const encoded of new Set([secret, encodeURIComponent(secret)])) reason = reason.split(encoded).join('[redacted]');
+  }
+  return reason.replace(/\bBearer\s+[^\s,;"']+/gi, 'Bearer [redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}/g, '[redacted]')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+async function readProviderError(response: Response, model: ModelConfig): Promise<string | undefined> {
+  if (!response.body) return undefined;
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+  const timedOut = Symbol('error-body-timeout');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => resolve(timedOut), 2_000); });
+  // An error detail is optional: a stalled body or cancellation must not hide the known HTTP rejection.
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  try {
+    while (true) {
+      const next = await Promise.race([reader.read(), timeout]);
+      if (next === timedOut) { cancel(); return undefined; }
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > 16 * 1024) { cancel(); return undefined; }
+      chunks.push(next.value);
+    }
+    return providerErrorReason(JSON.parse(Buffer.concat(chunks).toString('utf8')), model);
+  } catch { return undefined; }
+  finally { clearTimeout(timer); reader.releaseLock(); }
+}
 export class OpenAIImagesProvider {
   constructor(private readonly fetcher: typeof fetch = fetch) {}
   async generate(model: ModelConfig, request: MediaRequest, signal?: AbortSignal): Promise<ImageGenerationResult> {
@@ -89,30 +137,24 @@ export class OpenAIImagesProvider {
     let response: Response;
     try {
       response = await this.fetcher(endpoint, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', ...(model.apiKey ? { authorization: 'Bearer ' + model.apiKey } : {}) }, signal,
-        body: JSON.stringify({ model: model.modelId, prompt: request.prompt, n: 1, output_format: request.format ?? 'png', ...(request.size ? { size: request.size } : {}), ...(request.quality ? { quality: request.quality } : {}), ...(request.transparentBackground !== undefined ? { background: request.transparentBackground ? 'transparent' : 'opaque' } : {}) }),
+        body: JSON.stringify({ model: model.modelId, prompt: imagePrompt(request), n: 1, ...(request.format ? { output_format: request.format } : {}), ...(request.size ? { size: request.size } : {}), ...(request.quality ? { quality: request.quality } : {}), ...(request.transparentBackground !== undefined ? { background: request.transparentBackground ? 'transparent' : 'opaque' } : {}) }),
       });
     } catch (error) { throw new ImageProviderError(signal?.aborted ? '图片请求已停止；上游是否生成尚未知，不能自动重新提交' : '图片提交连接中断；上游接受状态未知，请勿自动重新提交', false); }
     if (!response.ok) {
       // These statuses explicitly reject the creation request; 5xx can follow acceptance at a gateway.
       const safe = [400, 401, 403, 404, 422, 429].includes(response.status);
-      throw new ImageProviderError('图片生成接口返回 HTTP ' + response.status, safe);
+      const reason = await readProviderError(response, model);
+      throw new ImageProviderError('图片生成接口返回 HTTP ' + response.status + (reason ? '：' + reason : ''), safe);
     }
     const length = Number(response.headers.get('content-length'));
     if (Number.isFinite(length) && length > 48 * 1024 * 1024) throw new ImageProviderError('图片响应过大', false);
     const data = await boundedJson(response);
-    if (data?.error) throw new ImageProviderError('图片接口返回错误，生成状态需确认', false);
+    if (data?.error) {
+      const reason = providerErrorReason(data, model);
+      throw new ImageProviderError('图片接口返回错误，生成状态需确认' + (reason ? '：' + reason : ''), false);
+    }
     if (!Array.isArray(data?.data) || data.data.length !== 1) throw new ImageProviderError('图片接口未按一次一张的请求返回图片数据，不能以文字代替成功结果', false);
     const images = data.data.map((item: any) => decodeGeneratedImage(item?.b64_json)) as GeneratedImage[];
-    for (const image of images) {
-      if (request.format && image.extension !== request.format) throw new ImageProviderError('图片接口返回格式与请求不符', false);
-      const actualSize = image.width + 'x' + image.height;
-      if (request.minSize && !sizeAtLeast(actualSize, request.minSize)) throw new ImageProviderError('图片接口返回尺寸 ' + actualSize + ' 小于要求的最小尺寸 ' + request.minSize, false);
-      if (request.size && request.size !== actualSize) throw new ImageProviderError('图片接口返回尺寸与请求不符：实际 ' + actualSize + '，请求 ' + request.size, false);
-      if (request.aspectRatio) {
-        const [widthRatio, heightRatio] = request.aspectRatio.split(':').map(Number);
-        if (!widthRatio || !heightRatio || Math.abs(image.width / image.height - widthRatio / heightRatio) > 0.01) throw new ImageProviderError('图片接口返回比例与请求不符', false);
-      }
-    }
     return { images, usage: normalizeUsage(data.usage) };
   }
 }

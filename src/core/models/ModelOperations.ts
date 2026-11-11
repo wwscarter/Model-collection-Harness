@@ -1,22 +1,21 @@
 /** Operations are executable capabilities; task scores alone never grant them. */
 export type ModelOperation = 'text.chat' | 'image.generate' | 'video.generate';
 export type OperationProtocol = 'text' | 'openai-images' | 'unconfigured';
-export type ImageFormat = 'png' | 'jpeg' | 'webp';
-export type ImageQuality = 'auto' | 'low' | 'medium' | 'high';
 
 export interface OperationConfig {
   protocol: OperationProtocol;
   score?: number;
   estimatedCostUsd?: number;
   expectedDurationMs?: number;
-  limits?: { sizes?: string[]; formats?: ImageFormat[]; qualities?: ImageQuality[]; transparentBackground?: boolean; maxDurationSeconds?: number };
-  defaults?: { size?: string; quality?: ImageQuality; format?: ImageFormat };
+  /** Legacy metadata retained for configuration compatibility; it does not gate image routing. */
+  limits?: { sizes?: string[]; formats?: string[]; qualities?: string[]; transparentBackground?: boolean; maxDurationSeconds?: number };
+  /** Provider-defined generation values are forwarded without a local capability whitelist. */
+  defaults?: { size?: string; quality?: string; format?: string };
   pricing?: { inputTextPerMillion?: number; inputImagePerMillion?: number; outputImagePerMillion?: number };
 }
 export type ModelOperations = Partial<Record<ModelOperation, OperationConfig>>;
 type OperationsModel = { operations?: ModelOperations };
 const OPERATIONS: ModelOperation[] = ['text.chat', 'image.generate', 'video.generate'];
-const FORMATS: ImageFormat[] = ['png', 'jpeg', 'webp'];
 
 /** Missing metadata is the legacy text contract. Explicit metadata never adds text implicitly. */
 export function getModelOperations(model: OperationsModel): ModelOperations {
@@ -49,21 +48,16 @@ export function validateModelOperations(value: unknown): asserts value is ModelO
     if (config.limits !== undefined) {
       const limits = object(config.limits, ['sizes', 'formats', 'qualities', 'transparentBackground', 'maxDurationSeconds'], '操作限制');
       strings(limits.sizes, '尺寸');
-      if (Array.isArray(limits.sizes) && !limits.sizes.every(validImageSize)) throw new Error('尺寸列表须为有效的 WIDTHxHEIGHT');
-      strings(limits.formats, '输出格式', FORMATS);
-      strings(limits.qualities, '图片质量', ['auto', 'low', 'medium', 'high']);
+      strings(limits.formats, '输出格式');
+      strings(limits.qualities, '图片质量');
       if (limits.transparentBackground !== undefined && typeof limits.transparentBackground !== 'boolean') throw new Error('透明背景支持须为布尔值');
       number(limits.maxDurationSeconds, '视频时长上限', 1);
     }
     if (config.defaults !== undefined) {
       const defaults = object(config.defaults, ['size', 'quality', 'format'], '操作默认参数');
-      if (defaults.size !== undefined && !validImageSize(defaults.size)) throw new Error('默认尺寸须为有效的 WIDTHxHEIGHT');
-      if (defaults.quality !== undefined && !['auto', 'low', 'medium', 'high'].includes(String(defaults.quality))) throw new Error('默认质量无效');
-      if (defaults.format !== undefined && !FORMATS.includes(defaults.format as ImageFormat)) throw new Error('默认格式无效');
-      const limits = config.limits as OperationConfig['limits'];
-      if (defaults.size !== undefined && limits?.sizes && !limits.sizes.includes(defaults.size as string)) throw new Error('默认尺寸超出操作限制');
-      if (defaults.format !== undefined && limits?.formats && !limits.formats.includes(defaults.format as ImageFormat)) throw new Error('默认格式超出操作限制');
-      if (defaults.quality !== undefined && limits?.qualities && !limits.qualities.includes(defaults.quality as ImageQuality)) throw new Error('默认质量超出操作限制');
+      string(defaults.size, '默认尺寸');
+      string(defaults.quality, '默认质量');
+      string(defaults.format, '默认格式');
     }
     if (config.pricing !== undefined) {
       const pricing = object(config.pricing, ['inputTextPerMillion', 'inputImagePerMillion', 'outputImagePerMillion'], '媒体费率');
@@ -81,12 +75,10 @@ function object(value: unknown, allowed: readonly string[], label: string): Reco
 function number(value: unknown, label: string, min: number, max = Number.MAX_VALUE): void {
   if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max)) throw new Error(label + '无效');
 }
-function validImageSize(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^[1-9]\d{1,4}x[1-9]\d{1,4}$/.test(value)) return false;
-  const [width, height] = value.split('x').map(Number);
-  return width <= 32768 && height <= 32768 && width * height <= 100_000_000;
+function string(value: unknown, label: string): void {
+  if (value !== undefined && (typeof value !== 'string' || !value.trim() || value.length > 100)) throw new Error(label + '无效');
 }
-function strings(value: unknown, label: string, allowed?: readonly string[]): void {
+function strings(value: unknown, label: string): void {
   if (value === undefined) return;
-  if (!Array.isArray(value) || !value.length || value.length > 100 || value.some((item) => typeof item !== 'string' || !item.trim() || item.length > 100 || (allowed && !allowed.includes(item))) || new Set(value).size !== value.length) throw new Error(label + '列表无效');
+  if (!Array.isArray(value) || !value.length || value.length > 100 || value.some((item) => typeof item !== 'string' || !item.trim() || item.length > 100) || new Set(value).size !== value.length) throw new Error(label + '列表无效');
 }

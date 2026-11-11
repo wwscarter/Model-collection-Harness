@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { supportsOperation } from '@core/models/ModelOperations';
 import { snapshotModel } from '@core/models/ModelSnapshot';
-import { resolveMediaRequest, routeMediaRequest } from '@core/media/MediaRouting';
+import { normalizeMediaRequest, routeMediaRequest } from '@core/media/MediaRouting';
 import type { MediaOperation, MediaRequest } from '@core/media/MediaTypes';
 import { RunBudget } from '@core/routing/RunBudget';
 import { DEFAULT_ROUTING_SETTINGS } from '@core/routing/RoutingSettings';
@@ -17,7 +17,7 @@ export async function executeDirectMedia(request: RunRequest, operation: MediaOp
   const sessionId = request.sessionId ?? request.taskId ?? randomUUID(), runId = request.runId ?? randomUUID();
   const assistantMessageId = request.assistantMessageId ?? runId + '-assistant';
   const identity = { sessionId, taskId: request.taskId ?? sessionId, runId, assistantMessageId };
-  const input: MediaRequest = resolveMediaRequest({ ...request.media, operation, prompt: request.prompt, artifactSlot: 'direct' });
+  const input: MediaRequest = normalizeMediaRequest({ ...request.media, operation, prompt: request.prompt, artifactSlot: 'direct' });
   const allModels = deps.models.getAllModels();
   if (request.pinnedModelId && !allModels.some((model) => model.id === request.pinnedModelId && supportsOperation(model, operation))) throw new Error('MODEL_OPERATION_MISMATCH：指定模型不支持本轮媒体操作');
   const candidates = routeMediaRequest(input, allModels.filter((model) => (!request.pinnedModelId || model.id === request.pinnedModelId) && deps.quota.isAvailable(model)));
