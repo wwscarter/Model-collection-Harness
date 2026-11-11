@@ -71,10 +71,10 @@ describe('ToolRuntime', () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it('ends a tool wait when the tool ignores its timeout signal', async () => {
-    const wrapped = new ToolRuntime({ cwd: process.cwd(), policies: { slow: { name: 'slow', maxResultChars: 100, timeoutMs: 20 } } })
-      .wrap([tool('slow', async () => new Promise(() => undefined))])[0];
-    await expect(wrapped.execute(...args)).rejects.toThrow('执行超时');
+  it('does not impose a per-tool deadline', async () => {
+    const wrapped = new ToolRuntime({ cwd: process.cwd(), policies: { slow: { name: 'slow', maxResultChars: 100 } } })
+      .wrap([tool('slow', async () => { await new Promise((resolve) => setTimeout(resolve, 40)); return result('finished'); })])[0];
+    await expect(wrapped.execute(...args)).resolves.toMatchObject({ content: [{ text: 'finished' }] });
   });
 
   it('honors cancellation before serving a cached result', async () => {

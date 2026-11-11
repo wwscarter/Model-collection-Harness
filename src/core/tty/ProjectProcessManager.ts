@@ -56,7 +56,6 @@ interface ProcessState {
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_CONCURRENT_PROCESSES = 16;
 const MAX_FINISHED_PROCESSES = 50;
-const DEFAULT_TIMEOUT_MS = 30_000;
 const BACKGROUND_STARTUP_MS = 1_000;
 
 function realDirectory(root: string): string {
@@ -109,10 +108,12 @@ export class ProjectProcessManager {
     if (this.list().filter((process) => process.running).length >= MAX_CONCURRENT_PROCESSES) throw new Error('运行中的命令过多，请先停止不再使用的进程');
     const cwd = realDirectory(request.projectRoot);
     const background = request.background === true;
-    const maximum = background ? 10_000 : 120_000;
-    const requestedTimeout = request.timeoutMs ?? (background ? BACKGROUND_STARTUP_MS : DEFAULT_TIMEOUT_MS);
+    // Foreground commands run until they exit or the user cancels. Only the
+    // background startup observation window is time based, and it never ends
+    // the process.
+    const requestedTimeout = request.timeoutMs ?? BACKGROUND_STARTUP_MS;
     if (!Number.isFinite(requestedTimeout) || requestedTimeout <= 0) throw new Error('timeoutMs 必须是正数');
-    const timeoutMs = Math.min(maximum, Math.max(50, Math.floor(requestedTimeout)));
+    const timeoutMs = Math.min(10_000, Math.max(50, Math.floor(requestedTimeout)));
     const state = this.start(command, cwd, background, request.shell);
     if (request.sessionId) state.info.sessionId = request.sessionId;
     const cancel = () => { state.info.cancelled = true; this.terminate(state); };
@@ -130,7 +131,6 @@ export class ProjectProcessManager {
           state.info.error = '后台命令在启动观察期间已退出，没有持续运行的进程';
         }
       } else {
-        timer = setTimeout(() => { state.info.timedOut = true; this.terminate(state); }, timeoutMs);
         await state.completion;
       }
       return this.snapshot(state);

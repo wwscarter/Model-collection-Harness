@@ -254,7 +254,6 @@ describe('media generation in the shared core run pipeline', () => {
     expect(output.artifacts).toEqual(core.media.listArtifacts('compound-image'));
     expect(output.artifacts).toHaveLength(1);
     expect(output.modelUsed).toMatchObject({ id: 'executor' });
-    expect(output.metrics).toMatchObject({ totalCost: 0.03 });
     expect(core.media.listJobs('compound-image')).toHaveLength(1);
   });
 
@@ -267,17 +266,12 @@ describe('media generation in the shared core run pipeline', () => {
     expect(invocation).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['unknown estimate', undefined, /预估费用/],
-    ['over budget', 0.3, /成本预算/],
-  ] as const)('rejects %s before sending a paid creation request', async (_name, estimate, message) => {
-    const { core, requests } = await fixture({ models: (baseURL) => [imageModel('image', baseURL, 80, estimate)] });
-    // Passing undefined as an argument uses the fixture default, so remove the estimate explicitly.
-    if (estimate === undefined) core.registry.updateModel('image', { operations: { 'image.generate': { protocol: 'openai-images', score: 80 } } });
-    await expect(core.run({ runId: 'budget-image', prompt: '生成一张海报', includeProjectContext: false })).rejects.toThrow(message);
-    expect(requests).toEqual([]);
-    expect(core.media.listArtifacts('budget-image')).toEqual([]);
-    expect(core.observability.getTrace('budget-image')?.run.status).toBe('failed');
+  it('generates images without a local cost estimate or media budget', async () => {
+    const { core, requests } = await fixture({ models: (baseURL) => [imageModel('image', baseURL, 80, undefined)] });
+    core.registry.updateModel('image', { operations: { 'image.generate': { protocol: 'openai-images', score: 80 } } });
+    const output = await core.run({ runId: 'budget-image', prompt: '生成一张海报', includeProjectContext: false });
+    expect(requests).toHaveLength(1);
+    expect(output.artifacts).toHaveLength(1);
   });
 
   it('does not generate in plan-only mode and still returns a reviewable plan', async () => {

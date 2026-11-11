@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 — 2026-11-11
+
+### Remove execution caps
+
+- Remove the tool-loop limits (32 rounds, 80 calls, 320k result characters). A run now continues until tools and model calls finish or the user stops it.
+- Remove per-tool deadlines, foreground command deadlines (30 s default / 120 s maximum), web fetch/search client timeouts, and the run-budget time limit. Cancellation, process kill escalation, output truncation and context-window handling remain.
+- Image generation no longer participates in the run cost budget: no per-image estimate requirement, no reservation or abort. Text model calls keep the configurable USD budget; the "最长运行时间" setting is removed from the UI.
+
 ## 0.4.0 — 2026-11-11
 
 ### No default agent wall-clock limit

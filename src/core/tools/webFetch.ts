@@ -192,8 +192,7 @@ export async function fetchWebPage(rawUrl: string, options: WebFetchOptions = {}
   const resolveHost = options.resolveHost ?? defaultResolve;
   const maxBytes = options.maxBytes ?? 2_000_000;
   const maxChars = options.maxChars ?? 20_000;
-  const timeout = AbortSignal.timeout(options.timeoutMs ?? 20_000);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   let url = await awaitWithSignal(assertPublicUrl(rawUrl, resolveHost), signal);
   let response: Response | undefined;

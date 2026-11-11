@@ -166,31 +166,6 @@ describe('media protocol and durable execution', () => {
     await expect(restored.execute(request, context)).rejects.toMatchObject({ code: 'MEDIA_RESULT_UNKNOWN' });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it('rejects missing cost estimate before an external call and respects quota and strict overrides', async () => {
-    const a = model('a', 90, { operations: { 'image.generate': { protocol: 'openai-images' } } });
-    const { service, fetcher } = fixture([a, model('b', 80)]); const budget = { reserve: vi.fn(), settle: vi.fn() };
-    await expect(service.execute(request, { ...context, budget, modelId: 'a' })).rejects.toMatchObject({ code: 'MEDIA_ESTIMATE_REQUIRED' }); expect(fetcher).not.toHaveBeenCalled();
-    const result = await service.execute({ ...request, revision: 1 }, { ...context, quota: { isAvailable: (m) => m.id === 'b', reserve: vi.fn(), record: vi.fn() } });
-    expect(result.job.configurationId).toBe('b');
-  });
-  it('does not claim unknown billing is zero and releases explicitly rejected reservations', async () => {
-    const { service } = fixture(); const budget = { reserve: vi.fn(), settle: vi.fn() };
-    const result = await service.execute(request, { ...context, budget });
-    expect(budget.reserve).toHaveBeenCalledWith(expect.any(String), 0.03);
-    expect(budget.settle).toHaveBeenCalledWith(expect.any(String), undefined);
-    expect(result.job.costStatus).toBe('estimated'); expect(result.job.actualCostUsd).toBeUndefined();
-  });
-  it('skips unknown cost candidates and reroutes to an affordable compatible candidate before sending', async () => {
-    const unknown = model('unknown', 100, { operations: { 'image.generate': { protocol: 'openai-images', score: 100 } } });
-    const expensive = model('expensive', 90, { operations: { 'image.generate': { protocol: 'openai-images', score: 90, estimatedCostUsd: 0.8 } } });
-    const cheap = model('cheap', 70, { operations: { 'image.generate': { protocol: 'openai-images', score: 70, estimatedCostUsd: 0.02 } } });
-    const { service, fetcher } = fixture([unknown, expensive, cheap]);
-    const reserve = vi.fn((_id: string, estimate?: number) => { if (estimate! > 0.1) throw new BudgetExceededError('媒体费用超过剩余预算'); });
-    const result = await service.execute(request, { ...context, budget: { reserve, settle: vi.fn() } });
-    expect(result.job.attempts.map((attempt) => [attempt.configurationId, attempt.status])).toEqual([['expensive', 'failed'], ['cheap', 'succeeded']]);
-    expect(result.job.configurationId).toBe('cheap'); expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body)).model).toBe('image-cheap');
-  });
   it('rejects non-image responses and retains unknown state instead of accepting text', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from('not an image').toString('base64') }] })));
     const { service } = fixture(undefined, fetcher);

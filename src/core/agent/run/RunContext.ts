@@ -69,7 +69,6 @@ export interface RunContext {
   runBudget: RunBudget;
   noteBudgetLimit(message: string): void;
   deadline: AbortController;
-  deadlineTimer: ReturnType<typeof setTimeout>;
   pauseDeadline(): () => void;
   /** Pause the run budget while external media generation waits (reference counted). */
   holdDeadline(): () => void;
@@ -375,30 +374,17 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   ctx.trace = ctx.deps.traces.startRun({ runId: ctx.runId, sessionId: ctx.sessionId, taskType: ctx.request.taskType, complexity: ctx.request.complexity });
   ctx.startedAt = Date.now();
   ctx.budgetLimits = ctx.deps.routingSettings?.budget ?? DEFAULT_ROUTING_SETTINGS.budget!;
-  const { maxDurationMs } = ctx.budgetLimits;
-  ctx.runBudget = new RunBudget({ maxCost: ctx.budgetLimits.maxCostUsd, maxDurationMs });
+  ctx.runBudget = new RunBudget({ maxCost: ctx.budgetLimits.maxCostUsd, maxDurationMs: Number.MAX_SAFE_INTEGER });
   ctx.plans = ctx.deps.plans ?? new PlanController();
   ctx.noteBudgetLimit = (message: string) => { ctx.budgetLimit = { code: 'BUDGET_EXCEEDED', message, estimatedCost: ctx.totalCost, maxCostUsd: ctx.budgetLimits.maxCostUsd }; };
   ctx.trace.setAttributes({ budget: { ...ctx.budgetLimits, pricingBasis: 'configured-token-rates' } });
   ctx.deadline = new AbortController();
-  ctx.deadlineTimer = setTimeout(() => ctx.deadline.abort(new BudgetExceededError(`本轮运行已超过 ${Math.round(maxDurationMs / 1000)} 秒预算`)), maxDurationMs);
-  ctx.deadlineTimer.unref?.();
-  ctx.pauseDeadline = () => {
-    ctx.runBudget.assertAvailable();
-    clearTimeout(ctx.deadlineTimer); ctx.runBudget.pause();
-    let resumed = false;
-    return () => {
-      if (resumed) return; resumed = true; ctx.runBudget.resume();
-      const remaining = Math.max(1, maxDurationMs - ctx.runBudget.snapshot().elapsedMs);
-      ctx.deadlineTimer = setTimeout(() => ctx.deadline.abort(new BudgetExceededError('本轮运行已超过时间预算')), remaining);
-      ctx.deadlineTimer.unref?.();
-    };
-  };
+  // No wall-clock deadline: a run ends when tools and model calls finish or the
+  // user stops it. The cost budget still applies to text calls.
+  ctx.pauseDeadline = () => { ctx.runBudget.assertAvailable(); return () => undefined; };
   ctx.holdDeadline = createPauseGroup(ctx.pauseDeadline);
   ctx.controller = { signal: AbortSignal.any([ctx.deps.controller.signal, ctx.deadline.signal]) };
-  ctx.cancellationError = () => ctx.deps.controller.signal.aborted
-    ? new Error('任务已取消')
-    : new BudgetExceededError(`本轮运行已超过 ${Math.round(maxDurationMs / 1000)} 秒预算`);
+  ctx.cancellationError = () => new Error('任务已取消');
   ctx.projectRoot = ctx.deps.projectContext.getRoot();
   return ctx;
 }

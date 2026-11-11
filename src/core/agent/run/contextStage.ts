@@ -27,7 +27,6 @@ export async function contextStage(ctx: RunContext): Promise<void> {
     const failure = ctx.controller.signal.aborted ? ctx.cancellationError() : error;
     const message = failure instanceof Error ? failure.message : String(failure);
     contextSpan.end({ status: 'failed', error: message });
-    clearTimeout(ctx.deadlineTimer);
     throw failure;
   }
   const contextSections = [ctx.request.prompt];

@@ -150,10 +150,6 @@ export class MediaExecutionService {
       if (context.modelId && !allModels.some((model) => model.id === context.modelId)) throw new MediaError('MODEL_OPERATION_MISMATCH', '指定的媒体模型不存在');
       let candidates = routeMediaRequest(request, context.modelId ? allModels.filter((model) => model.id === context.modelId) : allModels).filter((candidate) => context.quota?.isAvailable(candidate.model) ?? true);
       if (!candidates.length) throw new MediaError('MEDIA_QUOTA_EXHAUSTED', '兼容的媒体模型当前达到配额，请稍后重试');
-      if (context.budget) {
-        candidates = candidates.filter((candidate) => candidate.estimatedCostUsd !== undefined);
-        if (!candidates.length) throw new MediaError('MEDIA_ESTIMATE_REQUIRED', '请先在模型操作设置中配置单次预估费用，才能检查本轮媒体预算');
-      }
       this.publish(job, context);
       const promise = this.perform(job, candidates, context);
       this.inFlight.set(job.id, promise);
@@ -171,16 +167,13 @@ export class MediaExecutionService {
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index]; const model = candidate.model;
       const attemptIndex = job.attempts.length;
-      const reservationId = job.id + ':' + attemptIndex;
-      let reserved = false, sent = false;
+      let sent = false;
       const attempt = { configurationId: model.id, modelId: model.modelId, protocol: 'openai-images', modelSnapshot: snapshotModel(model), startedAt: new Date().toISOString(), status: 'submitting' as const, reason: candidate.reason };
       job.attempts.push(attempt);
       job.modelId = model.modelId; job.configurationId = model.id;
       job.estimatedCostUsd = candidate.estimatedCostUsd;
       try {
         context.signal?.throwIfAborted();
-        if (context.budget && candidate.estimatedCostUsd === undefined) throw new MediaError('MEDIA_ESTIMATE_REQUIRED', '请先在模型操作设置中配置单次预估费用，才能检查本轮媒体预算');
-        context.budget?.reserve(reservationId, candidate.estimatedCostUsd); reserved = true;
         context.quota?.reserve(model);
         this.publish(job, context);
         sent = true;
@@ -197,15 +190,12 @@ export class MediaExecutionService {
           finally { fs.rmSync(temporary, { force: true }); }
           job.artifacts.push({ id, kind: 'image', mimeType: image.mimeType, fileName, width: image.width, height: image.height, modelId: model.modelId, configurationId: model.id, jobId: job.id });
         }
-        context.budget?.settle(reservationId, usageEstimateUsd);
-        reserved = false;
         delete job.error;
         job.status = 'succeeded'; job.attempts[attemptIndex].status = 'succeeded'; this.publish(job, context);
         return { job: clone(job), artifacts: clone(job.artifacts) };
       } catch (error) {
         const safe = !sent || (error instanceof ImageProviderError && error.safeToRetry) || (error instanceof MediaError && error.code === 'MEDIA_INVALID_ENDPOINT');
         const message = error instanceof Error ? error.message : String(error);
-        if (reserved) context.budget?.settle(reservationId, safe ? 0 : undefined);
         job.attempts[attemptIndex].status = safe ? 'failed' : 'unknown'; job.attempts[attemptIndex].error = message;
         job.error = message;
         const canTryAnother = sent || error instanceof BudgetExceededError || (error instanceof Error && (error as { code?: string }).code === 'BUDGET_EXCEEDED') || (error instanceof MediaError && error.code === 'MEDIA_INVALID_ENDPOINT') || Boolean(context.quota && !context.quota.isAvailable(model));

@@ -3,7 +3,7 @@ import type { ToolRuntime } from '@core/tools/ToolRuntime';
 import { awaitWithSignal } from '@core/tools/awaitWithSignal';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import { summarizeToolResult, textOf } from './AgentHistory';
-import { MAX_TOOL_ROUNDS, type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type RunUsageState } from './AgentRuntimeTypes';
+import { type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type RunUsageState } from './AgentRuntimeTypes';
 
 export async function driveAgentSession(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime, usageState: RunUsageState, options: Pick<AgentRuntimeOptions, 'maxToolRounds'> & { beforeTurn?: () => Promise<void>; assertReady?: () => void }): Promise<AgentRunResult> {
   let content = '';
@@ -14,7 +14,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
   let limitDescription = '';
   const toolLabels = new Map<string, string>();
   const completedTools: string[] = [];
-  const maxToolRounds = Math.max(1, options.maxToolRounds ?? MAX_TOOL_ROUNDS);
+  const maxToolRounds = options.maxToolRounds ?? Number.POSITIVE_INFINITY;
   const finishTurn = session.agent.finishTurn;
   const beforeToolCall = session.agent.beforeToolCall;
   session.agent.beforeToolCall = async (call, signal) => {

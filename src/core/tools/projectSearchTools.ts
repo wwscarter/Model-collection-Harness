@@ -30,9 +30,8 @@ async function scopedFiles(root: string, requestedPath: string | undefined, glob
   };
 }
 
-function deadline(signal: AbortSignal | undefined, options: ProjectSearchOptions): AbortSignal {
-  const timeout = AbortSignal.timeout(Math.max(1, Math.min(10_000, options.timeoutMs ?? 10_000)));
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+function deadline(signal: AbortSignal | undefined): AbortSignal {
+  return signal ?? new AbortController().signal;
 }
 
 /** Pi-compatible schemas/output with a local, filtered search backend. */
@@ -43,7 +42,7 @@ export function createProjectSearchTools(root: string, options: ProjectSearchOpt
     promptSnippet: 'Find project files by glob before reading them',
     parameters: createFindToolDefinition(root).parameters,
     async execute(_id, input, signal) {
-      const combined = deadline(signal, options);
+      const combined = deadline(signal);
       combined.throwIfAborted();
       const collection = await scopedFiles(root, input.path, input.pattern, combined);
       combined.throwIfAborted();
@@ -64,7 +63,7 @@ export function createProjectSearchTools(root: string, options: ProjectSearchOpt
     parameters: createGrepToolDefinition(root).parameters,
     async execute(_id, input, signal) {
       if (!input.pattern || input.pattern.length > 2_000) throw new Error('搜索模式需为 1–2000 个字符');
-      const combined = deadline(signal, options);
+      const combined = deadline(signal);
       combined.throwIfAborted();
       const collection = await scopedFiles(root, input.path, input.glob, combined);
       const request: ProjectSearchRequest = {

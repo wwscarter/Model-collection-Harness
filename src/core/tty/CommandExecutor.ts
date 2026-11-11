@@ -48,9 +48,7 @@ interface ExecutionState {
 
 type SpawnFunction = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe']; windowsHide: boolean; detached: boolean }) => ChildProcess;
 
-const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 200_000;
-const MAX_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 1_000_000;
 
 /**
@@ -188,7 +186,6 @@ export class CommandExecutor {
     };
     const state: ExecutionState = { id, child, promise, listeners, cancel };
     this.executions.set(id, state);
-    timer = setTimeout(() => { if (!settled) { timedOut = true; terminate(); } }, normalized.timeoutMs);
     return { id, promise };
   }
 
@@ -211,7 +208,7 @@ export class CommandExecutor {
     this.executions.clear();
   }
 
-  private normalizeRequest(request: CommandExecutionRequest): Required<Pick<CommandExecutionRequest, 'command' | 'projectRoot' | 'cwd' | 'approved' | 'timeoutMs' | 'maxOutputBytes'>> & Pick<CommandExecutionRequest, 'env'> {
+  private normalizeRequest(request: CommandExecutionRequest): Required<Pick<CommandExecutionRequest, 'command' | 'projectRoot' | 'cwd' | 'approved' | 'maxOutputBytes'>> & Pick<CommandExecutionRequest, 'env'> {
     const command = request.command?.trim();
     if (!command) throw new Error('Command cannot be empty');
     if (command.length > 8_192) throw new Error('Command is too long');
@@ -222,11 +219,9 @@ export class CommandExecutor {
     const cwd = this.realDirectory(cwdInput, 'Working directory');
     const relative = path.relative(projectRoot, cwd);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Working directory must stay inside the project root');
-    const rawTimeout = request.timeoutMs === undefined || !Number.isFinite(request.timeoutMs) ? DEFAULT_TIMEOUT_MS : request.timeoutMs;
     const rawOutput = request.maxOutputBytes === undefined || !Number.isFinite(request.maxOutputBytes) ? DEFAULT_MAX_OUTPUT_BYTES : request.maxOutputBytes;
-    const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.floor(rawTimeout)));
     const maxOutputBytes = Math.min(MAX_OUTPUT_BYTES, Math.max(1_024, Math.floor(rawOutput)));
-    return { command, projectRoot, cwd, approved: request.approved === true, timeoutMs, maxOutputBytes, env: request.env };
+    return { command, projectRoot, cwd, approved: request.approved === true, maxOutputBytes, env: request.env };
   }
 
   private realDirectory(value: string, label: string): string {

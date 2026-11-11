@@ -65,7 +65,6 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
     try { deps.checkpoints?.finish(ctx.runId, ctx.traceStatus === 'cancelled' ? 'cancelled' : ctx.traceStatus === 'failed' ? 'failed' : 'completed'); }
     catch (error) { console.warn('[checkpoint] 记录任务结束失败', error instanceof Error ? error.message : error); }
     await endHooks(ctx);
-    clearTimeout(ctx.deadlineTimer);
     ctx.finishTrace(ctx.traceStatus, ctx.traceError);
   }
   ctx.emit('session:completed', output);

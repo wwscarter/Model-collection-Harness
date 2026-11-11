@@ -132,10 +132,9 @@ describe('project grep and find', () => {
     await expect(invoke('grep', { pattern: '[' })).rejects.toThrow();
   });
 
-  it('honors cancellation and a short ordinary-search deadline', async () => {
+  it('honors cancellation', async () => {
     const controller = new AbortController();
     controller.abort(new Error('cancelled by test'));
     await expect(invoke('grep', { pattern: 'sum' }, { rgPath: null }, controller.signal)).rejects.toThrow('cancelled by test');
-    await expect(invoke('grep', { pattern: 'sum' }, { rgPath: null, timeoutMs: 1 })).rejects.toThrow();
   });
 });

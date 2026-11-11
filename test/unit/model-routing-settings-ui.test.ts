@@ -184,18 +184,17 @@ describe('model routing settings', () => {
     expect(container.querySelector('.endpoint-list-foot')!.textContent).not.toContain('关键词规则就绪');
   });
 
-  it('loads legacy budget defaults and saves USD and minute inputs in the shared settings', async () => {
+  it('loads legacy budget defaults and saves the USD limit in the shared settings', async () => {
     await render();
     expect(container.querySelector<HTMLInputElement>('[aria-label="每轮预估费用上限（USD）"]')!.value).toBe('0.25');
-    expect(container.querySelector<HTMLInputElement>('[aria-label="最长运行时间（分钟）"]')!.value).toBe('10');
     expect(button('保存路由设置').disabled).toBe(true);
     await input('每轮预估费用上限（USD）', '1.5');
-    await input('最长运行时间（分钟）', '25');
     expect(set).not.toHaveBeenCalled();
     await submit();
-    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ budget: { maxCostUsd: 1.5, maxDurationMs: 1_500_000 } }));
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ budget: { maxCostUsd: 1.5, maxDurationMs: 600_000 } }));
     expect(container.textContent).toContain('与供应商账单可能不同');
-    expect(container.textContent).toContain('单次请求结束时可能超过估算上限');
+    expect(container.textContent).toContain('生图不参与此预算');
+    expect(container.textContent).toContain('任务默认没有时间上限');
   });
 
   it('explains unchanged preset rates on an edited model without changing prices', async () => {

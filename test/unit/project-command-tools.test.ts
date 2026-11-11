@@ -107,11 +107,11 @@ describe('project command tools', () => {
     expect(result.details).toMatchObject({ running: false, status: 'stopped', cancelled: true, timedOut: false });
   });
 
-  it('ends foreground commands at their deadline and marks the timeout', async () => {
-    const result = await call('run_command', { command: node('setInterval(() => {}, 1000)'), timeoutMs: 100 });
-    expect(result.isError).toBe(true);
-    expect(result.details).toMatchObject({ running: false, status: 'failed', timedOut: true, cancelled: false });
-    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('超时') });
+  it('runs foreground commands until they finish without a deadline', async () => {
+    const result = await call('run_command', { command: node('setTimeout(() => console.log("done"), 300)'), timeoutMs: 100 });
+    expect(result.isError).toBe(false);
+    expect(result.details).toMatchObject({ status: 'completed', running: false, exitCode: 0, timedOut: false });
+    expect(result.details).toMatchObject({ output: expect.stringContaining('done') });
   });
 
   it.each([0, 3])('does not report a background startup that exited as a running server (exit %s)', async (exitCode) => {

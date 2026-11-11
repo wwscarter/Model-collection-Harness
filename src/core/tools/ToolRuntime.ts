@@ -10,8 +10,6 @@ export interface ToolPolicy {
   /** Tool name. */
   name: string;
   maxResultChars: number;
-  /** Wrapper deadline; omit for tools with their own timeout (run_command). */
-  timeoutMs?: number;
   /** Cached only when > 0 and the tool is read-only. */
   cacheTtlMs?: number;
 }
@@ -19,19 +17,19 @@ export interface ToolPolicy {
 const DEFAULT_POLICY: ToolPolicy = { name: '*', maxResultChars: 12_000 };
 
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
-  web_search: { name: 'web_search', maxResultChars: 8_000, timeoutMs: 35_000, cacheTtlMs: 5 * 60_000 },
-  web_fetch: { name: 'web_fetch', maxResultChars: 12_000, timeoutMs: 25_000, cacheTtlMs: 10 * 60_000 },
-  read: { name: 'read', maxResultChars: 12_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
-  ls: { name: 'ls', maxResultChars: 8_000, timeoutMs: 5_000, cacheTtlMs: 30_000 },
-  grep: { name: 'grep', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
-  find: { name: 'find', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
-  code_symbols: { name: 'code_symbols', maxResultChars: 8_000, timeoutMs: 10_000, cacheTtlMs: 30_000 },
+  web_search: { name: 'web_search', maxResultChars: 8_000, cacheTtlMs: 5 * 60_000 },
+  web_fetch: { name: 'web_fetch', maxResultChars: 12_000, cacheTtlMs: 10 * 60_000 },
+  read: { name: 'read', maxResultChars: 12_000, cacheTtlMs: 30_000 },
+  ls: { name: 'ls', maxResultChars: 8_000, cacheTtlMs: 30_000 },
+  grep: { name: 'grep', maxResultChars: 8_000, cacheTtlMs: 30_000 },
+  find: { name: 'find', maxResultChars: 8_000, cacheTtlMs: 30_000 },
+  code_symbols: { name: 'code_symbols', maxResultChars: 8_000, cacheTtlMs: 30_000 },
   // Local indexing has bounded per-request deadlines and inherits the run cancellation.
   code_search: { name: 'code_search', maxResultChars: 8_000, cacheTtlMs: 30_000 },
-  write: { name: 'write', maxResultChars: 2_000, timeoutMs: 10_000 },
-  edit: { name: 'edit', maxResultChars: 2_000, timeoutMs: 10_000 },
-  process_status: { name: 'process_status', maxResultChars: 8_000, timeoutMs: 5_000 },
-  process_list: { name: 'process_list', maxResultChars: 8_000, timeoutMs: 5_000 },
+  write: { name: 'write', maxResultChars: 2_000 },
+  edit: { name: 'edit', maxResultChars: 2_000 },
+  process_status: { name: 'process_status', maxResultChars: 8_000 },
+  process_list: { name: 'process_list', maxResultChars: 8_000 },
 };
 
 interface CacheEntry { expiresAt: number; result: ToolResult; bytes: number; }
@@ -88,8 +86,8 @@ export class ToolRuntime {
 
   constructor(options: ToolRuntimeOptions) {
     this.cwd = options.cwd;
-    this.maxCalls = options.maxCalls ?? 80;
-    this.maxResultCharsTotal = options.maxResultCharsTotal ?? 320_000;
+    this.maxCalls = options.maxCalls ?? Number.POSITIVE_INFINITY;
+    this.maxResultCharsTotal = options.maxResultCharsTotal ?? Number.POSITIVE_INFINITY;
     this.maxCacheBytes = Math.max(0, options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES);
     this.now = options.now ?? (() => Date.now());
     this.policies = { ...TOOL_POLICIES, ...(options.policies ?? {}) };
@@ -135,8 +133,7 @@ export class ToolRuntime {
     const policy = this.policy(tool.name);
     const params = args[1];
     const [toolCallId, callParams, signal, onUpdate, context] = args;
-    const timeout = policy.timeoutMs ? AbortSignal.timeout(policy.timeoutMs) : undefined;
-    const combined = signal && timeout ? AbortSignal.any([signal, timeout]) : signal ?? timeout;
+    const combined = signal;
     const key = policy.cacheTtlMs ? await awaitWithSignal(this.cacheKey(tool.name, params), combined) : '';
     if (key) {
       const hit = this.cache.get(key);
@@ -149,7 +146,6 @@ export class ToolRuntime {
       result = await awaitWithSignal(tool.execute(toolCallId, callParams, combined, onUpdate, context), combined);
       combined?.throwIfAborted();
     } catch (error) {
-      if (timeout?.aborted && !signal?.aborted) throw new Error(`工具 ${tool.name} 执行超时`);
       throw error;
     } finally {
       // Commands may have changed files even when they report failure.

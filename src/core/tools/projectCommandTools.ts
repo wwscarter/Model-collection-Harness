@@ -27,7 +27,7 @@ export function createProjectCommandTools(projectRoot: string, manager: ProjectP
       parameters: Type.Object({
         command: Type.String({ minLength: 1, maxLength: 8192, description: 'Command passed to the platform shell. Working directory is the selected project.' }),
         background: Type.Optional(Type.Boolean({ description: 'Keep a long-lived server running after the tool returns. Default false.' })),
-        timeoutMs: Type.Optional(Type.Integer({ minimum: 50, maximum: 120000, description: 'Foreground deadline (default 30000, maximum 120000 ms). In background mode, startup observation period (default 1000, maximum 10000 ms); a returned background process has no automatic lifetime timeout.' })),
+        timeoutMs: Type.Optional(Type.Integer({ minimum: 50, maximum: 10000, description: 'Background startup observation period in milliseconds (default 1000, maximum 10000); it never ends the process and foreground commands have no deadline.' })),
       }),
       async execute(_id, params, signal) {
         const policy = options.commandPolicy?.(params.command);

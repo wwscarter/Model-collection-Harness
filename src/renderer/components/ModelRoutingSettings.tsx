@@ -156,9 +156,8 @@ export function ModelRoutingSettings({ onRoutingStatusChange }: ModelRoutingSett
         <p className="runtime-hint">规划、摘要、复核、记忆提取和连接测试默认使用与执行模型相同的协议实现；端点兼容异常时可切回旧版。</p>
         <div className="form-grid two routing-budget-fields">
           <label className="field"><span className="field-label">每轮预估费用上限（USD）</span><input className="input mono" aria-label="每轮预估费用上限（USD）" type="number" required min={0.01} max={1000} step={0.01} value={draft.budget?.maxCostUsd ?? 0.25} onChange={(event) => update((value) => ({ ...value, budget: { maxDurationMs: value.budget?.maxDurationMs ?? 600_000, maxCostUsd: Number(event.target.value) } }))} /></label>
-          <label className="field"><span className="field-label">最长运行时间（分钟）</span><input className="input mono" aria-label="最长运行时间（分钟）" type="number" required min={1} max={60} step={1} value={(draft.budget?.maxDurationMs ?? 600_000) / 60_000} onChange={(event) => update((value) => ({ ...value, budget: { maxCostUsd: value.budget?.maxCostUsd ?? 0.25, maxDurationMs: Number(event.target.value) * 60_000 } }))} /></label>
         </div>
-        <p className="runtime-hint">按模型配置单价累计估算规划、工具循环、执行和归档等调用费用，与供应商账单可能不同；单次请求结束时可能超过估算上限。保存后从下一轮生效。</p>
+        <p className="runtime-hint">按模型配置单价累计估算规划、模型调用、执行和归档等文本调用费用，与供应商账单可能不同；生图不参与此预算。任务默认没有时间上限。保存后从下一轮生效。</p>
         <div className="routing-config-footer"><button type="submit" className="button primary small" disabled={!dirty}>{busy === 'saving' ? '正在保存…' : '保存路由设置'}</button><span>{dirty ? '有未保存的修改' : '当前配置已保存'}</span></div>
       </fieldset>
       {status && <div className="routing-config-status" aria-label="分类服务状态"><div className="routing-status-heading"><strong>{currentProbe ? '草稿检测' : '已保存配置'} · {routingStatusLabel(status)}</strong>{!currentProbe && <button type="button" className="icon-button" aria-label="刷新分类服务状态" disabled={Boolean(busy)} onClick={() => void refreshStatus()}><RefreshCw size={12} className={busy === 'refreshing' ? 'spinning' : ''} /></button>}</div>{status.lastError && <span>{status.lastError}</span>}{status.lastLatencyMs !== undefined && <small>最近耗时 {Math.round(status.lastLatencyMs)} ms</small>}</div>}

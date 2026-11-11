@@ -22,7 +22,7 @@ function model(id: string): ModelConfig {
 }
 
 describe('RunCoordinator limited revision', () => {
-  it.each(['budget_limit', 'tool_limit', 'length', 'failure', 'deadline', 'cancel'] as const)('retains paid work and accurate usage when optional processing ends with %s', async (stopReason) => {
+  it.each(['budget_limit', 'tool_limit', 'length', 'failure', 'cancel'] as const)('retains paid work and accurate usage when optional processing ends with %s', async (stopReason) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-revision-budget-'));
     const original = model('executor');
     const reviser = model('reviser');
@@ -40,7 +40,7 @@ describe('RunCoordinator limited revision', () => {
       models, observability, quota: new ModelQuota(observability), memory, summaries, growth: new GrowthEngine(), codeAuditor: new CodeAuditor(),
       traces: new TraceRecorder(traceStore), auditLog: new AuditLog(path.join(directory, 'audit.jsonl')), controller: new AbortController(),
       projectContext: { getRoot: () => undefined, getContextAsync: async () => undefined },
-      routingSettings: { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' }, utilityModelId: reviewer.id, ...(stopReason === 'deadline' ? { budget: { maxCostUsd: 0.25, maxDurationMs: 250 } } : {}) },
+      routingSettings: { ...structuredClone(DEFAULT_ROUTING_SETTINGS), planning: { mode: 'off' }, utilityModelId: reviewer.id, ...{} },
       routing: new RoutingPolicyEngine(new AgentRouter(models), { version: 1, defaults: { strategy: 'single' }, rules: [
         { id: 'escalate', enabled: true, priority: 1, when: {}, then: { primaryModelId: original.id, strategy: 'escalate', fallbackModelIds: [reviser.id] } },
       ] }),
@@ -53,7 +53,7 @@ describe('RunCoordinator limited revision', () => {
       },
       createProvider: (current) => ({ modelId: current.id, invoke: async (_prompt, options) => {
         if (stopReason === 'cancel') deps.controller.abort();
-        if (stopReason === 'deadline' || stopReason === 'cancel') {
+        if (stopReason === 'cancel') {
           return await new Promise<never>((_resolve, reject) => {
             const abort = () => reject(options?.signal?.reason ?? new Error('cancelled'));
             options?.signal?.addEventListener('abort', abort, { once: true });
@@ -72,11 +72,6 @@ describe('RunCoordinator limited revision', () => {
         return;
       }
       const output = await pending;
-      if (stopReason === 'deadline') {
-        expect(output).toMatchObject({ output: originalAnswer, stopReason: 'budget_limit', modelUsed: { id: original.id }, metrics: { inputTokens: 100, outputTokens: 20, totalCost: expect.closeTo(0.0014, 8) }, budgetLimit: { code: 'BUDGET_EXCEEDED' } });
-        expect(calls).toEqual([original.id]);
-        return;
-      }
       expect(calls).toEqual([original.id, reviser.id]);
       const expectedStop = stopReason === 'failure' ? 'stop' : stopReason;
       expect(output).toMatchObject({ output: originalAnswer, stopReason: expectedStop, modelUsed: { id: original.id }, verification: { revised: false }, metrics: { inputTokens: 180, outputTokens: 35, totalCost: expect.closeTo(0.0025, 8), stopReason: expectedStop } });

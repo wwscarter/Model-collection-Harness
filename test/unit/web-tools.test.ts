@@ -34,24 +34,25 @@ describe('Bing search provider', () => {
     expect(results).toHaveLength(1);
   });
 
-  it('times out a stalled host and tries the fallback', async () => {
+  it('tries the next host when one rejects', async () => {
     const hosts: string[] = [];
-    const provider = new BingSearchProvider(async (input, init) => {
+    const provider = new BingSearchProvider(async (input) => {
       hosts.push(new URL(input).hostname);
       if (hosts.length > 1) return new Response(bingHtml);
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
-      });
-    }, ['cn.bing.com', 'www.bing.com'], 20);
+      return new Response('bad gateway', { status: 502 });
+    }, ['cn.bing.com', 'www.bing.com']);
     await expect(provider.search('release notes')).resolves.toHaveLength(2);
     expect(hosts).toEqual(['cn.bing.com', 'www.bing.com']);
   });
 
-  it('reports a timeout when all search hosts stall', async () => {
+  it('honours caller cancellation without a client-side deadline', async () => {
     const provider = new BingSearchProvider(async (_input, init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
-    }), ['cn.bing.com'], 20);
-    await expect(provider.search('release notes')).rejects.toThrow('联网搜索超时');
+    }), ['cn.bing.com']);
+    const controller = new AbortController();
+    const pending = provider.search('release notes', { signal: controller.signal });
+    controller.abort(new Error('cancelled by user'));
+    await expect(pending).rejects.toThrow('cancelled by user');
   });
 
   it('cancels a search without trying another host', async () => {

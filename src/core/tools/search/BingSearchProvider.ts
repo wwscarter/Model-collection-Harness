@@ -51,15 +51,13 @@ export class BingSearchProvider implements SearchProvider {
   constructor(
     private readonly fetchImpl: FetchLike = (input, init) => fetch(input, init),
     private readonly hosts = ['cn.bing.com', 'www.bing.com'],
-    private readonly timeoutMs = 15_000,
   ) {}
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const count = Math.min(Math.max(options.count ?? 8, 1), 20);
     let lastError: unknown;
     for (const host of this.hosts) {
-      const timeout = AbortSignal.timeout(this.timeoutMs);
-      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+      const signal = options.signal ?? new AbortController().signal;
       try {
         signal.throwIfAborted();
         const url = `https://${host}/search?q=${encodeURIComponent(query)}&count=${count}&form=QBLH`;
@@ -74,7 +72,7 @@ export class BingSearchProvider implements SearchProvider {
         lastError = new Error('Bing 没有返回可解析的结果');
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        lastError = timeout.aborted ? new Error('联网搜索超时，请稍后重试') : error;
+        lastError = error;
       }
     }
     throw lastError instanceof Error ? lastError : new Error('搜索失败');
