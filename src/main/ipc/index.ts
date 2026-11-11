@@ -17,6 +17,9 @@ import { register as registerSkills } from './skillsIpc';
 import { register as registerToolTrust } from './toolTrustIpc';
 import { register as registerMcp } from './mcpIpc';
 import { register as registerMedia } from './mediaIpc';
+import { register as registerFiles } from './filesIpc';
+import { register as registerProcesses } from './processesIpc';
+import { register as registerCheckpoints } from './checkpointsIpc';
 
 export function registerHandlers(ctx: MainContext): void {
   registerModel(ctx);
@@ -37,4 +40,7 @@ export function registerHandlers(ctx: MainContext): void {
   registerToolTrust(ctx);
   registerMcp(ctx);
   registerMedia(ctx);
+  registerFiles(ctx);
+  registerProcesses(ctx);
+  registerCheckpoints(ctx);
 }

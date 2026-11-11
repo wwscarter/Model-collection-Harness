@@ -5,6 +5,9 @@ import type { ApprovalDecision, ApprovalMode, ToolApprovalRequest } from '@core/
 import type { VerifyCommand } from '@core/verify/VerificationTypes';
 import type { ModelStorage } from '@core/storage/ModelStorage';
 import type { SessionStorage } from '@core/storage/SessionStorage';
+import type { FileHistoryStore } from '@core/storage/FileHistoryStore';
+import type { OperationAuditLog } from '@core/audit/OperationAuditLog';
+import type { RunCheckpointStore } from '@core/storage/RunCheckpointStore';
 import type { ProjectStorage } from '@core/storage/ProjectStorage';
 import type { ModelRegistry } from '@core/models/ModelRegistry';
 import type { GrowthEngine } from '@core/growth/GrowthEngine';
@@ -85,6 +88,9 @@ export interface CoreServices {
   workspaceRoot: string;
   storage: ModelStorage;
   sessionStorage: SessionStorage;
+  fileHistory: FileHistoryStore;
+  operationAudit: OperationAuditLog;
+  checkpoints: RunCheckpointStore;
   projectStorage: ProjectStorage;
   registry: ModelRegistry;
   growth: GrowthEngine;

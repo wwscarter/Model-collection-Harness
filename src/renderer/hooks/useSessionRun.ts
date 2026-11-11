@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { RunTrace, SessionMetrics, BudgetLimitNotice } from '../types';
+import type { RunTrace, SessionMetrics, BudgetLimitNotice, ProcessSummary } from '../types';
 import { type ChatMessage, type ChatAgentMessage, historyForModel, preparePendingTurn, setLatestAssistantDuration, settleAssistantTools, settleAssistantActivity, stripAssistantProcess, type ToolCallUpdate, updateAssistantAgent, updateAssistantMedia, updateAssistantAttribution, mergeAssistantAgents, upsertAssistantAgentTool, upsertAssistantTool } from '../sessionMessages';
 import { normalizeExecutionAttempts, type ExecutionAttempt } from '@core/agent/RunActivity';
 import { completeSessionMetrics, type SessionRunTiming } from '../sessionMetrics';
@@ -49,6 +49,7 @@ export function useSessionRun() {
   const [completionNotice, setCompletionNotice] = useState(false);
   const [projectReloadKey, setProjectReloadKey] = useState(0);
   const [liveTrace, setLiveTrace] = useState<RunTrace>();
+  const [canceledProcesses, setCanceledProcesses] = useState<ProcessSummary[]>([]);
   const currentRunIdRef = useRef<string | undefined>(undefined);
   const finishedMessageIdsRef = useRef(new Set<string>());
   const finishMessage = (messageId: string) => {
@@ -292,7 +293,14 @@ export function useSessionRun() {
     if (!runningSessionId) return;
     cancelRequestedRef.current = true;
     try { await window.amd?.sessions.cancel(runningSessionId); }
-    catch (cause) { setSessionError({ sessionId: runningSessionId, message: errorMessage(cause) }); }
+    catch (cause) { setSessionError({ sessionId: runningSessionId, message: errorMessage(cause) }); return; }
+    // Background services outlive the run by design; offer one explicit choice
+    // instead of leaking them or killing a dev server the user wants to keep.
+    try {
+      const started = await window.amd?.processes.list(undefined, runningSessionId) ?? [];
+      const alive = started.filter((process) => process.running);
+      if (alive.length) setCanceledProcesses(alive);
+    } catch { /* Listing is best effort; the run is already cancelled. */ }
   };
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (shouldSubmitPromptKey(event.nativeEvent)) {
@@ -306,7 +314,7 @@ export function useSessionRun() {
 
   return {
     ...state, completionNotice, setCompletionNotice, projectReloadKey, setProjectReloadKey,
-    liveTrace, liveElapsedMs, execute, cancelRun, handleKeyDown,
+    liveTrace, liveElapsedMs, execute, cancelRun, handleKeyDown, canceledProcesses, setCanceledProcesses,
     verificationMode, setVerificationMode, currentVerification: state.currentSessionId ? verificationEvents[state.currentSessionId] : undefined,
     sessionRules, setSessionRules,
     ...plans, planningMode, setPlanningMode,

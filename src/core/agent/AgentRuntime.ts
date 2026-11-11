@@ -3,6 +3,7 @@ import { supportsOperation } from '@core/models/ModelOperations';
 import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
 import { SearchProviderRegistry } from '@core/tools/search';
 import { ToolRuntime } from '@core/tools/ToolRuntime';
+import { combineFileChangeRecorders, type FileChangeRecorder } from '@core/tools/fileChanges';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import {
   createAgentSession,
@@ -22,7 +23,8 @@ import { toPiModel } from './modelMapping';
 import { buildSystemPrompt } from './systemPrompt';
 
 import { trimHistory } from './AgentHistory';
-import { RUN_TIMEOUT_MS, type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, type ChatTurn, type ResourceSummary } from './AgentRuntimeTypes';
+import type { AgentRunRequest, AgentRunResult, AgentRuntimeOptions, ChatTurn, ResourceSummary } from './AgentRuntimeTypes';
+import { createRunDeadline, type RunDeadline } from './RunDeadline';
 import { driveAgentSession } from './AgentSessionDriver';
 import { installUsageAccounting } from './AgentUsage';
 import { prepareRulesPrompt } from './AgentRules';
@@ -143,13 +145,13 @@ export class AgentRuntime {
     return loader;
   }
 
-  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean, projectAccess: 'read' | 'write' = 'write'): ToolDefinition[] {
+  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean, projectAccess: 'read' | 'write' = 'write', fileChanges?: FileChangeRecorder, identity?: { runId?: string; sessionId?: string }): ToolDefinition[] {
     if (!enableTools) return [];
     const tools = [
       createWebSearchTool(this.search) as unknown as ToolDefinition,
       createWebFetchTool() as unknown as ToolDefinition,
-      ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir] }),
-      ...(this.options.extraTools?.({ cwd, projectRoot }) ?? []),
+      ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir], fileChanges }),
+      ...(this.options.extraTools?.({ cwd, projectRoot, ...identity }) ?? []),
     ];
     return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'process_status', 'process_list'].includes(tool.name)) : tools;
   }
@@ -177,27 +179,48 @@ export class AgentRuntime {
     if (!supportsOperation(request.model, 'text.chat')) throw new Error('该模型不支持文本 Agent 调用');
     validateSessionRules(request.sessionRules);
     if (request.sessionRules?.trim() && !request.rulesLoader) throw new Error('会话规则服务不可用');
-    const timeout = AbortSignal.timeout(this.options.runTimeoutMs ?? RUN_TIMEOUT_MS);
-    const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+    // No wall-clock limit by default: tools and model calls end by succeeding or
+    // failing, and the user can stop the run at any time. `runTimeoutMs` stays as
+    // an explicit opt-in for tests and headless callers.
+    const deadline = this.options.runTimeoutMs ? createRunDeadline(this.options.runTimeoutMs) : undefined;
+    const signal = deadline ? (request.signal ? AbortSignal.any([request.signal, deadline.signal]) : deadline.signal) : request.signal;
     try {
-      signal.throwIfAborted();
-      return await this.runSession({ ...request, signal });
+      signal?.throwIfAborted();
+      return await this.runSession({ ...request, ...(signal ? { signal } : {}) }, deadline);
     } catch (error) {
       if (request.signal?.aborted) throw new Error('任务已取消');
-      if (timeout.aborted) throw new Error('任务执行超时，请缩小任务范围后重试');
+      if (deadline?.signal.aborted) throw new Error('任务执行超时，请缩小任务范围后重试');
       throw error;
+    } finally {
+      deadline?.dispose();
     }
   }
 
-  private async runSession(request: AgentRunRequest): Promise<AgentRunResult> {
+  /** Image generation is a real network wait; paused time is not a runaway loop. */
+  private static holdDeadline(tools: ToolDefinition[], deadline: RunDeadline): ToolDefinition[] {
+    return tools.map((tool) => ({
+      ...tool,
+      execute: async (...args: Parameters<ToolDefinition['execute']>) => {
+        deadline.hold();
+        try { return await tool.execute(...args); }
+        finally { deadline.release(); }
+      },
+    })) as ToolDefinition[];
+  }
+
+  private async runSession(request: AgentRunRequest, deadline?: RunDeadline): Promise<AgentRunResult> {
     const enableTools = request.enableTools !== false;
     const cwd = request.projectRoot ?? this.options.defaultCwd;
     const { runtime, mapping, piModel } = await this.resolveModel(request.model);
     const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
-    const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
+    const recorders: FileChangeRecorder[] = [];
+    if (this.options.fileHistory && request.runId) recorders.push(this.options.fileHistory.recorder({ runId: request.runId, ...(request.sessionId ? { sessionId: request.sessionId } : {}), projectRoot: request.projectRoot ?? cwd }));
+    if (this.options.operationAudit && request.runId) recorders.push(this.options.operationAudit.fileRecorder({ runId: request.runId, ...(request.sessionId ? { sessionId: request.sessionId } : {}), actor: 'agent' }));
+    const fileChanges = recorders.length ? combineFileChangeRecorders(recorders) : undefined;
+    const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess, fileChanges, { runId: request.runId, sessionId: request.sessionId });
     // Media permissions are independent of project write access. Tools are host-bound.
-    if (enableTools && request.mediaTools) rawTools.push(...request.mediaTools);
+    if (enableTools && request.mediaTools) rawTools.push(...(deadline ? AgentRuntime.holdDeadline(request.mediaTools, deadline) : request.mediaTools));
     if (enableTools && request.projectAccess !== 'read' && request.planTool) rawTools.push(request.planTool);
     const toolRuntime = new ToolRuntime({
       cwd,

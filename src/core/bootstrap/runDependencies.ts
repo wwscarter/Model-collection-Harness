@@ -19,7 +19,7 @@ export function createCoreRunDependencies(ctx: CoreServices, controller: AbortCo
     models: ctx.registry, routing: ctx.routingPolicy, routingSettings: ctx.routingService.getConfiguration().settings,
     onClassification: (observation) => ctx.routingLearning.observe(observation),
     quota: ctx.modelQuota, traces: ctx.traceRecorder, observability: ctx.observability, growth: ctx.growth,
-    codeAuditor: ctx.codeAuditor, auditLog: ctx.auditLog, memory: ctx.memoryStore, summaries: ctx.sessionStorage,
+    codeAuditor: ctx.codeAuditor, auditLog: ctx.auditLog, checkpoints: ctx.checkpoints, memory: ctx.memoryStore, summaries: ctx.sessionStorage,
     projectContext, controller, plans: ctx.plans,
     ...(ctx.options.createProvider ? { createProvider: ctx.options.createProvider } : {}),
     invokeStreamed: ctx.options.invokeStreamed ?? (async (model, prompt, maxTokens, onDelta, options = {}) => {
@@ -29,7 +29,7 @@ export function createCoreRunDependencies(ctx: CoreServices, controller: AbortCo
       const result = await ctx.agentRuntime.run({
         model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim,
         maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens), enableTools: options.enableTools !== false,
-        projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
+        projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, runId: options.runId, sessionId: options.sessionId,
         sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded, hookRunner: options.hookRunner, planTool: options.planTool, mediaTools: options.mediaTools,
         onToolEvent(event) {
           if (['write', 'edit'].includes(event.toolName)) {

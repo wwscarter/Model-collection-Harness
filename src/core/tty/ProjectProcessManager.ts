@@ -6,6 +6,8 @@ import { createSandboxPolicy, sandboxFailureNotice, wrapCommand, type SandboxMet
 
 export interface ProjectCommandRequest {
   projectRoot: string;
+  /** Session that started the process; used by the UI to offer cleanup after cancel. */
+  sessionId?: string;
   command: string;
   background?: boolean;
   /** Foreground execution deadline, or background startup observation period. */
@@ -17,6 +19,7 @@ export interface ProjectCommandRequest {
 
 export interface ProjectProcessSnapshot {
   id: string;
+  sessionId?: string;
   processId: string;
   pid?: number;
   command: string;
@@ -90,14 +93,19 @@ export class ProjectProcessManager {
   private readonly processes = new Map<string, ProcessState>();
   private disposed = false;
   private readonly sandboxPolicy?: SandboxPolicyResolver;
+  private readonly onAudit?: (event: { command: string; cwd: string; sessionId?: string; background: boolean; status: ProjectProcessSnapshot['status']; exitCode: number | null }) => void;
 
-  constructor(options: { sandboxPolicy?: SandboxPolicyResolver } = {}) { this.sandboxPolicy = options.sandboxPolicy; }
+  constructor(options: { sandboxPolicy?: SandboxPolicyResolver; onAudit?: (event: { command: string; cwd: string; sessionId?: string; background: boolean; status: ProjectProcessSnapshot['status']; exitCode: number | null }) => void } = {}) {
+    this.sandboxPolicy = options.sandboxPolicy;
+    this.onAudit = options.onAudit;
+  }
 
   async run(request: ProjectCommandRequest): Promise<ProjectProcessSnapshot> {
     if (this.disposed) throw new Error('进程管理器已关闭');
     if (request.signal?.aborted) throw new Error('命令已取消');
     const command = request.command?.trim();
     if (!command || command.length > 8_192) throw new Error('命令不能为空且不能超过 8192 个字符');
+    if (request.sessionId !== undefined && (typeof request.sessionId !== 'string' || !request.sessionId || request.sessionId.length > 200)) throw new Error('会话 ID 无效');
     if (this.list().filter((process) => process.running).length >= MAX_CONCURRENT_PROCESSES) throw new Error('运行中的命令过多，请先停止不再使用的进程');
     const cwd = realDirectory(request.projectRoot);
     const background = request.background === true;
@@ -106,6 +114,7 @@ export class ProjectProcessManager {
     if (!Number.isFinite(requestedTimeout) || requestedTimeout <= 0) throw new Error('timeoutMs 必须是正数');
     const timeoutMs = Math.min(maximum, Math.max(50, Math.floor(requestedTimeout)));
     const state = this.start(command, cwd, background, request.shell);
+    if (request.sessionId) state.info.sessionId = request.sessionId;
     const cancel = () => { state.info.cancelled = true; this.terminate(state); };
     request.signal?.addEventListener('abort', cancel, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -218,6 +227,8 @@ export class ProjectProcessManager {
     if (state.killTimer) clearTimeout(state.killTimer);
     this.signalTree(state, 'SIGKILL');
     state.finish();
+    try { this.onAudit?.({ command: state.info.command, cwd: state.info.cwd, ...(state.info.sessionId ? { sessionId: state.info.sessionId } : {}), background: state.info.background, status: state.info.status, exitCode: state.info.exitCode }); }
+    catch (error) { console.warn('[operation-audit] 记录命令执行失败', error instanceof Error ? error.message : error); }
     this.prune();
   }
 

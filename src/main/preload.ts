@@ -83,6 +83,7 @@ const amdApi = {
     setAutoExtract: (enabled: boolean) => ipcRenderer.invoke('memory:set-auto-extract', enabled),
   },
   verifyAuditLog: () => ipcRenderer.invoke('audit:verify'),
+  operationAudit: (limit?: number) => ipcRenderer.invoke('audit:operations', limit),
   project: {
     current: () => ipcRenderer.invoke('project:current'),
     select: (root?: string) => ipcRenderer.invoke('project:select', root),
@@ -130,6 +131,18 @@ const amdApi = {
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     execute: (input: unknown) => ipcRenderer.invoke('session:execute', input),
     cancel: (taskId: string) => ipcRenderer.invoke('session:cancel', taskId),
+  },
+  checkpoints: {
+    latest: (sessionId: string) => ipcRenderer.invoke('checkpoints:latest', sessionId),
+    acknowledge: (runId: string) => ipcRenderer.invoke('checkpoints:acknowledge', runId),
+  },
+  processes: {
+    list: (projectRoot?: string, sessionId?: string) => ipcRenderer.invoke('processes:list', projectRoot, sessionId),
+    stop: (processId: string, projectRoot?: string) => ipcRenderer.invoke('processes:stop', processId, projectRoot),
+  },
+  files: {
+    changes: (runId: string) => ipcRenderer.invoke('files:changes', runId),
+    restore: (runId: string, sessionId?: string) => ipcRenderer.invoke('files:restore', runId, sessionId),
   },
   agent: {
     skills: {

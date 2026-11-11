@@ -26,6 +26,8 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
   const operation = resolveRequestOperation(request.prompt, request.operation);
   if (operation !== 'text.chat') return executeDirectMedia(request, operation, deps, emit);
   const ctx = createRunContext(request, deps, emit);
+  try { deps.checkpoints?.start({ runId: ctx.runId, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}), prompt: request.prompt }); }
+  catch (error) { console.warn('[checkpoint] 记录任务开始失败', error instanceof Error ? error.message : error); }
   let output: Record<string, unknown>;
   try {
     await contextStage(ctx);
@@ -60,6 +62,8 @@ export async function executeRun(request: RunRequest, deps: RunDependencies, emi
     if (ctx.runPlan && ctx.runPlan.status !== 'cancelled') ctx.plans.status(ctx.runId, ctx.traceStatus === 'cancelled' ? 'cancelled' : 'failed', (plan) => ctx.emit('session:plan', plan));
     throw failure;
   } finally {
+    try { deps.checkpoints?.finish(ctx.runId, ctx.traceStatus === 'cancelled' ? 'cancelled' : ctx.traceStatus === 'failed' ? 'failed' : 'completed'); }
+    catch (error) { console.warn('[checkpoint] 记录任务结束失败', error instanceof Error ? error.message : error); }
     await endHooks(ctx);
     clearTimeout(ctx.deadlineTimer);
     ctx.finishTrace(ctx.traceStatus, ctx.traceError);

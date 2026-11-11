@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Tooltip } from 'antd';
 import { Activity, ArrowUpRight, CheckCheck, Clock3, Coins, GitBranch, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { DashboardSnapshot, RunTrace } from '../types';
+import { OperationAuditPanel } from '../components/OperationAuditPanel';
 import '../styles/monitoring.css';
 
 type Range = '24h' | '7d' | '30d';
@@ -39,7 +40,7 @@ export function MonitoringPage({ liveTrace, onOpenRuns }: MonitoringPageProps) {
   return <section className="monitoring-page monitoring-overview" aria-label="运行监测" aria-busy={loading}>
     <header className="monitoring-header">
       <div><span className="monitoring-kicker">运行概览</span><h1>运行监测</h1><p>查看所选时间范围内的任务质量、模型调用和预估成本。</p></div>
-      <div className="monitoring-actions"><div className="monitoring-range ant-btn-group" role="group" aria-label="统计范围">{(Object.entries(rangeLabels) as Array<[Range, string]>).map(([value, label]) => <Button key={value} type={range === value ? 'primary' : 'default'} autoInsertSpace={false} aria-pressed={range === value} onClick={() => setRange(value)}>{label}</Button>)}</div><Tooltip title="刷新运行监测"><Button type="text" className="icon-button" aria-label="刷新运行监测" loading={loading} icon={<RefreshCw size={15} />} onClick={() => void load()} /></Tooltip></div>
+      <div className="monitoring-actions"><OperationAuditPanel /><div className="monitoring-range ant-btn-group" role="group" aria-label="统计范围">{(Object.entries(rangeLabels) as Array<[Range, string]>).map(([value, label]) => <Button key={value} type={range === value ? 'primary' : 'default'} autoInsertSpace={false} aria-pressed={range === value} onClick={() => setRange(value)}>{label}</Button>)}</div><Tooltip title="刷新运行监测"><Button type="text" className="icon-button" aria-label="刷新运行监测" loading={loading} icon={<RefreshCw size={15} />} onClick={() => void load()} /></Tooltip></div>
     </header>
     {error && <div className="monitoring-error" role="alert"><TriangleAlert size={15} /><span>{error}</span><Button size="small" onClick={() => void load()}>重试</Button></div>}
     <div className="monitoring-metrics" aria-label="关键指标">

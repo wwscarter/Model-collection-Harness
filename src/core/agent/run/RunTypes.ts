@@ -14,6 +14,7 @@ import type { ModelRequestEstimate, ModelUsage } from '@core/routing/ModelUsage'
 import type { RoutingPolicyEngine } from '@core/routing/RoutingPolicy';
 import type { RoutingSettings } from '@core/routing/RoutingSettings';
 import type { SessionStorage } from '@core/storage/SessionStorage';
+import type { RunCheckpointStore } from '@core/storage/RunCheckpointStore';
 import type { TraceRecorder } from '@core/trace/TraceRecorder';
 import type { VerificationEvent, VerificationOutcome, VerificationTurn, VerificationTurnDecision, VerifyMode } from '@core/verify/VerificationTypes';
 import type { AgentRunRequest, ToolEvent } from '../AgentRuntime';
@@ -64,6 +65,9 @@ export type InvokeStreamed = (
     enableTools?: boolean;
     projectRoot?: string;
     projectAccess?: 'read' | 'write';
+    /** Set for the main agent run so file writes can be rolled back by run id. */
+    runId?: string;
+    sessionId?: string;
     signal?: AbortSignal;
     onToolEvent?: (event: ToolEvent) => void;
     onUsage?: (usage: ModelUsage) => void;
@@ -91,6 +95,7 @@ export interface RunDependencies {
   growth: GrowthEngine;
   codeAuditor: CodeAuditor;
   auditLog: AuditLog;
+  checkpoints?: RunCheckpointStore;
   memory: MemoryStore;
   summaries: Pick<SessionStorage, 'getSummary' | 'saveSummary'>;
   projectContext: {

@@ -18,7 +18,7 @@ function result(snapshot: ProjectProcessSnapshot, policy?: ApprovalDecision) {
 }
 
 /** Callers must obtain native user approval before invoking mutating tools. */
-export function createProjectCommandTools(projectRoot: string, manager: ProjectProcessManager, options: { commandPolicy?: (command: string) => ApprovalDecision } = {}): ToolDefinition[] {
+export function createProjectCommandTools(projectRoot: string, manager: ProjectProcessManager, options: { commandPolicy?: (command: string) => ApprovalDecision; sessionId?: string } = {}): ToolDefinition[] {
   return [
     defineTool({
       name: 'run_command', label: '执行项目命令',
@@ -31,7 +31,7 @@ export function createProjectCommandTools(projectRoot: string, manager: ProjectP
       }),
       async execute(_id, params, signal) {
         const policy = options.commandPolicy?.(params.command);
-        return result(await manager.run({ ...params, projectRoot, signal }), policy);
+        return result(await manager.run({ ...params, projectRoot, signal, ...(options.sessionId ? { sessionId: options.sessionId } : {}) }), policy);
       },
     }),
     defineTool({

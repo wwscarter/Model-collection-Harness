@@ -1,9 +1,12 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { Type } from 'typebox';
 import { createEditToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { SearchProviderRegistry } from './search';
 import { fetchWebPage, type WebFetchOptions } from './webFetch';
 import { isSensitiveFileName } from '@core/security/sensitiveFiles';
+import { defaultFileWriteGuard, type FileWriteGuard } from './fileWriteGuard';
+import type { FileChangeRecorder } from './fileChanges';
 import { isWithin, realOrSelf, resolveAllowedPath } from './projectPaths';
 import { createProjectSearchTools } from './projectSearchTools';
 export { resolveAllowedPath } from './projectPaths';
@@ -56,13 +59,22 @@ export function createWebFetchTool(options: Omit<WebFetchOptions, 'signal'> = {}
 /**
  * Project file tools built on Pi's read/ls/write/edit. Skills remain read-only, and mutation
  * tools are offered only when the user has selected a project.
+ *
+ * Reads are recorded in `writeGuard` so a later write can detect edits the agent never saw and
+ * refuse to overwrite them silently.
  */
-export function createFileTools(options: { cwd: string; projectRoot?: string; extraReadRoots?: string[] }): ToolDefinition[] {
+export function createFileTools(options: { cwd: string; projectRoot?: string; extraReadRoots?: string[]; writeGuard?: FileWriteGuard; fileChanges?: FileChangeRecorder }): ToolDefinition[] {
+  const guard = options.writeGuard ?? defaultFileWriteGuard;
   const readRoots = [options.projectRoot ?? options.cwd, ...(options.extraReadRoots ?? [])];
   const read = createReadToolDefinition(options.cwd, {
     autoResizeImages: false,
     operations: {
-      readFile: async (absolute) => fs.promises.readFile(resolveAllowedPath(readRoots, absolute)),
+      readFile: async (absolute) => {
+        const allowed = resolveAllowedPath(readRoots, absolute);
+        const content = await fs.promises.readFile(allowed);
+        guard.record(allowed, content);
+        return content;
+      },
       access: async (absolute) => fs.promises.access(resolveAllowedPath(readRoots, absolute), fs.constants.R_OK),
     },
   });
@@ -75,6 +87,25 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
       if (readOnlyRoots.some((root) => isWithin(root, allowed))) throw new Error('技能目录只允许读取');
       return allowed;
     };
+    const displayPath = (target: string) => {
+      // `target` is already resolved by resolveWritePath; compare against the
+      // resolved project root so symlinked temp/home directories still display
+      // a project-relative path (and snapshot keys match restore checks).
+      const relative = path.relative(realOrSelf(options.projectRoot!), target);
+      return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : target;
+    };
+    const guardedWrite = async (absolute: string, content: string | Buffer) => {
+      const target = resolveWritePath(absolute);
+      const relative = displayPath(target);
+      await guard.assertUnchangedSinceRead(target, relative);
+      // Snapshot the pre-run state before the bytes change; the recorder is
+      // best-effort and never rejects the write.
+      await options.fileChanges?.beforeWrite({ path: target, relativePath: relative });
+      await fs.promises.writeFile(target, content, 'utf8');
+      // Record our own write so the next turn is not blocked by our own change.
+      guard.record(target, content);
+      await options.fileChanges?.afterWrite({ path: target, relativePath: relative, content });
+    };
     tools.push(createLsToolDefinition(options.projectRoot, {
       operations: {
         exists: (absolute) => { try { return fs.existsSync(resolveAllowedPath(projectRoots, absolute)); } catch { return false; } },
@@ -85,14 +116,19 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
     tools.push(createWriteToolDefinition(options.projectRoot, {
       operations: {
         mkdir: async (absolute) => { await fs.promises.mkdir(resolveWritePath(absolute), { recursive: true }); },
-        writeFile: async (absolute, content) => { await fs.promises.writeFile(resolveWritePath(absolute), content, 'utf8'); },
+        writeFile: async (absolute, content) => { await guardedWrite(absolute, content); },
       },
     }) as unknown as ToolDefinition);
     tools.push(createEditToolDefinition(options.projectRoot, {
       operations: {
         access: async (absolute) => fs.promises.access(resolveWritePath(absolute), fs.constants.R_OK | fs.constants.W_OK),
-        readFile: async (absolute) => fs.promises.readFile(resolveWritePath(absolute)),
-        writeFile: async (absolute, content) => { await fs.promises.writeFile(resolveWritePath(absolute), content, 'utf8'); },
+        readFile: async (absolute) => {
+          const target = resolveWritePath(absolute);
+          const content = await fs.promises.readFile(target);
+          guard.record(target, content);
+          return content;
+        },
+        writeFile: async (absolute, content) => { await guardedWrite(absolute, content); },
       },
     }) as unknown as ToolDefinition);
     tools.push(...createProjectSearchTools(options.projectRoot));

@@ -28,6 +28,7 @@ import type { HookRunner } from '@core/hooks/HookRunner';
 import { PlanController } from '@core/planning/PlanController';
 import { planningMode, type RunPlan } from '@core/planning/PlanTypes';
 import { createPlanTool } from '@core/planning/planTool';
+import { createPauseGroup } from '../RunDeadline';
 import { supportsOperation } from '@core/models/ModelOperations';
 import { createMediaTools } from '@core/media/MediaTools';
 import type { MediaExecutionContext } from '@core/media/MediaTypes';
@@ -70,6 +71,8 @@ export interface RunContext {
   deadline: AbortController;
   deadlineTimer: ReturnType<typeof setTimeout>;
   pauseDeadline(): () => void;
+  /** Pause the run budget while external media generation waits (reference counted). */
+  holdDeadline(): () => void;
   controller: { signal: AbortSignal };
   cancellationError(): Error;
   projectRoot?: string;
@@ -181,7 +184,17 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
         }
       }, {
         ...options,
-        mediaTools: ctx.enableTools && ctx.deps.media ? createMediaTools(ctx.deps.media, ctx.mediaContext(options?.agentId), { projectRoot: ctx.projectRoot, allowExport: options?.projectAccess !== 'read' }) : undefined,
+        runId: ctx.runId,
+        sessionId: ctx.sessionId,
+        mediaTools: ctx.enableTools && ctx.deps.media ? createMediaTools(ctx.deps.media, ctx.mediaContext(options?.agentId), { projectRoot: ctx.projectRoot, allowExport: options?.projectAccess !== 'read' }).map((tool) => ({
+          ...tool,
+          // Image endpoints can legitimately take minutes. Waiting for them must
+          // not consume the run's time budget; only user cancellation stops it.
+          execute: async (...args: Parameters<typeof tool.execute>) => {
+            const resume = ctx.holdDeadline();
+            try { return await tool.execute(...args); } finally { resume(); }
+          },
+        })) as ReturnType<typeof createMediaTools> : undefined,
         sessionRules: ctx.request.sessionRules,
         hookRunner: ctx.hookRunner,
         planTool: ctx.runPlan && options?.projectAccess !== 'read' ? createPlanTool(ctx.plans, ctx.runId, (plan) => { ctx.runPlan = plan; ctx.emit('session:plan', plan); }) : undefined,
@@ -298,6 +311,11 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       const file = (merged.args as { path?: unknown } | undefined)?.path;
       if (merged.status === 'completed' && ['write', 'edit'].includes(merged.toolName) && typeof file === 'string' && file)
         ctx.successfulFileWrites.push(file);
+      if (merged.status === 'completed' || merged.status === 'failed') {
+        try {
+          ctx.deps.checkpoints?.tool({ runId: ctx.runId, toolName: merged.toolName, ...(typeof file === 'string' && file ? { path: file } : {}), failed: merged.status === 'failed' });
+        } catch (error) { console.warn('[checkpoint] 记录工具进度失败', error instanceof Error ? error.message : error); }
+      }
     } else {
       const agent = ctx.agentMessages.find((candidate) => candidate.id === agentId);
       if (agent) {
@@ -376,6 +394,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       ctx.deadlineTimer.unref?.();
     };
   };
+  ctx.holdDeadline = createPauseGroup(ctx.pauseDeadline);
   ctx.controller = { signal: AbortSignal.any([ctx.deps.controller.signal, ctx.deadline.signal]) };
   ctx.cancellationError = () => ctx.deps.controller.signal.aborted
     ? new Error('任务已取消')

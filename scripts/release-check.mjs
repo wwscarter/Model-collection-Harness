@@ -89,14 +89,17 @@ if (ptyEntry) {
     windowsHide: true,
   });
   if (ptySmoke.error || ptySmoke.status !== 0) {
-    console.error('[release] node-pty could not start a terminal; run npm run doctor:electron to restore helper permissions before packaging');
-    if (ptySmoke.error) console.error(`[release] PTY verification failed: ${ptySmoke.error.message}`);
-    if (ptySmoke.signal) console.error(`[release] PTY verification was terminated by ${ptySmoke.signal}`);
-    if (ptySmoke.stdout?.trim()) console.error(ptySmoke.stdout.trim());
-    if (ptySmoke.stderr?.trim()) console.error(ptySmoke.stderr.trim());
-    process.exit(1);
+    // node-pty is an optional dependency and the terminal entry point is not
+    // shipped in the UI. A broken helper must not block a desktop build: the
+    // TTY manager already degrades to the pipe adapter.
+    console.warn('[release] node-pty could not start a terminal; continuing with the pipe fallback');
+    if (ptySmoke.error) console.warn(`[release] PTY verification failed: ${ptySmoke.error.message}`);
+    if (ptySmoke.signal) console.warn(`[release] PTY verification was terminated by ${ptySmoke.signal}`);
+    if (ptySmoke.stdout?.trim()) console.warn(ptySmoke.stdout.trim());
+    if (ptySmoke.stderr?.trim()) console.warn(ptySmoke.stderr.trim().split('\n').slice(0, 3).join('\n'));
+  } else {
+    console.log(`[release] verified ${ptySmoke.stdout.trim()} under Electron ${electronPackage.version}`);
   }
-  console.log(`[release] verified ${ptySmoke.stdout.trim()} under Electron ${electronPackage.version}`);
 } else {
   console.log('[release] optional node-pty is absent; terminals will use the pipe adapter');
 }

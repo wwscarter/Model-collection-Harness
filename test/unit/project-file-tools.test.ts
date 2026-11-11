@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileTools } from '../../src/core/tools/builtinTools';
+import { FileWriteGuard } from '../../src/core/tools/fileWriteGuard';
 
 let projectRoot = '';
 
@@ -50,5 +51,18 @@ describe('project file tools', () => {
     fs.writeFileSync(path.join(projectRoot, 'index.html'), '<h1>Original</h1>');
     await expect(execute('edit', { path: 'index.html', edits: [{ oldText: '<h1>Other</h1>', newText: '<h1>Updated</h1>' }] })).rejects.toThrow();
     expect(fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8')).toBe('<h1>Original</h1>');
+  });
+
+  it('reports the pre-write state for a rollback record around a write', async () => {
+    const events: string[] = [];
+    const fileChanges = {
+      beforeWrite: vi.fn(async ({ relativePath }: { relativePath: string }) => { events.push('before:' + relativePath); }),
+      afterWrite: vi.fn(async ({ relativePath, content }: { relativePath: string; content: string | Buffer }) => { events.push('after:' + relativePath + ':' + String(content)); }),
+    };
+    const tool = createFileTools({ cwd: projectRoot, projectRoot, writeGuard: new FileWriteGuard(), fileChanges }).find((candidate) => candidate.name === 'write')!;
+    fs.writeFileSync(path.join(projectRoot, 'notes.txt'), 'old');
+    await tool.execute('rollback-call', { path: 'notes.txt', content: 'new' }, undefined, undefined, { cwd: projectRoot } as never);
+    expect(events).toEqual(['before:notes.txt', 'after:notes.txt:new']);
+    expect(fileChanges.beforeWrite).toHaveBeenCalledWith({ path: fs.realpathSync(path.join(projectRoot, 'notes.txt')), relativePath: 'notes.txt' });
   });
 });

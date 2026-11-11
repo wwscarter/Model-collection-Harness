@@ -202,6 +202,66 @@ export interface AgentResourceSummary {
   diagnostics: string[];
 }
 
+export interface RunCheckpoint {
+  runId: string;
+  sessionId?: string;
+  prompt?: string;
+  status: 'running' | 'interrupted' | 'completed' | 'failed' | 'cancelled' | 'acknowledged';
+  toolCalls: number;
+  modifiedFiles: string[];
+  lastTool?: string;
+  startedAt: string;
+  updatedAt: string;
+}
+
+export interface OperationAuditEntry {
+  sequence: number;
+  timestamp: string;
+  type: 'file.write' | 'command.execute' | 'process.stop';
+  actor: 'agent' | 'user';
+  result: 'success' | 'failed' | 'stopped';
+  sessionId?: string;
+  runId?: string;
+  path?: string;
+  command?: string;
+  detail?: string;
+}
+
+export interface ProcessSummary {
+  processId: string;
+  pid?: number;
+  sessionId?: string;
+  command: string;
+  cwd: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  running: boolean;
+  urls: string[];
+  exitCode: number | null;
+  signal?: string;
+  error?: string;
+  timedOut: boolean;
+  cancelled: boolean;
+  durationMs: number;
+  sandboxEnabled: boolean;
+  outputPreview: string;
+}
+
+export interface FileChangeRecord {
+  runId: string;
+  relativePath: string;
+  /** false when the run created the file. */
+  existed: boolean;
+  /** false when the previous content was too large to snapshot. */
+  beforeAvailable: boolean;
+  createdAt: string;
+  restoredAt?: string;
+}
+
+export interface FileRestoreResult {
+  restored: string[];
+  skipped: Array<{ path: string; reason: string }>;
+}
+
 export interface AmdApi {
   sandbox: SandboxApi;
   codebase: CodebaseApi;
@@ -274,6 +334,7 @@ export interface AmdApi {
     setAutoExtract: (enabled: boolean) => Promise<{ autoExtract: boolean }>;
   };
   verifyAuditLog: () => Promise<{ valid: boolean; entries: number; error?: string }>;
+  operationAudit: (limit?: number) => Promise<OperationAuditEntry[]>;
   getGrowthProfiles: () => Promise<unknown[]>;
   recordGrowthFeedback: (feedback: unknown) => Promise<unknown>;
   tty: { list: () => Promise<unknown[]>; create: (options?: unknown) => Promise<unknown>; write: (id: string, data: string) => Promise<void>; resize: (id: string, cols: number, rows: number) => Promise<void>; close: (id: string) => Promise<boolean>; };
@@ -294,6 +355,18 @@ export interface AmdApi {
   media: {
     open: (assetId: string) => Promise<void>;
     export: (assetId: string) => Promise<{ cancelled: boolean; path?: string }>;
+  };
+  checkpoints: {
+    latest: (sessionId: string) => Promise<RunCheckpoint | undefined>;
+    acknowledge: (runId: string) => Promise<{ success: boolean }>;
+  };
+  processes: {
+    list: (projectRoot?: string, sessionId?: string) => Promise<ProcessSummary[]>;
+    stop: (processId: string, projectRoot?: string) => Promise<ProcessSummary>;
+  };
+  files: {
+    changes: (runId: string) => Promise<FileChangeRecord[]>;
+    restore: (runId: string, sessionId?: string) => Promise<FileRestoreResult>;
   };
   sessions: {
     plans?: (sessionId: string) => Promise<RunPlan[]>;

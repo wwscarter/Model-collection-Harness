@@ -9,6 +9,8 @@ import type { RulesLoader } from './RulesLoader';
 import type { HookRunner } from '@core/hooks/HookRunner';
 import type { SkillManager } from './SkillManager';
 import type { McpConfigStore } from './McpConfigStore';
+import type { FileHistoryStore } from '@core/storage/FileHistoryStore';
+import type { OperationAuditLog } from '@core/audit/OperationAuditLog';
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string; }
 
@@ -31,6 +33,9 @@ export interface AgentRunRequest {
   /** The caller already applied its token budget; skip the 20-turn/60k-char trim. */
   skipHistoryTrim?: boolean;
   projectRoot?: string;
+  /** Run identity, used to group file changes for a rollback. */
+  runId?: string;
+  sessionId?: string;
   /** Ephemeral system instructions; do not append to history or summaries. */
   sessionRules?: string;
   /** App-owned loader: the renderer never supplies file access or trusted content. */
@@ -81,7 +86,7 @@ export interface AgentRuntimeOptions {
   defaultCwd: string;
   search?: SearchProviderRegistry;
   /** Extra tools contributed by plugins. */
-  extraTools?: (context: { cwd: string; projectRoot?: string }) => ToolDefinition[];
+  extraTools?: (context: { cwd: string; projectRoot?: string; runId?: string; sessionId?: string }) => ToolDefinition[];
   /** Extra Pi extensions (inline factories). */
   extensions?: InlineExtension[];
   toolGate?: ToolGate;
@@ -94,7 +99,7 @@ export interface AgentRuntimeOptions {
   mcpTransport?: McpTransportFactory;
   /** Load agentDir/extensions/* code. Off by default: extensions run with full app permissions. */
   enableFileExtensions?: boolean;
-  /** Maximum duration of a run, including model requests and tools. Default five minutes. */
+  /** Optional run deadline. Omitted means no wall-clock limit (user cancellation still works). */
   runTimeoutMs?: number;
   /** Maximum turns that execute tools before a final text-only summary. Default 32. */
   maxToolRounds?: number;
@@ -102,6 +107,10 @@ export interface AgentRuntimeOptions {
   maxToolCalls?: number;
   /** Maximum model-facing tool output characters in one run. Default 320k. */
   maxToolResultChars?: number;
+  /** Records the pre-write state of project files so a run can be rolled back. */
+  fileHistory?: FileHistoryStore;
+  /** Append-only trail of file writes and command executions. */
+  operationAudit?: OperationAuditLog;
   /** Test seam. */
   now?: () => Date;
 }
@@ -115,5 +124,4 @@ export interface ResourceSummary {
 }
 
 export interface AgentTurnContinuation { feedback?: string; summary?: string; stopReason?: 'budget_limit' | 'tool_limit' | 'length'; }
-export const RUN_TIMEOUT_MS = 5 * 60_000;
 export const MAX_TOOL_ROUNDS = 32;

@@ -222,4 +222,34 @@ describe('main process session projects', () => {
     finish();
     await running;
   });
+
+  it('waits for the aborted run of the same session before starting the next one', async () => {
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const defaultImplementation = state.executeRun.getMockImplementation();
+    state.executeRun.mockImplementation(async (request: unknown) => {
+      const prompt = (request as { prompt: string }).prompt;
+      started.push(prompt);
+      if (prompt === 'first') await firstGate;
+      return { output: prompt };
+    });
+    try {
+      const first = invoke('session:execute', { sessionId: 'serialized-session', prompt: 'first', projectId: null });
+      await vi.waitFor(() => expect(started).toEqual(['first']));
+      const second = invoke('session:execute', { sessionId: 'serialized-session', prompt: 'second', projectId: null });
+      // The second run must not start while the first one is still finishing,
+      // otherwise both runs would interleave writes in the same project.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(started).toEqual(['first']);
+
+      releaseFirst();
+      await expect(first).resolves.toEqual({ output: 'first' });
+      await expect(second).resolves.toEqual({ output: 'second' });
+      expect(started).toEqual(['first', 'second']);
+    } finally {
+      if (defaultImplementation) state.executeRun.mockImplementation(defaultImplementation);
+      else state.executeRun.mockImplementation(async () => ({ output: 'done' }));
+    }
+  });
 });

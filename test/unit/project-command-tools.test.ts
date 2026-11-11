@@ -89,6 +89,15 @@ describe('project command tools', () => {
     await expect(fetch(process.urls[0])).rejects.toThrow();
   });
 
+  it('records the session that started a process', async () => {
+    const scoped = createProjectCommandTools(projectRoot, manager, { sessionId: 'session-42' }).find((tool) => tool.name === 'run_command')!;
+    const started = await scoped.execute('session-call', { command: writeServer(), background: true, timeoutMs: 500 }, undefined, undefined, {} as never);
+    const process = await waitForReadyServer(started.details as ProjectProcessSnapshot);
+    expect(process.sessionId).toBe('session-42');
+    expect(manager.list(projectRoot).map((item) => item.sessionId)).toEqual(['session-42']);
+    await manager.stop(process.processId);
+  });
+
   it.each([false, true])('cancels an active command, background=%s', async (background) => {
     const controller = new AbortController();
     const pending = call('run_command', { command: node('setInterval(() => {}, 1000)'), background, timeoutMs: 2000 }, controller.signal);

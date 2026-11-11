@@ -16,6 +16,19 @@ interface Backend { status: SandboxStatus; executable?: string; }
 let cached: { platform: string; path: string | undefined; checkedAt: number; backend: Backend } | undefined;
 const HASH = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+/**
+ * A working sandbox rarely changes, so probing it spawns a child process every
+ * minute for no benefit. A failed probe stays short-lived: the user may install
+ * bubblewrap / approve sandbox-exec while the app is running and should see the
+ * new state quickly.
+ */
+const HEALTHY_PROBE_TTL_MS = 5 * 60_000;
+const FAILED_PROBE_TTL_MS = 15_000;
+
+export function sandboxProbeTtl(enabled: boolean): number {
+  return enabled ? HEALTHY_PROBE_TTL_MS : FAILED_PROBE_TTL_MS;
+}
+
 function canonical(value: string): string {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /[\u0000-\u001f\u007f]/.test(value)) throw new Error('沙箱目录须为有效的绝对路径');
   const resolved = path.resolve(value);
@@ -38,7 +51,7 @@ export function createSandboxPolicy(projectRoot: string, settings: SandboxSettin
 function writableRoots(policy: SandboxPolicy): string[] {
   if (!['allow', 'deny', 'loopback'].includes(policy.network)) throw new Error('沙箱网络策略无效');
   const roots = [...new Set([policy.projectRoot, ...policy.writableRoots].map(canonical))];
-  if (roots.some((root) => root === path.parse(root).root)) throw new Error('沙箱不能将整个文件系统设为可写');
+  if (roots.some((root) => root === path.parse(root).root)) throw new Error('沙箱不能将整个文件系统设为可写：请在沙箱设置中改选具体的项目目录或缓存目录，而不是根目录');
   return roots;
 }
 
@@ -81,7 +94,7 @@ function probe(command: string, args: string[]): string | undefined {
 }
 
 function backend(): Backend {
-  if (cached && cached.platform === process.platform && cached.path === process.env.PATH && Date.now() - cached.checkedAt < 60_000) return cached.backend;
+  if (cached && cached.platform === process.platform && cached.path === process.env.PATH && Date.now() - cached.checkedAt < sandboxProbeTtl(cached.backend.status.enabled)) return cached.backend;
   let result: Backend;
   if (process.platform === 'darwin') {
     const command = '/usr/bin/sandbox-exec';

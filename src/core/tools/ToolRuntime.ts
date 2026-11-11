@@ -34,12 +34,22 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   process_list: { name: 'process_list', maxResultChars: 8_000, timeoutMs: 5_000 },
 };
 
-interface CacheEntry { expiresAt: number; result: ToolResult; }
+interface CacheEntry { expiresAt: number; result: ToolResult; bytes: number; }
+
+const MAX_CACHE_ENTRIES = 100;
+/** Cached results are model-facing text, so this bounds memory without hitting normal runs. */
+const DEFAULT_MAX_CACHE_BYTES = 8 * 1024 * 1024;
+
+function resultBytes(result: ToolResult): number {
+  try { return Buffer.byteLength(JSON.stringify(result), 'utf8'); }
+  catch { return DEFAULT_MAX_CACHE_BYTES; }
+}
 
 export interface ToolRuntimeOptions {
   cwd: string;
   maxCalls?: number;
   maxResultCharsTotal?: number;
+  maxCacheBytes?: number;
   now?: () => number;
   policies?: Record<string, ToolPolicy>;
 }
@@ -67,9 +77,11 @@ export class ToolRuntime {
   private readonly cwd: string;
   private readonly maxCalls: number;
   private readonly maxResultCharsTotal: number;
+  private readonly maxCacheBytes: number;
   private readonly now: () => number;
   private readonly policies: Record<string, ToolPolicy>;
   private readonly cache = new Map<string, CacheEntry>();
+  private cacheBytes = 0;
   private calls = 0;
   private resultChars = 0;
   private fileVersion = 0;
@@ -78,6 +90,7 @@ export class ToolRuntime {
     this.cwd = options.cwd;
     this.maxCalls = options.maxCalls ?? 80;
     this.maxResultCharsTotal = options.maxResultCharsTotal ?? 320_000;
+    this.maxCacheBytes = Math.max(0, options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES);
     this.now = options.now ?? (() => Date.now());
     this.policies = { ...TOOL_POLICIES, ...(options.policies ?? {}) };
   }
@@ -143,13 +156,27 @@ export class ToolRuntime {
       if (changesFiles) this.fileVersion += 1;
     }
     if (key && !result.isError) {
-      this.cache.set(key, { expiresAt: this.now() + (policy.cacheTtlMs ?? 0), result });
-      while (this.cache.size > 100) {
-        const oldest = this.cache.keys().next().value;
-        if (oldest) this.cache.delete(oldest); else break;
-      }
+      this.cacheSet(key, { expiresAt: this.now() + (policy.cacheTtlMs ?? 0), result, bytes: resultBytes(result) });
     }
     return this.limit(result, policy);
+  }
+
+  /** Insert with both entry-count and byte caps; insertion order is the eviction order. */
+  private cacheSet(key: string, entry: CacheEntry): void {
+    const existing = this.cache.get(key);
+    if (existing) { this.cacheBytes -= existing.bytes; this.cache.delete(key); }
+    this.cache.set(key, entry);
+    this.cacheBytes += entry.bytes;
+    // A single entry larger than the whole budget is kept: the result is still
+    // being returned, and dropping it immediately would only redo the work.
+    while (this.cache.size > MAX_CACHE_ENTRIES || (this.cacheBytes > this.maxCacheBytes && this.cache.size > 1)) {
+      const oldest = this.cache.keys().next().value;
+      if (!oldest) break;
+      const removed = this.cache.get(oldest);
+      if (!removed) break;
+      this.cacheBytes -= removed.bytes;
+      this.cache.delete(oldest);
+    }
   }
 
   private limit(result: ToolResult, policy: ToolPolicy): ToolResult {

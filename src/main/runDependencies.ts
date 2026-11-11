@@ -17,7 +17,7 @@ async function invokeStreamed(ctx: MainContext, model: ModelConfig, prompt: stri
   const result = await ctx.agentRuntime.run({
     model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim, maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens),
     enableTools: options.enableTools !== false,
-    projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
+    projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta, runId: options.runId, sessionId: options.sessionId,
     sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded,
     hookRunner: options.hookRunner,
     planTool: options.planTool, mediaTools: options.mediaTools,
@@ -56,6 +56,7 @@ export function createRunDependencies(ctx: MainContext, controller: AbortControl
     growth,
     codeAuditor,
     auditLog,
+    checkpoints: ctx.checkpoints,
     memory: memoryStore,
     summaries: sessionStorage,
     plans: ctx.plans,

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createCredentialCodec } from '@utils/crypto';
 import { ModelStorage } from '@core/storage/ModelStorage';
 import { SessionStorage } from '@core/storage/SessionStorage';
+import { FileHistoryStore } from '@core/storage/FileHistoryStore';
 import { ProjectStorage } from '@core/storage/ProjectStorage';
 import { ModelRegistry } from '@core/models/ModelRegistry';
 import { hasUsableCredentials } from '@core/models/ModelConfig';
@@ -15,6 +16,8 @@ import { loadRoutingPolicy, RoutingPolicyEngine } from '@core/routing/RoutingPol
 import { ModelQuota } from '@core/routing/ModelQuota';
 import { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
 import { AuditLog } from '@core/audit/AuditLog';
+import { OperationAuditLog } from '@core/audit/OperationAuditLog';
+import { RunCheckpointStore } from '@core/storage/RunCheckpointStore';
 import { CodeAuditor } from '@core/audit/CodeAuditor';
 import { TraceRecorder } from '@core/trace/TraceRecorder';
 import { GrowthEngine } from '@core/growth/GrowthEngine';
@@ -69,6 +72,9 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     });
     const storage = track(new ModelStorage(path.join(dataDir, 'amd.db'), codec), (value) => value.close());
     const sessionStorage = track(new SessionStorage(path.join(dataDir, 'sessions.db')), (value) => value.close());
+    const fileHistory = track(new FileHistoryStore(path.join(dataDir, 'file-history.db')), (value) => value.close());
+    const operationAudit = track(new OperationAuditLog(path.join(dataDir, 'operations.jsonl')), (value) => value.close());
+    const checkpoints = track(new RunCheckpointStore(path.join(dataDir, 'checkpoints.db')), (value) => value.close());
     const planStorage = track(new PlanStorage(path.join(dataDir, 'sessions.db')), (value) => value.close());
     const plans = new PlanController(planStorage);
     const projectStorage = track(new ProjectStorage(path.join(dataDir, 'projects.db')), (value) => value.close());
@@ -95,7 +101,10 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     const commandSandbox = { settings: loadSandboxSettings(sandboxSettingsPath) };
     const sandboxPolicy = (root: string) => createSandboxPolicy(root, commandSandbox.settings);
     const commandExecutor = track(new CommandExecutor({ sandboxPolicy }), (value) => value.dispose());
-    const projectProcesses = track(new ProjectProcessManager({ sandboxPolicy }), (value) => value.dispose());
+    const projectProcesses = track(new ProjectProcessManager({ sandboxPolicy, onAudit: (event) => operationAudit.append({
+      type: 'command.execute', actor: 'agent', result: event.status === 'failed' ? 'failed' : event.status === 'stopped' ? 'stopped' : 'success',
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}), command: event.command, ...(event.exitCode === null ? {} : { detail: `退出码 ${event.exitCode}` }),
+    }) }), (value) => value.dispose());
     const codebase = track(new CodebaseIndex(dataDir), (value) => value.dispose());
     const codeSearchConfigPath = path.join(dataDir, 'code-search.json');
     const codeSearch = { config: loadCodeSearchConfig(codeSearchConfigPath) };
@@ -110,11 +119,11 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     const memoryStore = track(new MemoryStore(path.join(dataDir, 'memory.db')), (value) => value.close());
     let ctx: CoreServices;
     const agentRuntime = new AgentRuntime({
-      agentDir, defaultCwd: workspaceRoot, skillManager, mcpConfig, enableMcp: options.enableMcp !== false,
+      agentDir, defaultCwd: workspaceRoot, skillManager, mcpConfig, enableMcp: options.enableMcp !== false, fileHistory, operationAudit,
       mcpTransport: (entry, cwd, authProvider) => createConfiguredMcpTransport({ entry, cwd, authProvider, sandboxPolicy, onStderr: (text) => host.onMcpStderr?.(entry, text) }).transport,
       toolGate: (request) => approveCoreTool(ctx, request),
-      extraTools: ({ projectRoot }) => [
-        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot) }) : []),
+      extraTools: ({ projectRoot, sessionId }) => [
+        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot), sessionId }) : []),
         ...(projectRoot ? createCodebaseTools(projectRoot, codebase, semanticSearch, codeSearch.config.enabled, { config: structuredClone(codeSearch.config), baseURL: routingService.getConfiguration().settings.classifier.baseURL }) : []),
         ...createMemoryTools(memoryStore, { projectRoot }),
       ],
@@ -129,7 +138,7 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     const auditLog = new AuditLog(path.join(dataDir, 'audit.jsonl'));
     const codeAuditor = new CodeAuditor();
     const media = new MediaExecutionService({ dataDir, models: registry });
-    ctx = { media, host, options, dataDir, workspaceRoot, storage, sessionStorage, projectStorage, registry, growth, routingLearning, routingService, router, routingPolicy, preferencesPath, preferences, routingRulesPath, routingHistoryDir, projects, commandExecutor, projectProcesses, sandboxSettingsPath, commandSandbox, codebase, semanticSearch, codeSearchConfigPath, codeSearch, trustStore, rulesLoader, hookStore, skillManager, mcpConfig, toolTrust, mcpTools: new Map(), agentRuntime, observability, modelQuota, memoryStore, traceRecorder, auditLog, codeAuditor, planStorage, plans, runningTasks: new Map(), emit: host.emit };
+    ctx = { media, host, options, dataDir, workspaceRoot, storage, sessionStorage, fileHistory, operationAudit, checkpoints, projectStorage, registry, growth, routingLearning, routingService, router, routingPolicy, preferencesPath, preferences, routingRulesPath, routingHistoryDir, projects, commandExecutor, projectProcesses, sandboxSettingsPath, commandSandbox, codebase, semanticSearch, codeSearchConfigPath, codeSearch, trustStore, rulesLoader, hookStore, skillManager, mcpConfig, toolTrust, mcpTools: new Map(), agentRuntime, observability, modelQuota, memoryStore, traceRecorder, auditLog, codeAuditor, planStorage, plans, runningTasks: new Map(), emit: host.emit };
     let closing = false;
     let disposal: Promise<void> | undefined;
     const pending = new Set<Promise<unknown>>();

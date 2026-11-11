@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.0 — 2026-11-11
+
+### No default agent wall-clock limit
+
+- Remove the hard five-minute cap on the whole agent run and on each model request. Tools and model calls now end by succeeding or failing; the user can stop a run explicitly. `runTimeoutMs` remains an opt-in option for tests and headless callers.
+- Run-budget timing and cost limits, and short per-tool deadlines, are unchanged.
+
+### Image generation timeout fix
+
+- Remove every project-side time limit while `request_media` waits for the image endpoint: both the agent's five-minute loop deadline and the run budget clock (default 10 minutes) are paused, and the provider request carries no client timeout. Only an explicit user stop interrupts generation; cost budgets are still reserved and checked.
+
+### Run checkpoints
+
+- Persist per-run progress (`tool_calls`, `last_tool`, distinct `write`/`edit` files) in `checkpoints.db` after every completed tool call, and finish the row on success, failure or cancellation.
+- On startup, unfinished rows become `interrupted`; the session shows an Ant Design notice with the step/file counts and an acknowledgement action. No tool is replayed automatically.
+
+### Operation audit trail
+
+- Record `file.write`, `command.execute` and user-triggered `process.stop` events in an append-only `operations.jsonl` (30-day retention, bounded fields, corrupt lines skipped).
+- Expose `audit:operations` and add an Ant Design audit drawer on the monitoring page with type filtering, pagination and JSON copy.
+
+### Background process management
+
+- Record the session that started each managed process and expose `processes:list` / `processes:stop` with a bounded output preview; only processes owned by the manager can be addressed.
+- Add an Ant Design process drawer (composer → 进程) with status, URL, log tail, manual stop and 3-second refresh while open.
+- When a run is cancelled, ask whether to stop the background processes that session started (stop all / keep running) instead of leaking them silently or killing a dev server.
+
+### File change rollback
+
+- Snapshot the pre-write content of every `write` / `edit` target in `file-history.db` (1 MiB per file, 30 days) and store a post-write hash for every change.
+- Add `files:changes` and `files:restore` IPC plus an Ant Design bar under the run: inspect the modified files and undo the run in one action. Restore skips files changed after the run, credential paths, missing snapshots and oversized originals, and is refused while the session is still running.
+
+### Reliability and safety hardening (review follow-up)
+
+- Refuse `write` when a file changed on disk after the agent last read it (editor, formatter or another session), returning an actionable tool error instead of overwriting the external edits. The agent's own reads/writes refresh the fingerprint, so new files, deliberate rewrites and re-reads keep working.
+- Serialise runs per session in `session:execute`: a new request aborts the previous run and waits for it to settle (bounded to 10 seconds) before starting, so two runs can no longer interleave writes in the same project.
+- Validate renderer payloads for `session:execute` and `session:save` (identity lengths, project id type, modes, history/context sizes, message list size, timestamps) and return a field-level error instead of an opaque sqlite/type failure.
+- Limit model-spending `session:execute` calls to 20 per minute per renderer and report the retry delay.
+- Cache a healthy sandbox probe for 5 minutes (failed probes retry after 15 seconds), removing a sandbox child-process spawn every minute.
+- Bound the tool-result cache by total bytes (8 MiB) in addition to 100 entries; one oversized result is still retained rather than re-executed.
+- Report the sandbox root-directory rejection with the settings location that resolves it.
+
 ## 0.3.2 — 2026-11-11
 
 - Correct the 0.3.1 image-generation policy: delegate supported dimensions, formats, quality and background behavior to the model and endpoint instead of rejecting requests against local capability declarations.

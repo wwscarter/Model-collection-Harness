@@ -2,10 +2,10 @@ import type { ModelUsage } from '@core/routing/ModelUsage';
 import { BudgetExceededError } from '@core/routing/RunBudget';
 import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
-import { RUN_TIMEOUT_MS, type AgentRunRequest, type RunUsageState } from './AgentRuntimeTypes';
+import type { AgentRunRequest, RunUsageState } from './AgentRuntimeTypes';
 
 /** Account for every SDK response exactly once, including repairs and compaction. */
-export function installUsageAccounting(session: AgentSession, request: AgentRunRequest, mapping: { temperature?: number }, runTimeoutMs = RUN_TIMEOUT_MS): RunUsageState {
+export function installUsageAccounting(session: AgentSession, request: AgentRunRequest, mapping: { temperature?: number }, runTimeoutMs?: number): RunUsageState {
   const usageState: RunUsageState = {
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, seen: new WeakSet(),
     report: (usage) => {
@@ -44,7 +44,7 @@ export function installUsageAccounting(session: AgentSession, request: AgentRunR
     const source = await stream(requestModel, context, {
       ...options, maxTokens,
       ...(mapping.temperature !== undefined ? { temperature: mapping.temperature } : {}),
-      timeoutMs: Math.min(options?.timeoutMs ?? RUN_TIMEOUT_MS, runTimeoutMs ?? RUN_TIMEOUT_MS),
+      ...((options?.timeoutMs ?? runTimeoutMs) ? { timeoutMs: Math.min(options?.timeoutMs ?? Infinity, runTimeoutMs ?? Infinity) } : {}),
     });
     const forwarded = createAssistantMessageEventStream();
     // Compaction consumes .result() without message_end; record every actual response here too.

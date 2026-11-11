@@ -125,4 +125,35 @@ describe('ToolRuntime', () => {
     expect((await tools[0].execute(...args)).content[0]).toMatchObject({ text: 'after' });
     expect(search).toHaveBeenCalledTimes(2);
   });
+
+  it('evicts cached results when the byte budget is exceeded', async () => {
+    const calls = new Map<string, number>();
+    const runtime = new ToolRuntime({ cwd: process.cwd(), maxCacheBytes: 1_000, policies: { web_fetch: { name: 'web_fetch', maxResultChars: 2_000, cacheTtlMs: 60_000 } } });
+    const wrapped = runtime.wrap([tool('web_fetch', async (_id, params) => {
+      const url = (params as { url: string }).url;
+      calls.set(url, (calls.get(url) ?? 0) + 1);
+      return result(`payload:${url}:` + 'x'.repeat(400));
+    })])[0];
+    const call = (url: string) => wrapped.execute('cache-call', { url }, undefined, undefined, {} as never);
+    await call('https://example.com/a');
+    await call('https://example.com/b');
+    await call('https://example.com/c');
+    // The third entry pushes the cache over the byte budget, so the oldest
+    // entry is evicted and must be fetched again.
+    await call('https://example.com/a');
+    await call('https://example.com/c');
+    expect(calls.get('https://example.com/a')).toBe(2);
+    expect(calls.get('https://example.com/b')).toBe(1);
+    expect(calls.get('https://example.com/c')).toBe(1);
+  });
+
+  it('keeps one oversized cached result instead of thrashing the cache', async () => {
+    const execute = vi.fn(async () => result('y'.repeat(2_000)));
+    const runtime = new ToolRuntime({ cwd: process.cwd(), maxCacheBytes: 10, policies: { web_fetch: { name: 'web_fetch', maxResultChars: 4_000, cacheTtlMs: 60_000 } } });
+    const wrapped = runtime.wrap([tool('web_fetch', execute)])[0];
+    const call = () => wrapped.execute('oversized', { url: 'https://example.com/oversized' }, undefined, undefined, {} as never);
+    await call();
+    await call();
+    expect(execute).toHaveBeenCalledOnce();
+  });
 });

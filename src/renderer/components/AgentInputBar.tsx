@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Folder, FolderPlus, GitBranch, LoaderCircle, Plus, ShieldCheck, Sparkles, Square, Terminal, X } from 'lucide-react';
+import { Button } from 'antd';
 import type { ModelConfig, ProjectInfo, ProjectRecord } from '../types';
 import type { VerificationMode } from '../verificationTypes';
 import type { PlanningMode } from '@core/planning/PlanTypes';
@@ -28,6 +29,7 @@ interface AgentInputBarProps {
   sessionRules: string;
   onSessionRulesChange: (rules: string) => void;
   onOpenSettings: () => void;
+  onOpenProcesses?: () => void;
   onToggleMultiModel: () => void;
   onSelectModel: (id: string) => void;
   onChange: (value: string) => void;
@@ -44,7 +46,7 @@ const QUICK_COMMANDS = [
   { label: '梳理项目结构', prompt: '请梳理当前项目的目录结构、主要模块和运行入口，并给出阅读代码的建议。' },
 ];
 
-export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, planningMode, onPlanningModeChange, sessionRules, onSessionRulesChange, onOpenSettings, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
+export function AgentInputBar({ value, inputRef, hasMessages, busy, running, editing, multiModel, pinnedModelId, models, project, activeFilePath, projects, onSelectProject, gitBusy, onInitGit, approvalMode, verificationMode, onVerificationModeChange, planningMode, onPlanningModeChange, sessionRules, onSessionRulesChange, onOpenSettings, onOpenProcesses, onToggleMultiModel, onSelectModel, onChange, onKeyDown, onSend, onStop, onCancelEdit }: AgentInputBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -77,6 +79,7 @@ export function AgentInputBar({ value, inputRef, hasMessages, busy, running, edi
         </div>
         {project && (project.git ? <span className="composer-git-state" title={project.git.branch || project.git.head || 'Git'}><GitBranch size={12} strokeWidth={1.7} />{project.git.branch || 'Git'}</span>
           : <button className="composer-git-create" disabled={gitBusy} onClick={onInitGit}>{gitBusy ? <LoaderCircle size={12} className="spinning" /> : null}{gitBusy ? '创建中…' : '创建 Git 存储库'}</button>)}
+        {project && onOpenProcesses && <Button type="text" size="small" className="composer-processes-trigger" icon={<Terminal size={12} strokeWidth={1.7} />} onClick={onOpenProcesses}>进程</Button>}
         <label className="composer-git-state">验证 <select className="composer-git-create" aria-label="项目验证模式" title="快速检查 lint 与类型；完整检查再运行测试" value={verificationMode} disabled={busy} onChange={(event) => onVerificationModeChange(event.target.value as VerificationMode)}><option value="off">关闭</option><option value="quick">快速</option><option value="full">完整</option></select></label>
         <label className="composer-git-state">规划 <select className="composer-git-create" aria-label="本轮规划模式" value={planningMode ?? 'default'} disabled={busy} onChange={(event) => onPlanningModeChange?.(event.target.value === 'default' ? undefined : event.target.value as PlanningMode)}><option value="default">使用设置</option><option value="auto">自动执行</option><option value="confirm">确认后执行</option><option value="only">仅规划</option></select></label>
       </div>

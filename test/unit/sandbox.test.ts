@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildBubblewrapArgs, buildMacSandboxProfile, createSandboxPolicy, getSandboxStatus, sandboxFailureNotice, wrapCommand } from '../../src/core/security/Sandbox';
+import { buildBubblewrapArgs, buildMacSandboxProfile, createSandboxPolicy, getSandboxStatus, sandboxFailureNotice, sandboxProbeTtl, wrapCommand } from '../../src/core/security/Sandbox';
 import { DEFAULT_SANDBOX_SETTINGS, loadSandboxSettings, saveSandboxSettings, validateSandboxSettings } from '../../src/core/security/SandboxSettings';
 import { CommandExecutor } from '../../src/core/tty/CommandExecutor';
 import { ProjectProcessManager } from '../../src/core/tty/ProjectProcessManager';
@@ -41,6 +41,14 @@ describe('OS command sandbox policy', () => {
     expect(args).not.toContain('--unshare-net');
     expect(buildBubblewrapArgs({ ...policy, network: 'deny' })).toContain('--unshare-net');
     expect(buildBubblewrapArgs({ ...policy, network: 'loopback' })).toContain('--unshare-net');
+  });
+
+  it('caches a healthy sandbox probe far longer than a failed one', () => {
+    // Re-probing a working sandbox spawns a child process for no benefit; a
+    // failed probe must stay short so installing bwrap is noticed quickly.
+    expect(sandboxProbeTtl(true)).toBe(5 * 60_000);
+    expect(sandboxProbeTtl(false)).toBe(15_000);
+    expect(sandboxProbeTtl(true)).toBeGreaterThan(sandboxProbeTtl(false));
   });
 
   it('reports actual probe availability and uses a deterministic profile hash when available', () => {

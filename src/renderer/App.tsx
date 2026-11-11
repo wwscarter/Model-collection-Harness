@@ -13,6 +13,10 @@ import { WorkbenchWelcome } from './components/WorkbenchWelcome';
 import { OutputView } from './components/OutputView';
 import { ToolCallList } from './components/ToolCallList';
 import { VerificationStatus } from './components/VerificationStatus';
+import { FileChangesBar } from './components/FileChangesBar';
+import { SessionCheckpointNotice } from './components/SessionCheckpointNotice';
+import { ProcessesDrawer } from './components/ProcessesDrawer';
+import { ProcessCleanupModal } from './components/ProcessCleanupModal';
 import { PlanCard } from './components/PlanCard';
 import { Copy, Pencil } from 'lucide-react';
 import { AgentActivityList } from './components/AgentActivityList';
@@ -24,6 +28,7 @@ const formatDuration = (value?: number) => value === undefined || !Number.isFini
 
 export default function App() {
   const [showSettings, setShowSettings] = useState(false);
+  const [processesOpen, setProcessesOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'models' | 'runtime'>('models');
   const openSettings = (tab: 'models' | 'runtime' = 'models') => { setSettingsInitialTab(tab); setShowSettings(true); };
   const [showRouting, setShowRouting] = useState(false);
@@ -37,6 +42,7 @@ export default function App() {
     cancelMessageEdit, selectedSessionModelId, enabledModelOptions, toggleMultiModel, selectSessionModel,
     verificationMode, setVerificationMode, currentVerification,
     sessionRules, setSessionRules, sessionPlans, planError, decidePlan, planningMode, setPlanningMode,
+    canceledProcesses, setCanceledProcesses,
   } = run;
   const {
     view, setView, openFiles, setOpenFiles, activeFilePath, setActiveFilePath, previewOpen,
@@ -78,6 +84,8 @@ export default function App() {
             </div>;
           }) : <WorkbenchWelcome projectName={projectList.find((project) => project.id === currentSession.projectId)?.name} onChoose={(prompt) => { updateCurrent({ prompt }); promptInputRef.current?.focus(); }} onOpenProject={() => currentSession.projectId && projectList.some((project) => project.id === currentSession.projectId) ? setProjectDrawerOpen(true) : setShowNewProject(true)} />}
           <VerificationStatus event={currentVerification} />
+          {currentSession && <SessionCheckpointNotice sessionId={currentSession.id} />}
+          {currentSession && <FileChangesBar sessionId={currentSession.id} runId={currentSession.runId ?? [...currentSession.messages].reverse().find((message) => message.role === 'assistant' && message.runId)?.runId} running={isCurrentRunning} verificationFailed={currentVerification?.phase === 'completed' && currentVerification.status === 'failed'} />}
           {planError && <div className="runtime-notice" role="alert">计划历史读取失败：{planError}</div>}
           {currentSession.metrics?.stopReason === 'tool_limit' && <div className="runtime-notice" role="status" aria-label="任务未完成">本轮工具预算已用尽，任务尚未完成。以上为阶段性总结，可继续任务。</div>}
           {currentSession.metrics?.stopReason === 'media_incomplete' && <div className="runtime-notice" role="status" aria-label="素材生成未完成">本轮所需素材尚未生成成功，任务尚未完成。已保留现有内容与素材状态，请检查生成失败或结果待确认的任务后继续。</div>}
@@ -87,7 +95,7 @@ export default function App() {
         </section> : <div className="no-session"><strong>创建一个会话开始工作</strong><button className="button primary" onClick={newSession}>新建会话</button></div>}
       </div>
       {currentSession && <AgentInputBar
-        project={currentProject} activeFilePath={activeFilePath} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => openSettings()} value={currentSession.prompt} inputRef={promptInputRef}
+        project={currentProject} activeFilePath={activeFilePath} projects={projectList} onSelectProject={(id) => void associateProject(id)} gitBusy={gitBusy} onInitGit={() => void initGit()} approvalMode={approvalMode} onOpenSettings={() => openSettings()} onOpenProcesses={() => setProcessesOpen(true)} value={currentSession.prompt} inputRef={promptInputRef}
         hasMessages={currentSession.messages.length > 0} busy={isLoading} running={isCurrentRunning} editing={Boolean(editingMessageId)}
         onChange={(prompt) => updateCurrent({ prompt })} onKeyDown={handleKeyDown} onSend={() => void execute()} onStop={() => void cancelRun()}
         onCancelEdit={cancelMessageEdit}
@@ -106,6 +114,8 @@ export default function App() {
     {showSettings && <Settings models={models} onClose={() => setShowSettings(false)} onModelsChanged={setModels} onOpenRouting={() => setShowRouting(true)} initialTab={settingsInitialTab} />}
     {showRouting && <RoutingPanel onClose={() => setShowRouting(false)} />}
     {showNewProject && <NewProjectDialog onClose={() => setShowNewProject(false)} onCreated={handleProjectCreated} />}
+    <ProcessesDrawer open={processesOpen} onClose={() => setProcessesOpen(false)} projectRoot={projectList.find((item) => item.id === currentSession?.projectId)?.root ?? currentProject?.root} sessionId={currentSession?.id} />
+    <ProcessCleanupModal processes={canceledProcesses} onClose={() => setCanceledProcesses([])} />
   </div>;
 }
 
