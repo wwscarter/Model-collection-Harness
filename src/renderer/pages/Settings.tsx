@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from 'antd';
 import { BrainCircuit, Check, ChevronDown, CircleCheck, CloudDownload, Eye, EyeOff, LoaderCircle, Plus, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react';
 import type { ModelConfig } from '../types';
 import { RuntimeSettings } from '../components/RuntimeSettings';
@@ -196,7 +197,9 @@ export function Settings({ models, onClose, onModelsChanged, onOpenRouting, init
         <div className="titlebar-left"><span className="titlebar-symbol"><SlidersHorizontal size={14} /></span><h2 id="settings-title">设置 <span className="settings-title-english">(Settings)</span></h2></div>
         <div className="titlebar-right"><button className="icon-button" aria-label="关闭设置" disabled={busy === 'saving'} onClick={onClose}><X size={16} /></button></div>
       </header>
-      <div className="settings-tabs" role="tablist" aria-label="设置分类"><button className={tab === 'models' ? 'active' : ''} role="tab" aria-selected={tab === 'models'} onClick={() => setTab('models')}>模型与端点</button><button className={tab === 'runtime' ? 'active' : ''} role="tab" aria-selected={tab === 'runtime'} onClick={() => setTab('runtime')}>运行与权限</button><button className={tab === 'extensions' ? 'active' : ''} role="tab" aria-selected={tab === 'extensions'} onClick={() => setTab('extensions')}>扩展</button></div>
+      <div className="settings-tabs antd-settings-tabs" role="tablist" aria-label="设置分类">
+        {([['models', '模型与端点'], ['runtime', '运行与权限'], ['extensions', '扩展']] as const).map(([key, label]) => <Button key={key} type={tab === key ? 'primary' : 'text'} autoInsertSpace={false} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</Button>)}
+      </div>
       {tab === 'runtime' ? <RuntimeSettings onOpenRouting={onOpenRouting} onRoutingStatusChange={setRouting} /> : tab === 'extensions' ? <ExtensionsSettings rules={window.amd?.agent?.rules} hooks={window.amd?.agent?.hooks} skills={window.amd?.agent?.skills} mcp={window.amd?.agent?.mcp} toolTrust={window.amd?.agent?.toolTrust} /> : <div className="settings-body">
         <aside className="endpoint-list" aria-label="端点与路由">
           <div className="endpoint-list-head">

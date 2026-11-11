@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-11-11
+
+### UI
+
+- Added Ant Design 6.7.0 as the shared React component foundation.
+- Unified the workbench palette, focus states, borders, shadows, and active states around a blue desktop product theme.
+- Updated the navigation rail, monitoring controls, and Settings tabs with consistent component-library interactions and tooltips.
+
 ## 0.2.0 — 2026-11-10
 
 ### Agent workflow

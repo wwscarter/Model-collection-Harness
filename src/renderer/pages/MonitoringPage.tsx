@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Tooltip } from 'antd';
 import { Activity, ChevronRight, Clock3, Coins, RefreshCw, TriangleAlert } from 'lucide-react';
 import type { DashboardSnapshot, RunTrace, TraceRun } from '../types';
 import { TraceTimeline, traceModelSnapshot } from '../components/TraceTimeline';
@@ -99,7 +100,7 @@ export function MonitoringPage({ liveTrace }: MonitoringPageProps) {
   return <section className="monitoring-page" aria-label="运行监测" aria-busy={loading}>
     <header className="monitoring-header">
       <div><h1>运行监测</h1><p>只保留判断运行质量所需的指标；调用链、成本与失败原因集中在右侧。</p></div>
-      <div className="monitoring-actions"><div className="monitoring-range" role="group" aria-label="统计范围">{([['24h', '24 小时'], ['7d', '7 天'], ['30d', '30 天']] as Array<[Range, string]>).map(([value, label]) => <button key={value} className={range === value ? 'active' : ''} onClick={() => setRange(value)}>{label}</button>)}</div><button className="icon-button" title="刷新" aria-label="刷新运行监测" onClick={() => void load()}><RefreshCw size={15} className={loading ? 'spinning' : ''} /></button></div>
+      <div className="monitoring-actions"><Button.Group className="monitoring-range" aria-label="统计范围">{([['24h', '24 小时'], ['7d', '7 天'], ['30d', '30 天']] as Array<[Range, string]>).map(([value, label]) => <Button key={value} type={range === value ? 'primary' : 'default'} autoInsertSpace={false} aria-pressed={range === value} onClick={() => setRange(value)}>{label}</Button>)}</Button.Group><Tooltip title="刷新运行监测"><Button type="text" className="icon-button" aria-label="刷新运行监测" loading={loading} icon={<RefreshCw size={15} className={loading ? 'spinning' : ''} />} onClick={() => void load()} /></Tooltip></div>
     </header>
 
     {error && <div className="monitoring-error" role="alert"><TriangleAlert size={15} />{error}</div>}

@@ -1,6 +1,6 @@
 {
   "name": "amd-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AMD Agent - a transparent multi-model agent desktop app",
   "main": "dist/main/main.js",
   "type": "module",
@@ -37,6 +37,7 @@
     "@fontsource/jetbrains-mono": "5.3.0",
     "@google/generative-ai": "0.24.1",
     "@vscode/ripgrep": "1.18.0",
+    "antd": "6.7.0",
     "better-sqlite3": "13.0.3",
     "ignore": "7.0.14",
     "lucide-react": "1.66.0",
