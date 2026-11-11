@@ -15,6 +15,7 @@ export interface RunPlan {
   createdAt: string;
   updatedAt: string;
   approvedAt?: string;
+  editable?: boolean;
 }
 export interface PlanDecision { runId: string; version: number; action: 'approve' | 'edit' | 'cancel'; steps?: PlanStep[]; }
 

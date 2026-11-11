@@ -1,4 +1,5 @@
 import type { ModelConfig } from '@core/models/ModelConfig';
+import { supportsOperation } from '@core/models/ModelOperations';
 import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
 import { SearchProviderRegistry } from '@core/tools/search';
 import { ToolRuntime } from '@core/tools/ToolRuntime';
@@ -173,6 +174,7 @@ export class AgentRuntime {
 
   /** Run one user turn, streaming text and tool events. Resolves with the final assistant text. */
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    if (!supportsOperation(request.model, 'text.chat')) throw new Error('该模型不支持文本 Agent 调用');
     validateSessionRules(request.sessionRules);
     if (request.sessionRules?.trim() && !request.rulesLoader) throw new Error('会话规则服务不可用');
     const timeout = AbortSignal.timeout(this.options.runTimeoutMs ?? RUN_TIMEOUT_MS);
@@ -194,6 +196,8 @@ export class AgentRuntime {
     const history = request.skipHistoryTrim ? (request.history ?? []) : trimHistory(request.history);
     const settingsManager = this.settings();
     const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess);
+    // Media permissions are independent of project write access. Tools are host-bound.
+    if (enableTools && request.mediaTools) rawTools.push(...request.mediaTools);
     if (enableTools && request.projectAccess !== 'read' && request.planTool) rawTools.push(request.planTool);
     const toolRuntime = new ToolRuntime({
       cwd,

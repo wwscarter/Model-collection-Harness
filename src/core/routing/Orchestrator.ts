@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import type { ModelConfig } from '@core/models/ModelConfig';
 import { hasUsableCredentials } from '@core/models/ModelConfig';
 import type { TaskComplexity, TaskType } from './AgentRouter';
@@ -39,7 +40,7 @@ const COMPLEXITIES: TaskComplexity[] = ['low', 'medium', 'high'];
 const MAX_SUBAGENTS = 4;
 
 function usable(model: ModelConfig): boolean {
-  return model.enabled && hasUsableCredentials(model);
+  return model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model);
 }
 
 /** The application chooses a planner by capability, independently of the executor. */

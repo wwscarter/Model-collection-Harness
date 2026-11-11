@@ -28,6 +28,11 @@ import type { HookRunner } from '@core/hooks/HookRunner';
 import { PlanController } from '@core/planning/PlanController';
 import { planningMode, type RunPlan } from '@core/planning/PlanTypes';
 import { createPlanTool } from '@core/planning/planTool';
+import { supportsOperation } from '@core/models/ModelOperations';
+import { createMediaTools } from '@core/media/MediaTools';
+import type { MediaExecutionContext } from '@core/media/MediaTypes';
+import { createMediaObserver } from './mediaObservation';
+import { recordMediaToolOutcome, type MediaDependencyFailure } from './mediaCompletion';
 
 export interface RunContext {
   request: RunRequest;
@@ -54,6 +59,7 @@ export interface RunContext {
   toolSpans: Map<string, TraceSpanHandle>;
   finishTrace(status: RunStatus, error?: string): void;
   emitToolEvent(agentId: string | undefined, event: ToolEvent): void;
+  mediaFailures: MediaDependencyFailure[];
   collaboratorModels: ModelConfig[];
   trace: TraceSpanHandle;
   startedAt: number;
@@ -101,13 +107,48 @@ export interface RunContext {
   hookRunner?: Pick<HookRunner, 'run'>;
   invokeStreamed: InvokeStreamed;
   createProvider(model: ModelConfig): ModelProvider;
+  mediaContext(agentId?: string): MediaExecutionContext;
+  mediaCostStatus: 'actual' | 'estimated' | 'unknown';
   recordGrowth(feedback: RoutingFeedback): void;
 }
 
 /** Create the state and services shared by the stages of one run. */
 export function createRunContext(request: RunRequest, deps: RunDependencies, emit: RunEmit): RunContext {
   const ctx = { request, deps, emit } as RunContext;
-  const reservations = new Map<symbol, number>();
+  const reservations = new Map<symbol | string, number>();
+  const settledMedia = new Set<string>();
+  const mediaToolArguments = new Map<string, unknown>();
+  let observeMedia: ReturnType<typeof createMediaObserver> | undefined;
+  ctx.mediaCostStatus = 'actual';
+  ctx.mediaContext = (agentId) => ({
+    rootRunId: ctx.runId, sessionId: ctx.sessionId, assistantMessageId: ctx.assistantMessageId, agentId, signal: ctx.controller.signal,
+    quota: ctx.deps.quota,
+    budget: {
+      reserve(id, estimate) {
+        if (settledMedia.has(id) || reservations.has(id)) return;
+        if (estimate === undefined) throw new Error('请先在模型与端点中配置媒体单次预估费用，才能检查运行预算');
+        const held = [...reservations.values()].reduce((sum, cost) => sum + cost, 0);
+        ctx.runBudget.assertAvailable(held + estimate);
+        reservations.set(id, estimate);
+      },
+      settle(id, cost) {
+        if (settledMedia.has(id)) return;
+        const reserved = reservations.get(id);
+        reservations.delete(id); settledMedia.add(id);
+        if (cost === undefined) ctx.mediaCostStatus = 'unknown';
+        const charged = cost ?? reserved ?? 0;
+        ctx.runBudget.add({ cost: charged }); ctx.totalCost += charged;
+      },
+    },
+    onJob(job) {
+      observeMedia ??= createMediaObserver(ctx.deps, ctx.trace, ctx.runId);
+      observeMedia(job);
+      if (job.costStatus === 'estimated' && ctx.mediaCostStatus === 'actual') ctx.mediaCostStatus = 'estimated';
+      ctx.emit('session:media-job', { sessionId: ctx.sessionId, assistantMessageId: ctx.assistantMessageId, runId: ctx.runId, agentId, job });
+      const artifacts = ctx.deps.media?.listArtifacts(ctx.runId, ctx.sessionId) ?? [];
+      if (artifacts.length) ctx.emit('session:media-artifact', { sessionId: ctx.sessionId, assistantMessageId: ctx.assistantMessageId, runId: ctx.runId, artifacts });
+    },
+  });
   const accountUsage = (model: ModelConfig, usage: ModelUsage) => {
     const cost = costOf(usage.inputTokens, usage.outputTokens, model);
     ctx.runBudget.add({ cost, tokens: usage.inputTokens + usage.outputTokens });
@@ -138,6 +179,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
         }
       }, {
         ...options,
+        mediaTools: ctx.enableTools && ctx.deps.media ? createMediaTools(ctx.deps.media, ctx.mediaContext(options?.agentId), { projectRoot: ctx.projectRoot, allowExport: options?.projectAccess !== 'read' }) : undefined,
         sessionRules: ctx.request.sessionRules,
         hookRunner: ctx.hookRunner,
         planTool: ctx.runPlan && options?.projectAccess !== 'read' ? createPlanTool(ctx.plans, ctx.runId, (plan) => { ctx.runPlan = plan; ctx.emit('session:plan', plan); }) : undefined,
@@ -223,6 +265,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
   ctx.history = sanitizeHistory(ctx.request.history);
   ctx.enableTools = ctx.request.enableTools !== false;
   ctx.toolCalls = [];
+  ctx.mediaFailures = [];
   ctx.successfulFileWrites = [];
   ctx.traceFinished = false;
   ctx.traceStatus = 'success';
@@ -271,6 +314,14 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       });
       ctx.toolSpans.delete(event.toolCallId);
     }
+    if (['request_media', 'materialize_asset'].includes(event.toolName)) {
+      const callId = JSON.stringify([agentId ?? '', event.toolCallId]);
+      if (event.status === 'running') mediaToolArguments.set(callId, event.args);
+      else {
+        recordMediaToolOutcome(ctx.mediaFailures, event, event.args ?? mediaToolArguments.get(callId), callId);
+        mediaToolArguments.delete(callId);
+      }
+    }
     ctx.emit('session:tool-call', { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, agentId, ...event, details: undefined });
   };
   const collaboratorIds = [...new Set(ctx.request.collaboratorModelIds ?? [])];
@@ -278,7 +329,7 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     throw new Error('并行子智能体需要选择 2–4 个不同的模型。');
   ctx.collaboratorModels = collaboratorIds.map((id) => {
     const candidate = ctx.deps.models.getModel(id);
-    if (!candidate || !candidate.enabled || !hasUsableCredentials(candidate))
+    if (!candidate || !supportsOperation(candidate, 'text.chat') || !candidate.enabled || !hasUsableCredentials(candidate))
       throw new Error('子智能体只能使用已启用且配置了可用 API Key 的模型，请检查模型配置。');
     if (!ctx.deps.quota.isAvailable(candidate))
       throw new Error(`模型「${candidate.name}」已达到速率或每日配额，请稍后再试`);

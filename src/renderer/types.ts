@@ -10,6 +10,8 @@ import type { SkillsApi } from './skillsTypes';
 import type { McpApi } from './mcpTypes';
 import type { ToolTrustApi } from './toolTrustTypes';
 import type { PlanDecision, PlanningMode, RunPlan } from '@core/planning/PlanTypes';
+import type { ModelOperations } from '@core/models/ModelOperations';
+import type { MediaArtifact } from './mediaTypes';
 
 export interface ModelCapability { type: string; score: number; }
 
@@ -32,6 +34,7 @@ export interface ModelConfig {
   enabled: boolean;
   priority: number;
   capabilities: ModelCapability[];
+  operations?: ModelOperations;
   maxTokens?: number;
   rateLimit?: { requestsPerMinute: number; tokensPerDay: number };
   costPer1kTokens: { input: number; output: number };
@@ -126,6 +129,7 @@ export interface MemoryRecord {
 
 export interface ExecutionResult {
   output: string;
+  artifacts?: MediaArtifact[];
   stopReason?: string;
   runId?: string;
   modelUsed?: string;
@@ -280,7 +284,11 @@ export interface AmdApi {
     delete: (id: string) => Promise<{ success: boolean }>;
     setPrimary: (id: string) => Promise<ModelConfig[]>;
     fetchModels: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string }) => Promise<{ models: string[] }>;
-    testConnection: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string; modelId: string; temperature?: number; enableThinking?: boolean; contextWindow?: number }) => Promise<{ success: boolean; latency?: number; error?: string; demo?: boolean }>;
+    testConnection: (input: { id?: string; provider: string; baseURL?: string; apiKey?: string; modelId: string; temperature?: number; enableThinking?: boolean; contextWindow?: number; operations?: ModelOperations }) => Promise<{ success: boolean; latency?: number; error?: string; demo?: boolean }>;
+  };
+  media: {
+    open: (assetId: string) => Promise<void>;
+    export: (assetId: string) => Promise<{ cancelled: boolean; path?: string }>;
   };
   sessions: {
     plans?: (sessionId: string) => Promise<RunPlan[]>;
@@ -289,7 +297,7 @@ export interface AmdApi {
     get: (id: string) => Promise<Record<string, unknown> | undefined>;
     save: (session: unknown) => Promise<Record<string, unknown>>;
     delete: (id: string) => Promise<{ success: boolean }>;
-    execute: (input: { sessionId: string; projectId?: string | null; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; pinnedModelId?: string; verificationMode?: VerificationMode; planningMode?: PlanningMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
+    execute: (input: { sessionId: string; projectId?: string | null; prompt: string; taskType?: string; taskId?: string; runId?: string; assistantMessageId?: string; stream?: boolean; collaboratorModelIds?: string[]; pinnedModelId?: string; textModelPreferenceId?: string; operation?: 'auto' | 'text.chat' | 'image.generate' | 'video.generate'; verificationMode?: VerificationMode; planningMode?: PlanningMode; sessionRules?: string; contextPaths?: string[]; includeProjectContext?: boolean; contextMaxTokens?: number; history?: Array<{ role: 'user' | 'assistant'; content: string; tools?: Array<{ name: string; status?: string; label?: string; summary?: string }> }>; enableTools?: boolean }) => Promise<ExecutionResult>;
     cancel: (taskId: string) => Promise<{ success: boolean }>;
   };
   agent: {
@@ -302,7 +310,7 @@ export interface AmdApi {
     searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;
     setSearchProvider: (id: string) => Promise<Array<{ id: string; label: string; active: boolean }>>;
   };
-  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:verification' | 'session:plan' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
+  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:media-job' | 'session:media-artifact' | 'session:verification' | 'session:plan' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
 }
 
 declare global {

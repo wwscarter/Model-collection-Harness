@@ -13,7 +13,9 @@ import { costOf, errorUsage, estimateTokens, limitedStop, limitMessage, PARTIAL_
 export async function executeStage(ctx: RunContext): Promise<void> {
   const planIndex = ctx.taskParts.length;
   const buildFinalPrompt = (parts: string[]) => {
-    const task = ctx.buildTaskPrompt(parts);
+    const assets = ctx.deps.media?.listArtifacts(ctx.runId, ctx.sessionId) ?? [];
+    const mediaSummary = assets.length ? ['', '已由本轮媒体工具生成的共享资产（可复用，不要重新生成）：', JSON.stringify(assets)].join(String.fromCharCode(10)) : '';
+    const task = ctx.buildTaskPrompt(parts) + mediaSummary;
     const reports = ctx.agentReports.map((report, index) => ({ ...report, content: report.stopReason === 'tool_limit' ? `${PARTIAL_AGENT_NOTICE}\n\n${parts[index + planIndex + 2]}` : parts[index + planIndex + 2] }));
     return ctx.orchestration ? buildOrchestratedFinalPrompt(task, { ...ctx.orchestration, plan: parts[planIndex], reason: parts[planIndex + 1] }, reports, ctx.failedAgentCount)
       : ctx.collaboratorModels.length ? buildSynthesisPrompt(task, reports, ctx.failedAgentCount) : task;

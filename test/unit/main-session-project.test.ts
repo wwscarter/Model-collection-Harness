@@ -40,6 +40,7 @@ vi.mock('electron', () => ({
   session: { defaultSession: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } },
   dialog: { showOpenDialog: state.showOpenDialog, showMessageBox: vi.fn(), showErrorBox: vi.fn() },
   shell: { openPath: state.openPath },
+  protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
 }));
 
 vi.mock('../../src/core/agent/RunCoordinator', () => ({ executeRun: state.executeRun }));

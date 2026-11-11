@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import fs from 'node:fs';
 import { hasUsableCredentials, type ModelConfig } from '@core/models/ModelConfig';
 import type { AgentRouter, RoutingDecision, RoutingStrategy, TaskComplexity, TaskContext, TaskType } from './AgentRouter';
@@ -162,7 +163,7 @@ export class RoutingPolicyEngine {
 
   async routeTask(context: TaskContext, models: ModelConfig[], guard?: RoutingGuard, options: import('./AgentRouter').RoutingOptions = {}): Promise<RoutingDecision> {
     options.signal?.throwIfAborted();
-    const usable = models.filter((model) => model.enabled && hasUsableCredentials(model) && (guard?.isAvailable(model.id) ?? true));
+    const usable = models.filter((model) => model.enabled && supportsOperation(model, 'text.chat') && hasUsableCredentials(model) && (guard?.isAvailable(model.id) ?? true));
     if (!usable.length) throw new Error('没有满足凭据、配额与上下文约束的可用模型');
     const base = await this.router.routeTask(context, usable, options);
     const available = new Set(usable.map((model) => model.id));

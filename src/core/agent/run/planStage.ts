@@ -7,10 +7,11 @@ import { BudgetExceededError } from '@core/routing/RunBudget';
 import type { RunContext } from './RunContext';
 import { costOf } from './runHelpers';
 import { presentPlan } from './presentPlan';
+import { supportsOperation } from '@core/models/ModelOperations';
 
 /** Apply optional orchestration suggestions to the routed task. */
 export async function planStage(ctx: RunContext): Promise<void> {
-  const plannerModels = ctx.deps.models.getAllModels().filter((candidate) => candidate.enabled && hasUsableCredentials(candidate) && ctx.deps.quota.isAvailable(candidate));
+  const plannerModels = ctx.deps.models.getAllModels().filter((candidate) => supportsOperation(candidate, 'text.chat') && candidate.enabled && hasUsableCredentials(candidate) && ctx.deps.quota.isAvailable(candidate));
   const explicitSingle = Boolean(ctx.decision.ruleId && ctx.decision.strategy === 'single');
   const mode = ctx.request.planningMode ?? ctx.deps.routingSettings?.planning.executionMode ?? 'auto';
   const needsPlanning = mode !== 'auto' || (!ctx.pinned && !explicitSingle && ctx.deps.routingSettings?.planning.mode !== 'off'

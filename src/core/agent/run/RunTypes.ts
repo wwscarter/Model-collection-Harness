@@ -20,6 +20,7 @@ import type { AgentRunRequest, ToolEvent } from '../AgentRuntime';
 import type { HookRunner, HookRunnerOptions } from '@core/hooks/HookRunner';
 import type { PlanController } from '@core/planning/PlanController';
 import type { PlanningMode } from '@core/planning/PlanTypes';
+import type { MediaExecutionService } from '@core/media/MediaExecutionService';
 
 export interface RunRequest {
   sessionId?: string;
@@ -28,6 +29,10 @@ export interface RunRequest {
   assistantMessageId?: string;
   projectId?: string | null;
   prompt: string;
+  operation?: 'auto' | 'text.chat' | 'image.generate' | 'video.generate';
+  /** Desktop preference, scoped to text execution. */
+  textModelPreferenceId?: string;
+  media?: { size?: string; aspectRatio?: string; format?: 'png' | 'jpeg' | 'webp'; quality?: 'auto' | 'low' | 'medium' | 'high'; transparentBackground?: boolean; durationSeconds?: number };
   taskType?: string;
   complexity?: 'low' | 'medium' | 'high';
   stream?: boolean;
@@ -68,10 +73,14 @@ export type InvokeStreamed = (
     onRulesLoaded?: AgentRunRequest['onRulesLoaded'];
     hookRunner?: AgentRunRequest['hookRunner'];
     planTool?: AgentRunRequest['planTool'];
+    mediaTools?: AgentRunRequest['mediaTools'];
+    agentId?: string;
   },
 ) => Promise<ModelResponse>;
 
 export interface RunDependencies {
+  media?: MediaExecutionService;
+  approveMedia?: (request: { operation: string; prompt: string }, signal: AbortSignal) => Promise<string | undefined>;
   models: ModelRegistry;
   routing: RoutingPolicyEngine;
   routingSettings?: RoutingSettings;

@@ -1,3 +1,5 @@
+import { normalizeArtifacts, normalizeMediaJobs, type MediaArtifact, type MediaJobSummary } from './mediaTypes';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -7,6 +9,8 @@ export interface ChatMessage {
   durationMs?: number;
   agents?: ChatAgentMessage[];
   tools?: ChatToolCall[];
+  artifacts?: MediaArtifact[];
+  mediaJobs?: MediaJobSummary[];
 }
 
 /** A tool call the model made while answering (web search, page fetch, file read). */
@@ -60,6 +64,8 @@ export function restoreMessages(record: SessionMessageSource): ChatMessage[] {
         ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
         ...(Array.isArray(message.agents) ? { agents: restoreAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: restoreTools(message.tools) } : {}),
+        ...(Array.isArray(message.artifacts) ? { artifacts: normalizeArtifacts(message.artifacts) } : {}),
+        ...(Array.isArray(message.mediaJobs) ? { mediaJobs: normalizeMediaJobs(message.mediaJobs) } : {}),
       }];
     });
     if (messages.length) return messages;
@@ -168,6 +174,25 @@ export function setLatestAssistantDuration(messages: ChatMessage[], durationMs: 
   return messages.map((message) => message.id === target && message.role === 'assistant' ? { ...message, durationMs } : message);
 }
 
+/** Address the original turn so delayed media events cannot attach to a newer reply. */
+export function updateAssistantMedia(messages: ChatMessage[], update: { messageId?: string; artifacts?: unknown; job?: unknown }): ChatMessage[] {
+  const target = update.messageId ?? [...messages].reverse().find((message) => message.role === 'assistant')?.id;
+  const artifacts = normalizeArtifacts(update.artifacts);
+  const jobs = normalizeMediaJobs(update.job ? [update.job] : []);
+  return messages.map((message) => {
+    if (message.role !== 'assistant' || message.id !== target) return message;
+    const mergedArtifacts = new Map((message.artifacts ?? []).map((item) => [item.id, item]));
+    for (const artifact of artifacts) mergedArtifacts.set(artifact.id, artifact);
+    const mergedJobs = new Map((message.mediaJobs ?? []).map((item) => [item.id, item]));
+    for (const job of jobs) {
+      const previous = mergedJobs.get(job.id);
+      if (previous?.status === 'succeeded' && job.status !== 'succeeded') continue;
+      mergedJobs.set(job.id, job);
+    }
+    return { ...message, ...(mergedArtifacts.size ? { artifacts: [...mergedArtifacts.values()] } : {}), ...(mergedJobs.size ? { mediaJobs: [...mergedJobs.values()] } : {}) };
+  });
+}
+
 /** Process cards are live-only; persist the final answer without tool/agent traces. */
 export function stripAssistantProcess(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
@@ -244,9 +269,9 @@ export interface ModelHistoryTurn {
 }
 
 export function historyForModel(messages: ChatMessage[]): ModelHistoryTurn[] {
-  return messages.filter((message) => message.content.trim()).map((message) => ({
+  return messages.filter((message) => message.content.trim() || message.artifacts?.length).map((message) => ({
     role: message.role,
-    content: message.content,
+    content: [message.content, ...(message.artifacts ?? []).map((artifact) => '已生成' + (artifact.kind === 'image' ? '图片' : '视频') + '，资产 ID：' + artifact.id + '；模型：' + artifact.modelId)].filter(Boolean).join('\n'),
     ...(message.tools?.length ? {
       tools: message.tools.map((tool) => ({ name: tool.toolName, status: tool.status, label: tool.label, summary: tool.summary })),
     } : {}),

@@ -8,6 +8,7 @@ import {
   validateModelConfig,
 } from "./ModelConfig";
 import { ModelStore } from "../storage/ModelStorage";
+import { cloneModelOperations, supportsOperation } from "./ModelOperations";
 
 export interface ModelRegistryOptions {
   /** Add the three editable provider presets when they are absent. */
@@ -61,6 +62,7 @@ function toConfig(input: ModelConfigInput): ModelConfig {
       raw.intelligenceScore ?? capabilities.find((capability) => capability.type === "reasoning")?.score ?? 70,
     costPer1kTokens: { input: raw.costPer1kTokens?.input ?? 0, output: raw.costPer1kTokens?.output ?? 0 },
     capabilities,
+    ...(raw.operations === undefined ? {} : { operations: cloneModelOperations(raw.operations) }),
     maxTokens: raw.maxTokens ?? 4096,
     rateLimit: { requestsPerMinute: raw.rateLimit?.requestsPerMinute ?? 60, tokensPerDay: raw.rateLimit?.tokensPerDay ?? 1_000_000 },
     enabled: raw.enabled ?? false,
@@ -182,7 +184,7 @@ export class ModelRegistry {
 
   async getModelForCapability(capability: ModelCapabilityType): Promise<ModelConfig | undefined> {
     return this.getEnabledModels()
-      .filter((model) => model.capabilities.some((entry) => entry.type === capability))
+      .filter((model) => supportsOperation(model, "text.chat") && model.capabilities.some((entry) => entry.type === capability))
       .sort((a, b) => {
         const scoreA = a.capabilities.find((entry) => entry.type === capability)?.score ?? 0;
         const scoreB = b.capabilities.find((entry) => entry.type === capability)?.score ?? 0;
@@ -191,7 +193,7 @@ export class ModelRegistry {
   }
 
   getCostOptimalModel(): ModelConfig | undefined {
-    return this.getEnabledModels().sort(
+    return this.getEnabledModels().filter((model) => supportsOperation(model, "text.chat")).sort(
       (a, b) =>
         a.costPer1kTokens.input + a.costPer1kTokens.output -
           (b.costPer1kTokens.input + b.costPer1kTokens.output) || a.priority - b.priority,

@@ -83,4 +83,22 @@ describe('settings form draft', () => {
 
     expect(() => settingsPayload(draft, true)).toThrow(message);
   });
+
+  it('keeps media-only configurations out of the text primary role and preserves operation limits', () => {
+    const draft = createSettingsDraft({ ...model, operations: { 'image.generate': { protocol: 'openai-images', score: 91, estimatedCostUsd: 0.15, limits: { sizes: ['1024x1024'], transparentBackground: true } } } });
+    draft.primary = true;
+    const payload = settingsPayload(draft, true);
+    expect(payload.isPrimary).toBe(false);
+    expect(payload.operations).toEqual({ 'image.generate': { protocol: 'openai-images', score: 91, estimatedCostUsd: 0.15, limits: { sizes: ['1024x1024'], transparentBackground: true } } });
+    payload.operations!['image.generate']!.limits!.sizes!.push('1536x1024');
+    expect(draft.operations['image.generate']!.limits!.sizes).toEqual(['1024x1024']);
+  });
+
+  it('requires an operation and rejects invalid media estimates before persistence', () => {
+    const draft = createSettingsDraft(model);
+    draft.operations = {};
+    expect(() => settingsPayload(draft, true)).toThrow('至少配置');
+    draft.operations = { 'image.generate': { protocol: 'openai-images', estimatedCostUsd: -1 } };
+    expect(() => settingsPayload(draft, true)).toThrow('预估费用');
+  });
 });

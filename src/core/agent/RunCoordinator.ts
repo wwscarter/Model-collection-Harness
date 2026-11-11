@@ -10,11 +10,21 @@ import { routeStage } from './run/routeStage';
 import { createRunContext } from './run/RunContext';
 import type { RunDependencies, RunEmit, RunRequest } from './run/RunTypes';
 import { verifyStage } from './run/verifyStage';
+import { resolveRequestOperation } from '@core/routing/RequestOperation';
+import { executeDirectMedia } from './run/directMediaRun';
+import { validateSessionRules } from './sessionRules';
 
 export type { InvokeStreamed, RunDependencies, RunEmit, RunRequest } from './run/RunTypes';
 
 /** Execute one user turn through independently testable pipeline stages. */
 export async function executeRun(request: RunRequest, deps: RunDependencies, emit: RunEmit): Promise<Record<string, unknown>> {
+  if (!request || typeof request.prompt !== 'string' || !request.prompt.trim() || request.prompt.length > 200_000) throw new Error('任务描述无效');
+  for (const key of ['sessionId', 'taskId', 'runId', 'assistantMessageId', 'pinnedModelId', 'textModelPreferenceId'] as const) {
+    if (request[key] !== undefined && (typeof request[key] !== 'string' || !request[key]?.trim() || request[key]!.length > 300)) throw new Error('无效的请求身份字段：' + key);
+  }
+  validateSessionRules(request.sessionRules);
+  const operation = resolveRequestOperation(request.prompt, request.operation);
+  if (operation !== 'text.chat') return executeDirectMedia(request, operation, deps, emit);
   const ctx = createRunContext(request, deps, emit);
   let output: Record<string, unknown>;
   try {

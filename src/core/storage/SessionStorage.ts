@@ -60,6 +60,18 @@ export interface SessionMessageRecord {
   durationMs?: number;
   agents?: SessionAgentRecord[];
   tools?: SessionToolRecord[];
+  artifacts?: SessionArtifactRecord[];
+  mediaJobs?: SessionMediaJobRecord[];
+}
+
+export interface SessionArtifactRecord {
+  id: string; kind: 'image' | 'video'; mimeType: string; fileName: string;
+  modelId: string; configurationId: string; jobId: string; width?: number; height?: number;
+}
+export interface SessionMediaJobRecord {
+  id: string; operation: 'image.generate' | 'video.generate';
+  status: 'queued' | 'submitting' | 'running' | 'downloading' | 'succeeded' | 'failed' | 'unknown' | 'cancelled';
+  modelId?: string; error?: string;
 }
 
 interface SessionRow { id: string; title: string; prompt: string; user_message: string | null; output: string; messages: string | null; model_used: string | null; multi_model: number | null; model_id: string | null; project_id: string | null; project_root: string | null; last_run_id: string | null; summary: string | null; summary_covers_to: number | null; summary_hash: string | null; summary_tokens: number | null; summary_updated_at: string | null; metrics: string | null; audit_result: string | null; rating: number | null; created_at: string; updated_at: string; }
@@ -150,6 +162,8 @@ export class SessionStorage {
         ...(typeof message.durationMs === 'number' && Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
         ...(Array.isArray(message.agents) ? { agents: this.normalizeAgents(message.agents) } : {}),
         ...(Array.isArray(message.tools) ? { tools: this.normalizeTools(message.tools) } : {}),
+        ...(Array.isArray(message.artifacts) ? { artifacts: normalizeArtifacts(message.artifacts) } : {}),
+        ...(Array.isArray(message.mediaJobs) ? { mediaJobs: normalizeMediaJobs(message.mediaJobs) } : {}),
       }];
     });
     return messages.length || value.length === 0 ? messages : undefined;
@@ -201,4 +215,26 @@ export class SessionStorage {
 function parseJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+const safeMediaId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(value);
+function normalizeArtifacts(values: unknown[]): SessionArtifactRecord[] {
+  const seen = new Set<string>();
+  return values.slice(0, 50).flatMap((value): SessionArtifactRecord[] => {
+    if (!value || typeof value !== 'object') return [];
+    const artifact = value as Partial<SessionArtifactRecord>;
+    if (!safeMediaId(artifact.id) || seen.has(artifact.id) || !['image', 'video'].includes(artifact.kind ?? '') || typeof artifact.mimeType !== 'string' || !/^(image|video)\/[a-zA-Z0-9.+-]+$/.test(artifact.mimeType) || typeof artifact.fileName !== 'string' || typeof artifact.modelId !== 'string' || typeof artifact.configurationId !== 'string' || !safeMediaId(artifact.jobId)) return [];
+    seen.add(artifact.id);
+    return [{ id: artifact.id, kind: artifact.kind!, mimeType: artifact.mimeType, fileName: artifact.fileName.split(/[\\/]/).at(-1)!.slice(0, 200), modelId: artifact.modelId, configurationId: artifact.configurationId, jobId: artifact.jobId,
+      ...(Number.isFinite(artifact.width) && artifact.width! > 0 ? { width: artifact.width } : {}), ...(Number.isFinite(artifact.height) && artifact.height! > 0 ? { height: artifact.height } : {}),
+    }];
+  });
+}
+function normalizeMediaJobs(values: unknown[]): SessionMediaJobRecord[] {
+  return values.slice(0, 50).flatMap((value): SessionMediaJobRecord[] => {
+    if (!value || typeof value !== 'object') return [];
+    const job = value as Partial<SessionMediaJobRecord>;
+    if (!safeMediaId(job.id) || !['image.generate', 'video.generate'].includes(job.operation ?? '') || !['queued', 'submitting', 'running', 'downloading', 'succeeded', 'failed', 'unknown', 'cancelled'].includes(job.status ?? '')) return [];
+    return [{ id: job.id, operation: job.operation!, status: job.status!, ...(typeof job.modelId === 'string' ? { modelId: job.modelId } : {}), ...(typeof job.error === 'string' ? { error: job.error.slice(0, 500) } : {}) }];
+  });
 }

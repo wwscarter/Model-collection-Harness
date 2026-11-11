@@ -5,9 +5,13 @@ import { selectUtilityModel } from '@core/routing/ModelCollaboration';
 import { BudgetExceededError } from '@core/routing/RunBudget';
 import type { RunContext } from './RunContext';
 import { costOf, limitedStop, limitMessage, PARTIAL_AGENT_NOTICE, publicModel } from './runHelpers';
+import { resolveMediaCompletion } from './mediaCompletion';
 
 /** Audit the answer, store memories and publish completion. */
 export async function finalizeStage(ctx: RunContext): Promise<Record<string, unknown>> {
+  const media = resolveMediaCompletion(ctx.deps.media?.listJobs(ctx.runId, ctx.sessionId) ?? [], ctx.mediaFailures, { runId: ctx.runId, sessionId: ctx.sessionId });
+  const mediaBlocked = media.blocked;
+  if (media.notice && !ctx.result.content.includes(media.notice)) ctx.result = { ...ctx.result, content: ctx.result.content.trimEnd() + '\n\n' + media.notice };
   const projectSummary = ctx.projectVerification?.summary;
   if (projectSummary && !ctx.result.content.includes(projectSummary)) ctx.result = { ...ctx.result, content: ctx.result.content.trimEnd() + '\n\n' + projectSummary };
   // Static code audit is deterministic and free. It runs only when the
@@ -22,7 +26,7 @@ export async function finalizeStage(ctx: RunContext): Promise<Record<string, unk
     autoExtract = ctx.deps.memory.getAutoExtract();
   }
   catch { /* memory settings must not fail an answer */ }
-  if (!['tool_limit', 'budget_limit', 'length'].includes(ctx.result.stopReason ?? '') && autoExtract && !ctx.controller.signal.aborted) {
+  if (!mediaBlocked && !limitedStop(ctx.result.stopReason) && autoExtract && !ctx.controller.signal.aborted) {
     const extractionModel = selectUtilityModel(ctx.deps.models.getEnabledModels().filter((candidate) => ctx.deps.quota.isAvailable(candidate)), ctx.executionModel.id, ctx.deps.routingSettings?.utilityModelId);
     if (extractionModel) {
       const extractionSpan = ctx.trace.child('memory', 'memory.extract', { modelId: extractionModel.id, modelSnapshot: snapshotModel(extractionModel), role: 'extractor' });
@@ -79,8 +83,9 @@ export async function finalizeStage(ctx: RunContext): Promise<Record<string, unk
     ctx.result = { ...ctx.result, stopReason: 'budget_limit' };
   }
   const projectCheckFailed = ctx.projectVerification?.status === 'failed';
+  if (mediaBlocked) ctx.result = { ...ctx.result, stopReason: 'media_incomplete' };
   const projectCheckUnverified = ctx.projectVerification && !['passed', 'failed', 'skipped'].includes(ctx.projectVerification.status);
-  if (ctx.metrics && !projectCheckUnverified && !['tool_limit', 'budget_limit', 'length'].includes(ctx.result.stopReason ?? '')) {
+  if (ctx.metrics && !mediaBlocked && !projectCheckUnverified && !limitedStop(ctx.result.stopReason)) {
     ctx.recordGrowth({ modelId: ctx.executionModel.id, taskType: ctx.decision.taskType, success: !projectCheckFailed, completed: !projectCheckFailed, actualCost: ctx.metrics.totalCost, estimatedCost: ctx.decision.estimatedCost, actualLatency: ctx.metrics.latency, estimatedLatency: ctx.decision.estimatedDuration, auditApproval: audit?.passed });
   }
   if (ctx.executionModel.id !== ctx.model.id) {
@@ -93,7 +98,10 @@ export async function finalizeStage(ctx: RunContext): Promise<Record<string, unk
   const runMetrics = { ...ctx.metrics, startTime: new Date(ctx.startedAt), endTime: new Date(), inputTokens: ctx.totalInputTokens, outputTokens: ctx.totalOutputTokens, totalCost: ctx.totalCost, latency: Date.now() - ctx.startedAt, stopReason, ...(ctx.budgetLimit ? { budgetLimit: ctx.budgetLimit } : {}) };
   const output = { sessionId: ctx.sessionId, taskId: ctx.taskId, runId: ctx.runId, assistantMessageId: ctx.assistantMessageId, output: ctx.result.content, stopReason, modelUsed: publicModel(ctx.executionModel), modelsUsed: ctx.deps.observability.getTaskMetrics(ctx.runId).modelsUsed, fallbackAttempts: ctx.fallbackAttempts, planningModelId: ctx.planningModelId, pinnedModelId: ctx.pinned?.id, decision: ctx.decision, orchestration: ctx.orchestration ? { orchestratorModelId: ctx.planningModelId, planningModelId: ctx.planningModelId, executorModelId: ctx.executionModel.id, synthesizerModelId: ctx.executionModel.id, mode: ctx.orchestration.mode, taskType: ctx.orchestration.taskType, complexity: ctx.orchestration.complexity, reason: ctx.orchestration.reason, plan: ctx.orchestration.plan, subagents: ctx.orchestration.subagents, verify: ctx.orchestration.verify } : undefined, metrics: runMetrics, verification: ctx.verification, audit, extractedMemoryIds, agentReports: reportedAgents, agentMessages: ctx.agentMessages, toolCalls: ctx.toolCalls.map(({ details: _details, ...call }) => call), project: ctx.projectContext ? { root: ctx.projectContext.root, files: ctx.projectContext.files.map((file) => file.path), tokenCount: ctx.projectContext.tokenCount, truncated: ctx.projectContext.truncated, skippedFiles: ctx.projectContext.skippedFiles } : undefined };
   Object.assign(output, ctx.budgetLimit ? { budgetLimit: ctx.budgetLimit } : {}, ctx.projectVerification ? { projectVerification: ctx.projectVerification } : {});
-  ctx.traceStatus = limitedStop(stopReason) || projectCheckFailed ? 'failed' : 'success';
-  ctx.traceError = ctx.budgetLimit?.message ?? limitMessage(stopReason) ?? (projectCheckFailed ? projectSummary : undefined);
+  if (ctx.deps.media) Object.assign(output, { artifacts: media.jobs.flatMap((job) => job.artifacts), mediaJobs: media.jobs });
+  if (mediaBlocked) Object.assign(output, { mediaFailures: media.failures });
+  Object.assign(runMetrics, { costStatus: ctx.mediaCostStatus });
+  ctx.traceStatus = limitedStop(stopReason) || projectCheckFailed || mediaBlocked ? 'failed' : 'success';
+  ctx.traceError = ctx.budgetLimit?.message ?? (mediaBlocked ? media.notice : limitMessage(stopReason)) ?? (projectCheckFailed ? projectSummary : undefined);
   return output;
 }

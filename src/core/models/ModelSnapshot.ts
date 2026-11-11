@@ -1,4 +1,5 @@
 import { PRESET_MODELS, type ModelConfig } from './ModelConfig';
+import { cloneModelOperations, type ModelOperations } from './ModelOperations';
 
 /** Identity and configured estimates as they stood when this call was made. */
 export interface ModelSnapshot {
@@ -11,6 +12,7 @@ export interface ModelSnapshot {
   pricingBasis: 'configured-token-rates';
   legacyPresetRates?: boolean;
   configurationUpdatedAt: string;
+  operations?: ModelOperations;
 }
 
 const DEFAULT_ORIGINS: Partial<Record<ModelConfig['provider'], string>> = {
@@ -46,5 +48,6 @@ export function snapshotModel(model: ModelConfig): ModelSnapshot {
     pricingBasis: 'configured-token-rates',
     ...(hasLegacyPresetRates(model) ? { legacyPresetRates: true } : {}),
     configurationUpdatedAt: Number.isFinite(updatedAt.getTime()) ? updatedAt.toISOString() : '',
+    ...(model.operations === undefined ? {} : { operations: cloneModelOperations(model.operations) }),
   };
 }

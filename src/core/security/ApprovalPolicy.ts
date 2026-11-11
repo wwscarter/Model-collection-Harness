@@ -45,6 +45,7 @@ export function evaluateCommandApproval(mode: ApprovalMode, command: string, pro
 }
 
 export function evaluateToolApproval(mode: ApprovalMode, request: ToolApprovalRequest): ApprovalDecision {
+  if (request.toolName === 'get_media_job') return { decision: 'allow', reason: '查询当前会话已有的媒体任务，不创建生成请求' };
   if (request.toolName === 'update_plan') return { decision: 'allow', reason: '更新当前计划的步骤进度' };
   if (SAFE_TOOLS.has(request.toolName)) return { decision: 'allow', reason: '只读或安全工具' };
   if (request.toolName === 'run_command') return evaluateCommandApproval(mode, String(request.input.command ?? ''), request.projectRoot);

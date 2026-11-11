@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Waypoints } from 'lucide-react';
 import type { ModelConfig } from '../types';
+import { supportsOperation } from '@core/models/ModelOperations';
 
 interface RoutingPanelProps { onClose: () => void; }
 
@@ -175,7 +176,7 @@ export function RoutingPanel({ onClose }: RoutingPanelProps) {
     finally { setBusy(false); }
   };
 
-  const modelOptions = models.filter((model) => model.enabled).map((model) => ({ id: model.id, label: model.name + ' · ' + model.id }));
+  const modelOptions = models.filter((model) => model.enabled && supportsOperation(model, 'text.chat')).map((model) => ({ id: model.id, label: model.name + ' · ' + model.id }));
   const selectMulti = (value: string[], onChange: (value: string[]) => void, label: string) => <select multiple className="routing-multi" value={value} aria-label={label} onChange={(event) => onChange(Array.from(event.target.selectedOptions).map((option) => option.value))}>{modelOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
 
   return <div className="modal-overlay routing-overlay"><section className="modal-window routing-window" role="dialog" aria-modal="true" aria-labelledby="routing-title">

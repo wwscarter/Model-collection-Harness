@@ -1,4 +1,5 @@
 import { hasUsableCredentials } from '@core/models/ModelConfig';
+import { supportsOperation } from '@core/models/ModelOperations';
 import { snapshotModel } from '@core/models/ModelSnapshot';
 import { awaitWithSignal } from '@core/tools/awaitWithSignal';
 import type { RunContext } from './RunContext';
@@ -8,9 +9,10 @@ import { routingPriorContext } from './runHelpers';
 export async function routeStage(ctx: RunContext): Promise<void> {
   ctx.storedSummary = ctx.deps.summaries.getSummary(ctx.sessionId);
   ctx.priorContext = routingPriorContext(ctx.request.history, ctx.storedSummary?.text);
-  const pinnedCandidate = ctx.request.pinnedModelId ? ctx.deps.models.getModel(ctx.request.pinnedModelId) : undefined;
-  ctx.pinned = pinnedCandidate && pinnedCandidate.enabled && hasUsableCredentials(pinnedCandidate) && ctx.deps.quota.isAvailable(pinnedCandidate) ? pinnedCandidate : undefined;
-  if (ctx.request.pinnedModelId && !ctx.pinned)
+  const pinnedId = ctx.request.pinnedModelId ?? ctx.request.textModelPreferenceId;
+  const pinnedCandidate = pinnedId ? ctx.deps.models.getModel(pinnedId) : undefined;
+  ctx.pinned = pinnedCandidate && supportsOperation(pinnedCandidate, 'text.chat') && pinnedCandidate.enabled && hasUsableCredentials(pinnedCandidate) && ctx.deps.quota.isAvailable(pinnedCandidate) ? pinnedCandidate : undefined;
+  if (pinnedId && !ctx.pinned)
     throw new Error('所选固定模型当前不可用，请检查模型配置与配额');
   ctx.routeSpan = ctx.trace.child('route', 'route', { requestedTaskType: ctx.request.taskType, requestedComplexity: ctx.request.complexity });
   try {

@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { appendAssistantChunk, preparePendingTurn, replaceLatestAssistant, restoreMessages, truncateHistoryAtEditedMessage, updateAssistantAgent, updateLatestAssistantAttribution, updateLatestAssistantContent } from '../../src/renderer/sessionMessages';
+import { appendAssistantChunk, historyForModel, preparePendingTurn, replaceLatestAssistant, restoreMessages, stripAssistantProcess, truncateHistoryAtEditedMessage, updateAssistantAgent, updateAssistantMedia, updateLatestAssistantAttribution, updateLatestAssistantContent } from '../../src/renderer/sessionMessages';
 
 describe('session message history', () => {
+  it('preserves media metadata across restoration and completion, and addresses late events by turn', () => {
+    const artifact = { id: 'asset-1', kind: 'image' as const, mimeType: 'image/png', fileName: '/private/path/generated.png', modelId: 'image-model', configurationId: 'image-config', jobId: 'job-1', base64: 'secret-bytes' };
+    const messages = restoreMessages({ messages: [{ id: 'a1', role: 'assistant', content: '', artifacts: [artifact] }, { id: 'a2', role: 'assistant', content: 'newer' }] });
+    const updated = updateAssistantMedia(messages, { messageId: 'a1', artifacts: [artifact], job: { id: 'job-1', operation: 'image.generate', status: 'succeeded' } });
+    expect(updated[0].artifacts).toHaveLength(1);
+    expect(updated[0].artifacts![0]).toMatchObject({ fileName: 'generated.png' });
+    expect(updated[0].artifacts![0]).not.toHaveProperty('base64');
+    expect(updated[1].artifacts).toBeUndefined();
+    expect(stripAssistantProcess(updated)[0].artifacts).toHaveLength(1);
+    expect(historyForModel(updated)[0].content).toContain('资产 ID：asset-1');
+    expect(historyForModel(updated)[0].content).not.toContain('/private/path');
+  });
   it('restores a legacy session as its original user and assistant messages', () => {
     expect(restoreMessages({ title: 'Legacy title', userMessage: '', prompt: '', output: 'Legacy reply' })).toEqual([
       { id: 'legacy-user', role: 'user', content: 'Legacy title' },

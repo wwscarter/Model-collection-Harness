@@ -1,3 +1,4 @@
+import { supportsOperation } from '@core/models/ModelOperations';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GitBranch, LoaderCircle, RefreshCw } from 'lucide-react';
 import type { RoutingSettings } from '@core/routing/RoutingSettings';
@@ -121,7 +122,7 @@ export function ModelRoutingSettings({ onRoutingStatusChange }: ModelRoutingSett
   const currentProbe = draft && probeResult?.fingerprint === fingerprint(draft) ? probeResult : undefined;
   const installedModels = draft && probeResult?.baseURL === draft.classifier.baseURL.trim() ? probeResult.models : [];
   const status = currentProbe?.status ?? savedStatus;
-  const enabledModels = models.filter((model) => model.enabled && !model.credentialError && (model.provider === 'custom' || model.hasApiKey));
+  const enabledModels = models.filter((model) => model.enabled && supportsOperation(model, 'text.chat') && !model.credentialError && (model.provider === 'custom' || model.hasApiKey));
   const modelOptions = (selected?: string, automatic = '自动按能力选择') => <>
     <option value="">{automatic}</option>
     {selected && !enabledModels.some((model) => model.id === selected) && <option value={selected}>已保存的模型（当前不可用）</option>}

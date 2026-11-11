@@ -1,6 +1,7 @@
 import { credentialOrigin, type ModelConfig, type ModelProvider } from '../models/ModelConfig';
 import { createProvider, type ProviderOptions } from './ModelProvider';
 import { normalizeBaseUrl } from '@core/agent/modelMapping';
+import { cloneModelOperations, supportsOperation, validateModelOperations, type ModelOperations } from '@core/models/ModelOperations';
 
 /** Draft values are sent to the main process; saved credentials never return to the renderer. */
 export interface ModelConnectionInput {
@@ -12,9 +13,10 @@ export interface ModelConnectionInput {
   temperature?: number;
   enableThinking?: boolean;
   contextWindow?: number;
+  operations?: ModelOperations;
 }
 
-export interface ModelConnectionResult { success: boolean; latency?: number; error?: string; demo?: boolean; }
+export interface ModelConnectionResult { success: boolean; latency?: number; error?: string; demo?: boolean; probeUnsupported?: boolean; }
 interface ModelLookup { getModel(id: string): ModelConfig | undefined; }
 const providers: ModelProvider[] = ['openai', 'anthropic', 'google', 'deepseek', 'custom'];
 
@@ -38,6 +40,7 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 1.5) throw new Error('采样温度须为 0–1.5');
   if (provider === 'anthropic' && temperature > 1) throw new Error('Anthropic 采样温度须为 0–1');
   const now = new Date();
+  validateModelOperations(input.operations);
   return {
     ...saved,
     id: saved?.id ?? 'draft-connection',
@@ -52,6 +55,7 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
     contextWindow: input.contextWindow ?? saved?.contextWindow ?? 65_536,
     maxTokens: saved?.maxTokens ?? 4_096,
     capabilities: saved?.capabilities ?? [],
+    ...(input.operations === undefined ? {} : { operations: cloneModelOperations(input.operations) }),
     costPer1kTokens: saved?.costPer1kTokens ?? { input: 0, output: 0 },
     rateLimit: saved?.rateLimit ?? { requestsPerMinute: 60, tokensPerDay: 1_000_000 },
     enabled: saved?.enabled ?? false,
@@ -98,7 +102,8 @@ export async function fetchModelIdentifiers(input: ModelConnectionInput, registr
     for (const entry of entries) {
       if (model.provider === 'google') {
         const google = entry as { name?: unknown; supportedGenerationMethods?: string[] };
-        if (google.supportedGenerationMethods && !google.supportedGenerationMethods.includes('generateContent')) continue;
+        // Keep generation/prediction entries, including media; capabilities remain explicit.
+        if (google.supportedGenerationMethods && !google.supportedGenerationMethods.some((method) => /generate|predict/i.test(method))) continue;
         if (typeof google.name === 'string' && google.name.trim()) identifiers.add(google.name.trim().replace(/^models\//, ''));
       } else {
         const id = (entry as { id?: unknown }).id;
@@ -117,6 +122,9 @@ export async function testModelConnection(input: ModelConnectionInput, registry:
   try {
     const model = resolveDraftModel(input, registry);
     if (!model.modelId) throw new Error('请先填写或选择模型 ID');
+    if (!supportsOperation(model, 'text.chat')) {
+      return { success: false, probeUnsupported: true, error: '媒体模型不能使用文本连通测试；配置已校验，请执行一次明确的媒体生成来验证协议。', demo: false };
+    }
     if (!model.apiKey && model.provider !== 'custom') {
       return { success: false, demo: true, error: '尚未配置 API Key，当前为演示模式，未测试远程连接' };
     }

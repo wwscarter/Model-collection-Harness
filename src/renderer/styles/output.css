@@ -44,3 +44,13 @@
   .code-line-numbers { padding-right: 8px; }
   .highlighted-code pre { padding-right: 12px; padding-left: 12px; }
 }
+.media-result { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.media-preview { display: block; max-width: 100%; max-height: 540px; width: auto; margin: auto; object-fit: contain; background: var(--surface-soft); }
+.media-result figcaption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.media-result figcaption > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.media-result figcaption span { font-size: 11px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.media-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.media-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: 11px; cursor: pointer; }
+.media-missing, .media-action-error { padding: 14px; font-size: 12px; color: var(--text-secondary); }
+.media-job-status { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.media-job-status span { color: var(--text-secondary); }

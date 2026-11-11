@@ -47,6 +47,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   } else {
     lines.push('本轮未关联项目。需要创建文件、修改代码或执行项目命令时，请用户通过现有的“选择项目”入口关联目录。');
   }
+  if (has('request_media')) lines.push('需要真实图片或视频素材时，调用 request_media 提交用途、完整提示词与必要约束，由应用自动选择模型。不要指定供应商、猜测素材链接或把文字描述当作生成成功。同一素材使用稳定的 artifactSlot（例如 page.hero），只有明确重做才增加 revision。关键内容不明确时先澄清，可选参数可以省略。工具失败时如实说明。');
+  if (has('materialize_asset')) lines.push('把素材用于项目时，先用 materialize_asset 导出到项目相对路径，再引用工具返回的实际路径。');
   lines.push('只描述本轮工具清单中实际提供的能力。应用没有可供用户切换的“终端权限模式”，不要编造权限开关、模式或设置入口。');
   lines.push('不要声称执行了实际上没有执行的操作。');
   if (input.rules) lines.push(input.rules);

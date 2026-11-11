@@ -42,6 +42,8 @@ export interface AgentRunRequest {
   /** Allow web_search / web_fetch / file tools. False sends a plain chat request. */
   enableTools?: boolean;
   planTool?: ToolDefinition;
+  /** App-created tools bound to this run, never supplied by renderer input. */
+  mediaTools?: ToolDefinition[];
   maxTokens?: number;
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;

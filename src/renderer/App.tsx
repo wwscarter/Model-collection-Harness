@@ -61,7 +61,7 @@ export default function App() {
             const live = isCurrentRunning && index === currentSession.messages.length - 1;
             if (message.role === 'user') return <div key={message.id} className="user-message-row"><div className="user-message-bubble"><div className="user-message-text">{message.content}</div><div className="user-message-footer"><button className="message-icon-button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button><button className="message-icon-button" title="编辑消息" aria-label="编辑消息" disabled={isLoading} onClick={() => startMessageEdit(message)}><Pencil size={14} strokeWidth={1.8} /></button></div></div></div>;
             return <div key={message.id} className="assistant-turn">
-              {live && !message.content && !currentVerification && !sessionPlans.some((plan) => plan.assistantMessageId === message.id) && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
+              {live && !message.content && !message.artifacts?.length && !message.mediaJobs?.length && !currentVerification && !sessionPlans.some((plan) => plan.assistantMessageId === message.id) && <div className="thinking-pill"><i className="live-dot pulse" />思考中 · 正在路由并选择执行模型</div>}
               {sessionPlans.filter((plan) => plan.assistantMessageId === message.id).map((plan) => <PlanCard key={plan.runId} record={plan} active={live} onDecision={decidePlan} />)}
               <article className="assistant-card">
                 <header className="assistant-card-header">
@@ -69,7 +69,7 @@ export default function App() {
                   {live ? <span className="streaming-badge mono">Streaming</span> : message.content && <button className="message-icon-button" title="复制回复" aria-label="复制回复" onClick={() => void navigator.clipboard?.writeText(message.content)}><Copy size={14} strokeWidth={1.8} /></button>}
                 </header>
                 {live && !!message.tools?.length && <ToolCallList tools={message.tools} />}
-                <OutputView content={message.content} loading={live && Boolean(message.content)} emptyState={false} />
+                <OutputView content={message.content} loading={live && Boolean(message.content)} emptyState={false} artifacts={message.artifacts} mediaJobs={message.mediaJobs} />
                 {live && !!message.agents?.length && <section className="agent-board" aria-label="并行子智能体报告"><div className="agent-board-heading"><UsersRound size={15} /><strong>子智能体报告</strong><span>{message.agents.filter((agent) => agent.status === 'completed').length}/{message.agents.length} 完成</span></div>{message.agents.map((agent) => <div className="agent-report" key={agent.id}><header><strong>{agent.modelName}</strong><span className={`agent-status ${agent.status}`}>{({ queued: '等待中', running: '分析中', completed: '已完成', failed: '失败' })[agent.status]}</span></header>{agent.content ? <OutputView content={agent.content} loading={agent.status === 'running'} emptyState={false} /> : agent.status === 'running' ? <p className="agent-placeholder">正在独立分析…</p> : null}{agent.error && <div className="agent-error">{agent.error}</div>}</div>)}</section>}
               </article>
             </div>;
@@ -77,6 +77,7 @@ export default function App() {
           <VerificationStatus event={currentVerification} />
           {planError && <div className="runtime-notice" role="alert">计划历史读取失败：{planError}</div>}
           {currentSession.metrics?.stopReason === 'tool_limit' && <div className="runtime-notice" role="status" aria-label="任务未完成">本轮工具预算已用尽，任务尚未完成。以上为阶段性总结，可继续任务。</div>}
+          {currentSession.metrics?.stopReason === 'media_incomplete' && <div className="runtime-notice" role="status" aria-label="素材生成未完成">本轮所需素材尚未生成成功，任务尚未完成。已保留现有内容与素材状态，请检查生成失败或结果待确认的任务后继续。</div>}
           {currentSession.metrics?.stopReason === 'length' && <div className="runtime-notice" role="status" aria-label="输出长度已达上限">本轮输出已达到模型长度上限，任务尚未完成。已保留收到的内容，可继续任务或在模型设置中调整最大输出 Token。</div>}
           {currentSession.metrics?.stopReason === 'budget_limit' && <div className="runtime-notice budget-limit-notice" role="status" aria-label="任务预算已用尽"><span>{(currentSession.metrics.budgetLimit?.message || '本轮已达到预估费用或运行时间上限').replace(/[。.!！?？]+$/, '')}。任务尚未完成，{currentSession.output ? '已保留阶段性输出。' : '当前尚无可展示的输出。'}可调整预算后继续。</span>{currentSession.metrics.budgetLimit && <small>本轮预估费用 {'$'}{currentSession.metrics.budgetLimit.estimatedCost.toFixed(4)} · 费用上限 {'$'}{currentSession.metrics.budgetLimit.maxCostUsd.toFixed(2)}</small>}<button type="button" className="button outline small" onClick={() => openSettings('runtime')}>调整运行预算</button><small>设置 → 运行与权限 → 任务路由与模型分工</small></div>}
           {error && <div className="error-banner" role="alert"><span>{error}</span>{/成本预算|秒预算|BUDGET_EXCEEDED/.test(error) && <button type="button" className="button outline small" onClick={() => openSettings('runtime')}>调整运行预算</button>}</div>}

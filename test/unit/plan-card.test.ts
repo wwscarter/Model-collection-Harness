@@ -29,6 +29,13 @@ describe('execution plan card', () => {
     expect(onDecision).toHaveBeenCalledWith(expect.objectContaining({ action: 'edit', version: 1, steps: [expect.objectContaining({ id: 'inspect', title: '检查并验证文件' })] }));
     await click('执行计划'); expect(onDecision).toHaveBeenLastCalledWith({ runId: 'run', version: 1, action: 'approve' });
   });
+  it('hides step editing for a non-editable direct media plan and explains how to revise the request', async () => {
+    const onDecision = vi.fn(async () => undefined);
+    await act(async () => root.render(createElement(PlanCard, { record: { ...record(), editable: false }, active: true, onDecision })));
+    expect(container.querySelector('button')?.textContent).toBe('执行计划');
+    expect(container.textContent).toContain('如需调整生成要求，请取消后重新发送。');
+    expect(container.textContent).not.toContain('修改计划');
+  });
   it('exposes cancel and retains the plan with a normal save error', async () => {
     const onDecision = vi.fn(async () => { throw new Error('计划保存失败'); });
     await act(async () => root.render(createElement(PlanCard, { record: record(), active: true, onDecision })));

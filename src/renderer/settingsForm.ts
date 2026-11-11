@@ -1,4 +1,5 @@
 import type { ModelConfig } from './types';
+import { getModelOperations, validateModelOperations, type ModelOperations } from '@core/models/ModelOperations';
 
 export type ProviderCategory = 'official' | 'compatible_gateway' | 'custom_proxy' | 'local_ollama';
 export type CapabilityName = 'code' | 'reasoning' | 'creative' | 'vision' | 'longcontext';
@@ -23,6 +24,7 @@ export interface SettingsDraft {
   requestsPerMinute: string;
   tokensPerDay: string;
   capabilities: Record<CapabilityName, string>;
+  operations: ModelOperations;
 }
 
 export const capabilityLabels: Array<{ key: CapabilityName; label: string }> = [
@@ -54,6 +56,7 @@ export function createSettingsDraft(model?: ModelConfig): SettingsDraft {
     intelligenceScore: String(model?.intelligenceScore ?? capabilities.reasoning), priority: String(model?.priority ?? 0),
     inputPrice: String(model?.costPer1kTokens.input ?? 0), outputPrice: String(model?.costPer1kTokens.output ?? 0),
     requestsPerMinute: String(model?.rateLimit?.requestsPerMinute ?? 60), tokensPerDay: String(model?.rateLimit?.tokensPerDay ?? 100000), capabilities,
+    operations: structuredClone(getModelOperations(model ?? {})),
   };
 }
 
@@ -78,13 +81,17 @@ export function settingsPayload(draft: SettingsDraft, editing: boolean): Omit<Mo
   const maxTemperature = draft.provider === 'anthropic' ? 1 : 1.5;
   if (!Number.isFinite(draft.temperature) || draft.temperature < 0 || draft.temperature > maxTemperature) throw new Error('采样温度必须在 0.0 到 ' + maxTemperature.toFixed(1) + ' 之间');
   const apiKey = draft.apiKey.trim();
+  validateModelOperations(draft.operations);
+  const textEnabled = draft.operations['text.chat']?.protocol === 'text';
+  const primary = textEnabled && draft.primary;
   return {
     name: draft.name.trim(), provider: draft.provider, providerCategory: draft.providerCategory,
     baseURL: baseURL || undefined, modelId: draft.modelId.trim(),
     ...(!editing || apiKey ? { apiKey } : {}),
     availableModels: [...new Set([...draft.availableModels, draft.modelId].map((id) => id.trim()).filter(Boolean))],
     temperature: draft.temperature, contextWindow, enableThinking: draft.enableThinking,
-    enabled: draft.primary || draft.enabled, isPrimary: draft.primary, maxTokens, intelligenceScore, priority: number(draft.priority, '优先级', -Infinity, Infinity, true),
+    enabled: primary || draft.enabled, isPrimary: primary, maxTokens, intelligenceScore, priority: number(draft.priority, '优先级', -Infinity, Infinity, true),
+    operations: structuredClone(draft.operations),
     capabilities: capabilityLabels.map(({ key, label }) => ({ type: key, score: number(draft.capabilities[key], label, 0, 100) })).filter((entry) => entry.score > 0),
     costPer1kTokens: { input: number(draft.inputPrice, '输入价格'), output: number(draft.outputPrice, '输出价格') },
     rateLimit: { requestsPerMinute: number(draft.requestsPerMinute, '每分钟请求数', 0, Infinity, true), tokensPerDay: number(draft.tokensPerDay, '每日 Token 限额', 0, Infinity, true) },

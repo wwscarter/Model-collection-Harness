@@ -8,12 +8,14 @@ import { selectVerifyCommands } from '@core/verify/VerifyCommandSelection';
 import { confirmProjectVerifyConfig, defaultVerifyConfig, loadProjectVerifyConfig, projectVerifyConfigPath } from '@core/verify/ProjectVerifyConfig';
 import type { ProjectVerifyConfig } from '@core/verify/VerificationTypes';
 import type { CoreServices } from './CoreTypes';
-import { confirmCoreCommand } from './approval';
+import { approveCoreTool, confirmCoreCommand } from './approval';
 
 const estimateTokens = (value: string) => Math.max(1, Math.ceil(value.length / 4));
 
 export function createCoreRunDependencies(ctx: CoreServices, controller: AbortController, projectContext: RunDependencies['projectContext'] = ctx.projects): RunDependencies {
   return {
+    media: ctx.media,
+    approveMedia: (request, signal) => { signal.throwIfAborted(); return approveCoreTool(ctx, { toolName: 'request_media', input: request }); },
     models: ctx.registry, routing: ctx.routingPolicy, routingSettings: ctx.routingService.getConfiguration().settings,
     onClassification: (observation) => ctx.routingLearning.observe(observation),
     quota: ctx.modelQuota, traces: ctx.traceRecorder, observability: ctx.observability, growth: ctx.growth,
@@ -28,7 +30,7 @@ export function createCoreRunDependencies(ctx: CoreServices, controller: AbortCo
         model, prompt, history: options.history, summary: options.summary, skipHistoryTrim: options.skipHistoryTrim,
         maxTokens: Math.min(model.maxTokens ?? maxTokens, maxTokens), enableTools: options.enableTools !== false,
         projectRoot: options.projectRoot, projectAccess: options.projectAccess, signal: options.signal, onTextDelta: onDelta,
-        sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded, hookRunner: options.hookRunner, planTool: options.planTool,
+        sessionRules: options.sessionRules, rulesLoader: ctx.rulesLoader, onRulesLoaded: options.onRulesLoaded, hookRunner: options.hookRunner, planTool: options.planTool, mediaTools: options.mediaTools,
         onToolEvent(event) {
           if (['write', 'edit'].includes(event.toolName)) {
             const file = (event.args as { path?: unknown } | undefined)?.path;
