@@ -33,6 +33,8 @@ export function useWorkspace(run: SessionRun, showSettings: boolean, otherDialog
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [isMacOS] = useState(() => navigator.userAgent.toLowerCase().includes('mac'));
   const workspaceContentRef = useRef<HTMLDivElement | null>(null);
+  // Sticky-follow: stay pinned to the newest output until the user scrolls up.
+  const followOutputRef = useRef(true);
   useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -46,11 +48,19 @@ export function useWorkspace(run: SessionRun, showSettings: boolean, otherDialog
   useEffect(() => {
     const content = workspaceContentRef.current;
     if (!content) return;
-    // Only follow the stream while the user is already near the bottom; otherwise
-    // reading earlier output is impossible because every chunk steals focus.
-    const distance = content.scrollHeight - content.scrollTop - content.clientHeight;
-    if (distance < 120) content.scrollTop = content.scrollHeight;
-  }, [currentSessionId, currentSession?.messages]);
+    const onScroll = () => {
+      followOutputRef.current = content.scrollHeight - content.scrollTop - content.clientHeight < 80;
+    };
+    content.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => content.removeEventListener('scroll', onScroll);
+  }, [view, currentSessionId]);
+  // Opening a session or coming back from Run History always starts at the newest output.
+  useEffect(() => { followOutputRef.current = true; }, [view, currentSessionId]);
+  useEffect(() => {
+    const content = workspaceContentRef.current;
+    if (content && followOutputRef.current) content.scrollTop = content.scrollHeight;
+  }, [view, currentSessionId, currentSession?.messages]);
   useEffect(() => {
     if (currentSession?.projectId) projectSessionIdsRef.current.set(currentSession.projectId, currentSession.id);
   }, [currentSessionId, currentSession?.projectId]);

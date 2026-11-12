@@ -26,13 +26,15 @@ import { useWorkspace } from './hooks/useWorkspace';
 
 const formatDuration = (value?: number) => value === undefined || !Number.isFinite(value) ? undefined : value < 1000 ? Math.round(value) + ' ms' : (value / 1000).toFixed(1) + ' s';
 
-export default function App() {
+export interface AppProps { /** Real app launch opens an unbound new conversation instead of restoring history. */ startFresh?: boolean; }
+
+export default function App({ startFresh = false }: AppProps = {}) {
   const [showSettings, setShowSettings] = useState(false);
   const [processesOpen, setProcessesOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'models' | 'runtime'>('models');
   const openSettings = (tab: 'models' | 'runtime' = 'models') => { setSettingsInitialTab(tab); setShowSettings(true); };
   const [showRouting, setShowRouting] = useState(false);
-  const run = useSessionRun();
+  const run = useSessionRun({ startFresh });
   const workspace = useWorkspace(run, showSettings, showRouting);
   const {
     sessions, currentSessionId, currentSession, models, setModels, runningSessionId,
@@ -57,8 +59,8 @@ export default function App() {
     if (next !== 'workspace') { setProjectDrawerOpen(false); setActiveFilePath(undefined); setOpenFiles([]); }
   };
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-collapsed'} ${projectDrawerOpen && view === 'workspace' ? 'drawer-open' : ''} ${previewOpen && projectDrawerOpen ? 'preview-open' : ''} ${isMacOS ? 'mac-shell' : ''} ${view !== 'workspace' ? 'monitoring-shell' : ''} ${view === 'runs' ? 'history-shell' : ''}`}>
-    <TopBar title={view === 'runs' ? '运行记录' : view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} showWorkspaceToggle={view === 'workspace'} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
-    <NavRail view={view} onView={navigate} onSettings={() => openSettings()} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+    <TopBar title={view === 'runs' ? '运行记录' : view === 'monitoring' ? '运行监测' : currentSession?.title || '新建会话'} tabs={openFiles} activePath={activeFilePath} rightOpen={view === 'workspace' && projectDrawerOpen} previewOpen={previewOpen} showWorkspaceToggle={view === 'workspace'} sidebarOpen={sidebarOpen} onToggleSidebar={() => { if (view !== 'workspace') navigate('workspace'); setSidebarOpen((open) => !open); }} onSelectTab={setActiveFilePath} onClosePreview={closePreview} onToggleRight={toggleWorkspacePanel} />
+    <NavRail view={view} onView={navigate} onSettings={() => openSettings()} />
     <Sidebar sessions={sessions} currentSessionId={currentSessionId} runningSessionId={runningSessionId} projects={projectList} activeProjectId={currentSession?.projectId} projectError={projectError} completionNotice={completionNotice} onClearCompletion={() => setCompletionNotice(false)} onNewSession={newSession} onSelectSession={selectSession} onDeleteSession={deleteSession} onNewProject={() => setShowNewProject(true)} onOpenProject={(id) => void openProject(id)} onRemoveProject={(id) => void removeProject(id)} />
     {sidebarOpen && view !== 'runs' && <button className="panel-backdrop sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setSidebarOpen(false)} />}
     {view === 'runs' ? <RunHistoryPage liveTrace={liveTrace} onBack={() => navigate('monitoring')} /> : view === 'monitoring' ? <MonitoringPage liveTrace={liveTrace} onOpenRuns={() => navigate('runs')} /> : <main className="workspace">

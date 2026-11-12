@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 — 2026-11-12
+
+### Workbench polish and automatic continuation
+
+- Launch opens a fresh, project-unbound conversation instead of restoring the most recent session; history stays in the sidebar and new drafts are persisted on first send.
+- Move the sidebar toggle into the top bar and keep only the three view destinations in the left rail; stabilize its position across Run History.
+- Follow streamed output at the bottom until the user scrolls up; switching sessions or returning from Run History lands at the newest output.
+- Automatically continue when a model stops at its single-response output cap, carrying the partial text forward instead of ending the task with a length notice.
+
 ## 0.4.1 — 2026-11-11
 
 ### Remove execution caps

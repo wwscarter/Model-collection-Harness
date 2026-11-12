@@ -687,7 +687,7 @@ select.input { padding-right: 28px; }
 .app-shell.drawer-open { grid-template-columns: 52px 260px minmax(0, 1fr) 340px; }
 .app-shell.sidebar-collapsed { grid-template-columns: 52px 0 minmax(0, 1fr) 0; }
 .app-shell.sidebar-collapsed.drawer-open { grid-template-columns: 52px 0 minmax(0, 1fr) 340px; }
-.nav-rail { display: flex; min-height: 0; flex-direction: column; align-items: center; gap: 6px; padding: 10px 7px 12px; border-right: 1px solid var(--line); background: var(--sidebar); -webkit-app-region: drag; }
+.nav-rail { display: flex; min-height: 0; flex-direction: column; align-items: center; gap: 6px; padding: 6px 7px 12px; border-right: 1px solid var(--line); background: var(--sidebar); -webkit-app-region: drag; }
 .nav-rail-button { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 8px; color: var(--text-muted); background: transparent; -webkit-app-region: no-drag; transition: color .15s ease, background .15s ease; }
 .nav-rail-button:hover { color: var(--text); background: var(--hover); }
 .nav-rail-button.is-active { color: var(--text); background: var(--surface-low); }

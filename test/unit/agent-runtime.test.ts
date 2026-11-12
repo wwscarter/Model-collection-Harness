@@ -158,6 +158,23 @@ describe('AgentRuntime (Pi SDK)', () => {
     expect(result.outputTokens).toBe(21);
   });
 
+  it('continues automatically when the model stops at its single-response output cap', async () => {
+    requests.length = 0;
+    replies = [
+      () => sse([{ choices: [{ index: 0, delta: { content: 'Part one.' }, finish_reason: 'length' }], usage: { prompt_tokens: 50, completion_tokens: 5 } }]),
+      () => sse([{ choices: [{ index: 0, delta: { content: 'Part two.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 50, completion_tokens: 5 } }]),
+    ];
+    const { runtime: agent } = runtime();
+    const deltas: string[] = [];
+    const result = await agent.run({ model: model(), prompt: 'Write a long answer', onTextDelta: (delta) => deltas.push(delta) });
+    expect(result.stopReason).toBe('stop');
+    expect(result.content).toBe('Part one.\n\nPart two.');
+    expect(deltas.join('')).toContain('Part one.');
+    expect(deltas.join('')).toContain('Part two.');
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[1].body.messages)).toContain('上一次回答达到模型单次输出上限');
+  });
+
   it('allows ordinary analysis to continue beyond eight tool rounds by default', async () => {
     requests.length = 0;
     replies = [...Array.from({ length: 9 }, (_, index) => toolCall('web_search', { query: `section ${index}` }, `section_${index}`)), text('项目分析完成。')];

@@ -7,6 +7,10 @@ import { type AgentRunRequest, type AgentRunResult, type AgentRuntimeOptions, ty
 
 export async function driveAgentSession(session: AgentSession, request: AgentRunRequest, toolRuntime: ToolRuntime, usageState: RunUsageState, options: Pick<AgentRuntimeOptions, 'maxToolRounds'> & { beforeTurn?: () => Promise<void>; assertReady?: () => void }): Promise<AgentRunResult> {
   let content = '';
+  // Text carried across automatic continuations when the model hits its per-response output cap.
+  let carried = '';
+  // The Pi session does not always put a length-truncated answer into `messages`.
+  let lastStopReason: string | undefined;
   let toolCalls = 0;
   let toolRounds = 0;
   let toolLimitReached = false;
@@ -25,6 +29,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
   // Keep the accumulated tool results and reserve one logical answer turn.
   // This does not reset tool counts or the existing run deadline.
   session.agent.finishTurn = async (turn, signal) => {
+    lastStopReason = (turn.message as { stopReason?: string }).stopReason ?? lastStopReason;
     if (usageState.budgetError || usageState.callbackError) return { action: 'end' };
     const decision = await finishTurn?.(turn, signal);
     if (signal?.aborted || request.signal?.aborted || turn.message.stopReason === 'error' || turn.message.stopReason === 'aborted') return { action: 'end' };
@@ -84,6 +89,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
     while (true) {
       request.signal?.throwIfAborted();
       if (options.beforeTurn) await awaitWithSignal(options.beforeTurn(), request.signal);
+      lastStopReason = undefined;
       let summaryFailed = false;
       try { await session.prompt(prompt, { expandPromptTemplates: false }); }
       catch (error) {
@@ -101,6 +107,21 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
       if (last?.stopReason === 'error' && !toolLimitReached && !usageState.budgetError) throw new Error(last.errorMessage || '模型调用失败');
       const finalText = session.getLastAssistantText() ?? '';
       let answer = finalText.trim() ? finalText : content.trim() ? content : previousAnswer;
+      const effectiveStopReason = last?.stopReason ?? lastStopReason;
+      if (effectiveStopReason === 'length' && !usageState.budgetError && !toolLimitReached) {
+        const addition = answer.trim();
+        // Continue automatically instead of stopping the task at a per-response
+        // token cap. Repeating the same text means no progress; stop in that case.
+        if (addition && addition !== carried.trim()) {
+          carried = carried ? carried + '\n\n' + addition : addition;
+          previousAnswer = carried;
+          content = '';
+          prompt = '上一次回答达到模型单次输出上限。请紧接着中断处继续输出剩余内容，不要重复已经输出的部分，也不要用总结代替剩余内容。';
+          request.onTextDelta?.('\n\n');
+          continue;
+        }
+      }
+      if (carried) answer = answer.trim() && !answer.startsWith(carried) ? carried + '\n\n' + answer : carried;
       if (usageState.budgetError) {
         const notice = '本轮已因预算限制停止，任务尚未完成；已保留现有输出。' + usageState.budgetError.message;
         answer = (answer.trim() ? answer.trimEnd() + '\n\n' : '') + notice;
@@ -117,7 +138,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
         inputTokens: Math.max(usageState.usage.inputTokens, stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite),
         outputTokens: Math.max(usageState.usage.outputTokens, stats.tokens.output),
         toolCalls,
-        stopReason: usageState.budgetError ? 'budget_limit' : toolLimitReached ? 'tool_limit' : last?.stopReason ?? 'stop',
+        stopReason: usageState.budgetError ? 'budget_limit' : toolLimitReached ? 'tool_limit' : effectiveStopReason ?? 'stop',
         ...(usageState.budgetError ? { budgetLimitReason: usageState.budgetError.message } : {}),
       };
       let continuation;

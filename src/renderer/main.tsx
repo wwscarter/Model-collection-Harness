@@ -34,7 +34,7 @@ const theme = {
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ConfigProvider theme={theme}>
-      <ErrorBoundary><App /></ErrorBoundary>
+      <ErrorBoundary><App startFresh /></ErrorBoundary>
     </ConfigProvider>
   </React.StrictMode>,
 );

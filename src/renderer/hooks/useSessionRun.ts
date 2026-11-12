@@ -36,8 +36,8 @@ function mergeTurnResult(messages: ChatMessage[], targetId: string, result: Turn
 }
 
 /** Owns one active run and folds its IPC events into the session snapshots. */
-export function useSessionRun() {
-  const state = useSessionState();
+export function useSessionRun(options: { startFresh?: boolean } = {}) {
+  const state = useSessionState(options);
   const plans = useSessionPlans(state.currentSessionId ?? undefined);
   const [planningMode, setPlanningMode] = useState<PlanningMode>();
   const {

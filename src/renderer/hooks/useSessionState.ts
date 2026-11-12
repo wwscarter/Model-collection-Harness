@@ -7,7 +7,7 @@ import { starterSession, type Session } from './sessionState';
 import { supportsOperation } from '@core/models/ModelOperations';
 
 /** Synchronous session snapshots keep IPC callbacks and persistence in agreement. */
-export function useSessionState() {
+export function useSessionState(options: { startFresh?: boolean } = {}) {
   const [sessions, setSessionsState] = useState<Session[]>([starterSession()]);
   // IPC events can arrive immediately before execute rejects. Keep their latest
   // state available synchronously so a failed/cancelled turn is saved in full.
@@ -95,11 +95,20 @@ export function useSessionState() {
       const localIds = new Set(sessionsRef.current.map((session) => session.id));
       const hasLocalChanges = currentSessionIdRef.current !== null || deletedSessionIdsRef.current.size > 0;
       const available = restored.filter((session) => !deletedSessionIdsRef.current.has(session.id));
-      const next = hasLocalChanges ? [...sessionsRef.current, ...available.filter((session) => !localIds.has(session.id))] : available.length ? available : sessionsRef.current;
+      const next = hasLocalChanges ? [...sessionsRef.current, ...available.filter((session) => !localIds.has(session.id))] : available;
       setSessions(next);
       if (!currentSessionIdRef.current) {
-        currentSessionIdRef.current = next[0]?.id || null;
-        setCurrentSessionId(currentSessionIdRef.current);
+        if (options.startFresh) {
+          // App launch opens a fresh, project-unbound session; earlier
+          // conversations stay in the sidebar until the user picks one.
+          const fresh = starterSession();
+          setSessions((existing) => [fresh, ...existing.filter((session) => session.id !== fresh.id)]);
+          currentSessionIdRef.current = fresh.id;
+          setCurrentSessionId(fresh.id);
+        } else {
+          currentSessionIdRef.current = next[0]?.id || null;
+          setCurrentSessionId(currentSessionIdRef.current);
+        }
       }
     }).catch((cause) => {
       if (!active) return;

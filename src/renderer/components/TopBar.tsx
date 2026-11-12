@@ -1,5 +1,6 @@
 import React from 'react';
-import { FileCode2, FileText, PanelRight, X } from 'lucide-react';
+import { Button, Tooltip } from 'antd';
+import { FileCode2, FileText, PanelLeft, PanelRight, X } from 'lucide-react';
 
 export interface OpenFileTab { path: string; name: string; }
 
@@ -10,6 +11,8 @@ interface TopBarProps {
   rightOpen: boolean;
   previewOpen: boolean;
   showWorkspaceToggle?: boolean;
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
   onSelectTab: (path: string) => void;
   onClosePreview: () => void;
   onToggleRight: () => void;
@@ -18,9 +21,12 @@ interface TopBarProps {
 const isCode = (name: string) => /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|kt|rb|php|swift|c|cc|cpp|h|hpp|cs|vue|svelte|sh|sql|css|scss|html)$/i.test(name);
 const isText = (name: string) => /\.(md|txt|json|ya?ml|toml|ini|conf|lock|xml|csv|log)$/i.test(name);
 
-export function TopBar({ title, tabs, activePath, rightOpen, previewOpen, showWorkspaceToggle = true, onSelectTab, onClosePreview, onToggleRight }: TopBarProps) {
+export function TopBar({ title, tabs, activePath, rightOpen, previewOpen, showWorkspaceToggle = true, sidebarOpen, onToggleSidebar, onSelectTab, onClosePreview, onToggleRight }: TopBarProps) {
   return <header className="topbar" aria-label="全局导航">
     <div className="topbar-left" aria-hidden="true" />
+    <Tooltip title={sidebarOpen ? '收起会话列表' : '展开会话列表'} placement="bottom">
+      <Button type="text" className="topbar-sidebar-toggle" aria-label={sidebarOpen ? '收起会话列表' : '展开会话列表'} aria-pressed={sidebarOpen} icon={<PanelLeft size={17} strokeWidth={1.7} />} onClick={onToggleSidebar} />
+    </Tooltip>
     <div className="topbar-title" title={title}>{title}</div>
     <div className="topbar-tabs">
       {rightOpen && previewOpen && tabs.map((tab) => {
