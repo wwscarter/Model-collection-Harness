@@ -1,3 +1,4 @@
+import { trustedIpcEvent } from '../helpers/trustedIpc';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,7 +28,7 @@ function directory() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newai-extension-ipc-')); directories.push(root); return root;
 }
 function invoke(channel: string, ...args: unknown[]) {
-  return Promise.resolve(native.handlers.get(channel)!({ senderFrame: { url: 'file:///newai/dist/renderer/index.html' } }, ...args));
+  return Promise.resolve(native.handlers.get(channel)!(trustedIpcEvent(), ...args));
 }
 function writeSkill(root: string, name: string, description = 'Ordinary project notes.') {
   const folder = path.join(root, name); fs.mkdirSync(folder, { recursive: true });

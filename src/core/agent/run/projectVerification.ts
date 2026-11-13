@@ -41,6 +41,11 @@ export class ProjectVerificationSession {
     const root = this.ctx.projectRoot;
     if (mode === 'off' || !root || !factory || !this.ctx.enableTools) return undefined;
     const files = changedFiles(this.ctx);
+    if (!this.completed && this.ctx.commandChangesIncomplete && !files.length) {
+      const summary = '未验证：命令仍在后台运行或文件扫描不完整，无法确认全部改动。';
+      this.complete({ status: 'unverified', attempts: this.loop?.outcome?.attempts ?? [], repairRounds: this.loop?.outcome?.repairRounds ?? 0, changedFiles: files, summary });
+      return { summary };
+    }
     if (!this.loop && (!files.length || limitedStop(turn.stopReason))) return undefined;
     const signal = context?.signal ?? this.ctx.controller.signal;
     try {
@@ -55,6 +60,9 @@ export class ProjectVerificationSession {
       const decision = await this.loop.afterTurn(turn, files, signal);
       const outcome = this.loop.outcome;
       if (outcome?.status !== 'passed') return this.decision(decision);
+      if (this.ctx.commandChangesIncomplete) {
+        return this.decision(this.loop.endReview('unverified', '已检查检测到的文件。后台进程或扫描范围限制使其余改动无法确认。'));
+      }
       this.emit({ phase: 'checking', status: 'running', summary: '项目检查结束，正在复核当前文件。' });
       const review = await reviewProjectTurn(this.ctx, turn, outcome, signal, this.reviewRepairIssued ? 2 : 1);
       if (review.kind === 'revise') {

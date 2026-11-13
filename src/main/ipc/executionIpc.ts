@@ -6,22 +6,7 @@ import { handle } from './register';
 import { evaluateCommandApproval } from '@core/security/ApprovalPolicy';
 
 export function register(ctx: MainContext): void {
-  const { tty, ttyUnsubscribers, projects, workspaceRoot, commandExecutor, commandUnsubscribers } = ctx;
-  handle('tty:list', () => tty.listSessions());
-  handle('tty:create', async (_event, options?: { cols?: number; rows?: number }) => {
-    // The renderer may choose the grid size only. Shell, cwd and env stay under
-    // main-process control; otherwise a navigated page could spawn a shell with
-    // the app's full environment.
-    if (tty.listSessions().filter((session) => session.status === 'running').length >= 8) throw new Error('终端会话数量已达上限（8 个）');
-    const cwd = projects.getRoot() ?? workspaceRoot;
-    const info = await tty.createSession({ cwd, cols: options?.cols, rows: options?.rows });
-    const unsubscribe = tty.onData(info.id, (data) => ctx.emit('tty:data', { sessionId: info.id, data }));
-    ttyUnsubscribers.set(info.id, unsubscribe);
-    return info;
-  });
-  handle('tty:write', (_event, id: string, data: string) => tty.write(id, data));
-  handle('tty:resize', (_event, id: string, cols: number, rows: number) => tty.resize(id, cols, rows));
-  handle('tty:close', (_event, id: string) => { const closed = tty.close(id); ttyUnsubscribers.get(id)?.(); ttyUnsubscribers.delete(id); return closed; });
+  const { projects, commandExecutor, commandUnsubscribers } = ctx;
   handle('execution:run', async (_event, request: CommandExecutionRequest) => {
     const selectedProjectRoot = projects.getRoot();
     if (!selectedProjectRoot) throw new Error('Select a project before running a command');

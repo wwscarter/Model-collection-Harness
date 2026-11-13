@@ -4,7 +4,8 @@ import { isSensitiveRelativePath } from '@core/security/sensitiveFiles';
 
 export function realOrSelf(target: string): string {
   try { return fs.realpathSync(target); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return target;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('无法解析的符号链接不允许写入');
     // New files and nested directories do not exist yet. Resolve their existing parent first.
     const parent = path.dirname(target);
     return parent === target ? target : path.join(realOrSelf(parent), path.basename(target));

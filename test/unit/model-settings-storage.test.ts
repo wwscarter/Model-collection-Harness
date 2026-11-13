@@ -49,6 +49,51 @@ afterEach(() => {
 });
 
 describe('model settings persistence', () => {
+  it('preserves encrypted endpoint credentials when the keyring cannot decrypt them', () => {
+    configureEncryptionKeyProvider(() => testKey);
+    const file = databasePath();
+    const url = 'https://gateway.invalid/v1?token=fixture-token';
+    const saved = openStore(file);
+    saved.saveModel(sampleModel({ apiKey: '', baseURL: url }));
+    saved.close();
+
+    configureEncryptionKeyProvider(() => Buffer.alloc(32, 11));
+    const locked = openStore(file);
+    const registry = new ModelRegistry(locked);
+    expect(registry.getModel('local-model')?.endpointCredentialError).toBeTruthy();
+    registry.updateModel('local-model', { name: 'new name', apiKey: '' });
+    expect(registry.getModel('local-model')?.endpointCredentialError).toBeTruthy();
+    locked.close();
+
+    configureEncryptionKeyProvider(() => testKey);
+    expect(openStore(file).loadModel('local-model')).toMatchObject({ baseURL: url, name: 'new name' });
+  });
+
+  it('encrypts query credentials and migrates both legacy URL copies', () => {
+    configureEncryptionKeyProvider(() => testKey);
+    const file = databasePath();
+    const url = 'https://gateway.invalid/v1?version=1&api_key=fixture-value';
+    const model = sampleModel({ baseURL: url });
+    const first = openStore(file);
+    first.saveModel(model);
+    expect(first.loadModel(model.id)?.baseURL).toBe(url);
+    first.close();
+    const raw = new Database(file);
+    try {
+      const visible = raw.prepare('SELECT base_url, encrypted_endpoint FROM models').get();
+      expect(JSON.stringify(visible)).not.toContain('fixture-value');
+      raw.prepare('UPDATE models SET base_url = ?, encrypted_endpoint = NULL').run(url);
+      raw.prepare('UPDATE model_credentials SET base_url = ?').run(url);
+    } finally { raw.close(); }
+    expect(openStore(file).loadModel(model.id)?.baseURL).toBe(url);
+    const checked = new Database(file);
+    try {
+      for (const table of ['models', 'model_credentials']) {
+        expect(JSON.stringify(checked.prepare('SELECT * FROM ' + table).all())).not.toContain('fixture-value');
+      }
+    } finally { checked.close(); }
+  });
+
   it('retains endpoint, inference, catalog, primary selection, and encrypted credentials after reopening', () => {
     configureEncryptionKeyProvider(() => testKey);
     const file = databasePath();

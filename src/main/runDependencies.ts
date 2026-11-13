@@ -63,6 +63,7 @@ export function createRunDependencies(ctx: MainContext, controller: AbortControl
     projectContext,
     createProjectVerification: (input) => createProjectVerification(ctx, input),
     createHookRuntime: (input) => createHookRuntime(ctx, input),
+    gatesEveryStreamRequest: true,
     invokeStreamed: (model, prompt, maxTokens, onDelta, options) => invokeStreamed(ctx, model, prompt, maxTokens, onDelta, options),
     controller,
   };

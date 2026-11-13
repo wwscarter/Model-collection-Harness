@@ -38,11 +38,15 @@ function fixture() {
   cleanups.push(() => { observability.close(); memory.close(); summaries.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const config: ProjectVerifyConfig = { version: 1, mode: 'quick', timeoutMs: 1_000, maxRepairRounds: 0, commands: [{ id: 'typecheck', label: 'typecheck', command: 'synthetic check command', phase: 'quick' }], manifestFingerprint: 'a'.repeat(64), confirmedAt: new Date().toISOString() };
   let writeFiles = true;
+  let commandOnly = false;
   let stopReason = 'stop';
   const invoke = vi.fn<RunDependencies['invokeStreamed']>(async (current, _prompt, _max, delta, options) => {
     // Isolated synthetic adapter: coordinator behavior is tested here; the
     // separate Pi integration executes real file tools and the actual compiler.
-    if (writeFiles && options?.enableTools !== false) {
+    if (commandOnly && options?.enableTools !== false) {
+      fs.writeFileSync(path.join(directory, 'sum.ts'), 'export const sum = 1;');
+      options?.onToolEvent?.({ toolCallId: 'format', toolName: 'run_command', status: 'completed', details: { changedFiles: ['sum.ts'], changesIncomplete: false } });
+    } else if (writeFiles && options?.enableTools !== false) {
       options?.onToolEvent?.({ toolCallId: 'write-fixture', toolName: 'write', status: 'running', args: { path: 'sum.ts' } });
       fs.writeFileSync(path.join(directory, 'sum.ts'), 'export const sum = 1;');
       options?.onToolEvent?.({ toolCallId: 'write-fixture', toolName: 'write', status: 'completed' });
@@ -62,10 +66,18 @@ function fixture() {
   deps.createProjectVerification = factory;
   const growth = vi.spyOn(deps.growth, 'recordFeedback');
   const run = (request: Partial<RunRequest> = {}) => executeRun({ sessionId: 'session', prompt: 'Update the ordinary project.', includeProjectContext: false, ...request }, deps, () => undefined);
-  return { deps, directory, config, factory, growth, traceStore, invoke, run, noWrites: () => { writeFiles = false; }, limited: () => { stopReason = 'tool_limit'; } };
+  return { deps, directory, config, factory, growth, traceStore, invoke, run, useCommand: () => { commandOnly = true; }, noWrites: () => { writeFiles = false; }, limited: () => { stopReason = 'tool_limit'; } };
 }
 
 describe('coordinator project verification outcomes', () => {
+  it('runs project checks when a command accounts for all file changes', async () => {
+    const f = fixture();
+    f.useCommand();
+    const result = await f.run();
+    expect(f.factory).toHaveBeenCalledOnce();
+    expect(result.projectVerification).toMatchObject({ changedFiles: ['sum.ts'] });
+  });
+
   it.each(['no-write', 'disabled', 'limited'] as const)('does not trigger project checks for %s runs', async (kind) => {
     const value = fixture();
     if (kind === 'no-write') value.noWrites();

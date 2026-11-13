@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:plan', 'session:trace', 'session:media-job', 'session:media-artifact', 'tty:data', 'execution:data']);
+const allowedChannels = new Set(['session:model-switched', 'session:chunk', 'session:agent-update', 'session:tool-call', 'session:completed', 'session:verification', 'session:plan', 'session:trace', 'session:media-job', 'session:media-artifact', 'execution:data']);
 type Listener = (payload: unknown) => void;
 type IpcListener = (_event: IpcRendererEvent, payload: unknown) => void;
 const subscriptions = new Map<string, Map<Listener, Set<IpcListener>>>();
@@ -102,13 +102,6 @@ const amdApi = {
   },
   getGrowthProfiles: () => ipcRenderer.invoke('growth:profiles'),
   recordGrowthFeedback: (feedback: unknown) => ipcRenderer.invoke('growth:feedback', feedback),
-  tty: {
-    list: () => ipcRenderer.invoke('tty:list'),
-    create: (options?: unknown) => ipcRenderer.invoke('tty:create', options),
-    write: (id: string, data: string) => ipcRenderer.invoke('tty:write', id, data),
-    resize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('tty:resize', id, cols, rows),
-    close: (id: string) => ipcRenderer.invoke('tty:close', id),
-  },
   execution: {
     run: (request: unknown) => ipcRenderer.invoke('execution:run', request),
     cancel: (id: string) => ipcRenderer.invoke('execution:cancel', id),

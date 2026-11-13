@@ -25,6 +25,20 @@ const read = (file: string) => execute('read', { path: file });
 const edit = (file: string, oldText: string, newText: string) => execute('edit', { path: file, edits: [{ oldText, newText }] });
 
 describe('FileWriteGuard', () => {
+  it('keeps each session’s last observed version across tool rebuilds', async () => {
+    const use = (sessionId: string, name: string, args: Record<string, unknown>) => {
+      const tool = createFileTools({ cwd: projectRoot, projectRoot, writeGuard: guard, sessionId }).find((item) => item.name === name)!;
+      return tool.execute('call', args, undefined, undefined, { cwd: projectRoot } as never);
+    };
+    fs.writeFileSync(path.join(projectRoot, 'shared.txt'), 'initial');
+    await use('a', 'read', { path: 'shared.txt' });
+    await use('b', 'write', { path: 'shared.txt', content: 'second session' });
+    await expect(use('a', 'write', { path: 'shared.txt', content: 'stale' })).rejects.toThrow('重新 read');
+    await use('a', 'read', { path: 'shared.txt' });
+    await use('a', 'write', { path: 'shared.txt', content: 'merged' });
+    expect(fs.readFileSync(path.join(projectRoot, 'shared.txt'), 'utf8')).toBe('merged');
+  });
+
   it('blocks a full overwrite when the file changed after the agent read it', async () => {
     fs.writeFileSync(path.join(projectRoot, 'config.json'), '{"version":1}');
     await read('config.json');

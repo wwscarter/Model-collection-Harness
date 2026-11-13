@@ -5,7 +5,7 @@ import { createEditToolDefinition, createLsToolDefinition, createReadToolDefinit
 import type { SearchProviderRegistry } from './search';
 import { fetchWebPage, type WebFetchOptions } from './webFetch';
 import { isSensitiveFileName } from '@core/security/sensitiveFiles';
-import { defaultFileWriteGuard, type FileWriteGuard } from './fileWriteGuard';
+import { FileWriteGuard } from './fileWriteGuard';
 import type { FileChangeRecorder } from './fileChanges';
 import { isWithin, realOrSelf, resolveAllowedPath } from './projectPaths';
 import { createProjectSearchTools } from './projectSearchTools';
@@ -63,8 +63,8 @@ export function createWebFetchTool(options: Omit<WebFetchOptions, 'signal'> = {}
  * Reads are recorded in `writeGuard` so a later write can detect edits the agent never saw and
  * refuse to overwrite them silently.
  */
-export function createFileTools(options: { cwd: string; projectRoot?: string; extraReadRoots?: string[]; writeGuard?: FileWriteGuard; fileChanges?: FileChangeRecorder }): ToolDefinition[] {
-  const guard = options.writeGuard ?? defaultFileWriteGuard;
+export function createFileTools(options: { cwd: string; projectRoot?: string; extraReadRoots?: string[]; writeGuard?: FileWriteGuard; sessionId?: string; fileChanges?: FileChangeRecorder }): ToolDefinition[] {
+  const guard = options.writeGuard ?? new FileWriteGuard();
   const readRoots = [options.projectRoot ?? options.cwd, ...(options.extraReadRoots ?? [])];
   const read = createReadToolDefinition(options.cwd, {
     autoResizeImages: false,
@@ -72,7 +72,7 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
       readFile: async (absolute) => {
         const allowed = resolveAllowedPath(readRoots, absolute);
         const content = await fs.promises.readFile(allowed);
-        guard.record(allowed, content);
+        guard.record(allowed, content, options.sessionId);
         return content;
       },
       access: async (absolute) => fs.promises.access(resolveAllowedPath(readRoots, absolute), fs.constants.R_OK),
@@ -97,13 +97,16 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
     const guardedWrite = async (absolute: string, content: string | Buffer) => {
       const target = resolveWritePath(absolute);
       const relative = displayPath(target);
-      await guard.assertUnchangedSinceRead(target, relative);
+      await guard.assertUnchangedSinceRead(target, relative, options.sessionId);
       // Snapshot the pre-run state before the bytes change; the recorder is
       // best-effort and never rejects the write.
       await options.fileChanges?.beforeWrite({ path: target, relativePath: relative });
-      await fs.promises.writeFile(target, content, 'utf8');
+      // Pi serializes write/edit by canonical path. A last-component link must not be followed on open.
+      const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0);
+      const handle = await fs.promises.open(resolveWritePath(target), flags);
+      try { await handle.writeFile(content, 'utf8'); } finally { await handle.close(); }
       // Record our own write so the next turn is not blocked by our own change.
-      guard.record(target, content);
+      guard.record(target, content, options.sessionId);
       await options.fileChanges?.afterWrite({ path: target, relativePath: relative, content });
     };
     tools.push(createLsToolDefinition(options.projectRoot, {
@@ -125,7 +128,7 @@ export function createFileTools(options: { cwd: string; projectRoot?: string; ex
         readFile: async (absolute) => {
           const target = resolveWritePath(absolute);
           const content = await fs.promises.readFile(target);
-          guard.record(target, content);
+          guard.record(target, content, options.sessionId);
           return content;
         },
         writeFile: async (absolute, content) => { await guardedWrite(absolute, content); },

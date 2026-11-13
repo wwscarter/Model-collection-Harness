@@ -46,7 +46,6 @@ export async function parallelStage(ctx: RunContext): Promise<void> {
     try {
       if (ctx.controller.signal.aborted) throw ctx.cancellationError();
       ctx.runBudget.assertAvailable();
-      ctx.deps.quota.reserve(agentModel);
       startedMs = Date.now();
       Object.assign(agent, { status: 'running', startedAt: new Date(startedMs).toISOString() });
       agentInvocationId = ctx.deps.observability.recordInvocationStart(ctx.runId, agentModel.id);

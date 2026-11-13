@@ -39,6 +39,15 @@ const MAX_ENTRIES = 20_000;
 const MAX_AGE_DAYS = 30;
 const MAX_FIELD_CHARS = 2_000;
 
+function safeCommand(command: string): string {
+  const name = /^\s*([\w./\\-]+)(?=\s|$)/u.exec(command)?.[1];
+  if (!name) return '[命令参数已隐藏]';
+  // Keep common development tasks recognizable. Arbitrary command arguments may be credentials.
+  const task = /^\s*(npm|pnpm|yarn|git)\s+(test|build|lint|status|diff|run\s+(?:test|build|lint|dev))(?=\s|$)/u.exec(command);
+  const visible = task ? task[1] + ' ' + task[2] : name;
+  return (command.trim() === visible ? visible : visible + ' [参数已隐藏]').slice(0, MAX_FIELD_CHARS);
+}
+
 /**
  * Append-only operation trail for actions the app performs on the user's
  * project. It deliberately stays separate from `AuditLog`: that file is a
@@ -72,7 +81,7 @@ export class OperationAuditLog {
       ...(record.sessionId ? { sessionId: record.sessionId } : {}),
       ...(record.runId ? { runId: record.runId } : {}),
       ...(record.path ? { path: record.path.slice(0, MAX_FIELD_CHARS) } : {}),
-      ...(record.command ? { command: record.command.slice(0, MAX_FIELD_CHARS) } : {}),
+      ...(record.command ? { command: safeCommand(record.command) } : {}),
       ...(record.detail ? { detail: record.detail.slice(0, MAX_FIELD_CHARS) } : {}),
     };
     fs.appendFileSync(this.filePath, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 });
@@ -88,6 +97,7 @@ export class OperationAuditLog {
         const value = JSON.parse(line) as Partial<OperationAuditEntry>;
         if (typeof value.sequence !== 'number' || typeof value.timestamp !== 'string' || typeof value.type !== 'string'
           || (value.actor !== 'agent' && value.actor !== 'user') || !['success', 'failed', 'stopped'].includes(value.result ?? '')) return [];
+        if (typeof value.command === 'string') value.command = safeCommand(value.command);
         return [value as OperationAuditEntry];
       } catch { return []; }
     });

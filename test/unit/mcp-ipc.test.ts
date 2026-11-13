@@ -1,3 +1,4 @@
+import { trustedIpcEvent } from '../helpers/trustedIpc';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -47,7 +48,7 @@ function fixture() {
   const mcpConfig = new McpConfigStore(agentDir);
   const ctx = { mcpConfig, agentRuntime: { agentDir }, projects: { getRoot: () => root }, workspaceRoot: root, mcpTools: new Map(), commandSandbox: { settings: { version: 1, network: 'allow', writableRoots: [] } } } as unknown as MainContext;
   register(ctx);
-  const invoke = (name: string, ...args: unknown[]) => Promise.resolve(state.handlers.get('agent:mcp:' + name)!({ senderFrame: { url: 'file:///newai/dist/renderer/index.html' } }, ...args));
+  const invoke = (name: string, ...args: unknown[]) => Promise.resolve(state.handlers.get('agent:mcp:' + name)!(trustedIpcEvent(), ...args));
   return { root, ctx, invoke, mcpConfig };
 }
 

@@ -19,6 +19,18 @@ afterEach(() => {
 });
 
 describe('RunCheckpointStore', () => {
+  it('a second connection cannot interrupt, finish or replace an active task', () => {
+    store.start({ runId: 'shared', sessionId: 'desktop' });
+    const cli = new RunCheckpointStore(file);
+    try {
+      cli.finish('shared', 'completed');
+      expect(cli.latest('desktop')?.status).toBe('running');
+      expect(() => cli.start({ runId: 'shared', sessionId: 'cli' })).toThrow();
+    } finally { cli.close(); }
+    store.finish('shared', 'completed');
+    expect(store.latest('desktop')?.status).toBe('completed');
+  });
+
   it('counts tools and records distinct successfully written files', () => {
     store.start({ runId: 'run-1', sessionId: 'session-1', prompt: 'fix the build' });
     store.tool({ runId: 'run-1', toolName: 'read', path: 'src/a.ts' });

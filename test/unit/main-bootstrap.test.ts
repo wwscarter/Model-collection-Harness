@@ -45,7 +45,7 @@ describe('main context lifecycle', () => {
     const projectClose = vi.spyOn(ProjectStorage.prototype, 'close');
     const metricsClose = vi.spyOn(ObservabilityEngine.prototype, 'close');
     const routingDispose = vi.spyOn(RoutingService.prototype, 'dispose');
-    vi.spyOn(ModelRegistry.prototype, 'getEnabledModels').mockImplementationOnce(() => { throw new Error('startup registry failed'); });
+    vi.spyOn(ModelRegistry.prototype, 'loadFromStorage').mockImplementationOnce(() => { throw new Error('startup registry failed'); });
     try {
       await expect(createMainContext(directory, () => null)).rejects.toThrow('startup registry failed');
       for (const cleanup of [modelClose, sessionClose, projectClose]) expect(cleanup).toHaveBeenCalledOnce();

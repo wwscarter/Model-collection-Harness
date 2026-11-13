@@ -38,6 +38,7 @@ export interface ModelConfig {
   apiKey: string;
   /** Set when a stored credential cannot be decrypted; the model stays visible but unusable. */
   credentialError?: string;
+  endpointCredentialError?: string;
   baseURL?: string;
   modelId: string;
   providerCategory?: ProviderCategory;
@@ -137,9 +138,22 @@ export function credentialOrigin(provider: ModelProvider, baseURL?: string): str
   try { return new URL(baseURL?.trim() || DEFAULT_PROVIDER_ORIGINS[provider]).origin; } catch { return ''; }
 }
 
+/** Resolve credential ownership before storing a partial settings update. */
+export function bindModelUpdate(existing: ModelConfig, updates: Partial<ModelConfig>): Partial<ModelConfig> {
+  const next = { ...existing, ...updates };
+  const endpointChanged = 'baseURL' in updates && updates.baseURL !== existing.baseURL;
+  let bound = updates;
+  if (updates.apiKey === undefined && (existing.provider !== next.provider
+    || credentialOrigin(existing.provider, existing.baseURL) !== credentialOrigin(next.provider, next.baseURL))) {
+    bound = { ...updates, apiKey: '' };
+  }
+  if (endpointChanged && existing.endpointCredentialError) bound = { ...bound, endpointCredentialError: undefined };
+  return bound;
+}
+
 /** True when a model can make a real request. Keyless custom/local endpoints are allowed. */
-export function hasUsableCredentials(model: Pick<ModelConfig, 'provider' | 'apiKey' | 'baseURL' | 'credentialError'>): boolean {
-  return !model.credentialError && (Boolean(model.apiKey?.trim()) || model.provider === 'custom');
+export function hasUsableCredentials(model: Pick<ModelConfig, 'provider' | 'apiKey' | 'baseURL' | 'credentialError' | 'endpointCredentialError'>): boolean {
+  return !model.credentialError && !model.endpointCredentialError && (Boolean(model.apiKey?.trim()) || model.provider === 'custom');
 }
 
 export function cloneModelConfig(config: ModelConfig): ModelConfig {

@@ -1,17 +1,26 @@
-import { session } from 'electron';
+import { session, type WebContents } from 'electron';
 
-const APP_INDEX_SUFFIX = '/renderer/index.html';
+let appEntry: URL | undefined;
+let appContents: WebContents | undefined;
 
-/** Only newAi's own page may send IPC. A navigated or injected page must not reach main. */
+export function trustAppWindow(contents: WebContents, entry: URL): void {
+  appContents = contents;
+  appEntry = entry;
+}
+
 export function isAppUrl(raw: string): boolean {
+  if (!appEntry) return false;
   try {
     const url = new URL(raw);
-    const devUrl = process.env.ELECTRON_RENDERER_URL;
-    if (devUrl) return url.origin === new URL(devUrl).origin;
-    return url.protocol === 'file:' && url.pathname.endsWith(APP_INDEX_SUFFIX);
-  } catch {
-    return false;
-  }
+    if (appEntry.protocol !== 'file:') return url.origin === appEntry.origin;
+    url.hash = '';
+    return url.href === appEntry.href;
+  } catch { return false; }
+}
+
+export function isAppSender(event: Electron.IpcMainInvokeEvent): boolean {
+  return Boolean(appContents && event.sender === appContents && event.senderFrame
+    && event.senderFrame === appContents.mainFrame && isAppUrl(event.senderFrame.url));
 }
 
 export function installSessionHardening(): void {

@@ -1,3 +1,4 @@
+import { restoreEndpoint } from '../models/EndpointSecrets';
 import { credentialOrigin, type ModelConfig, type ModelProvider } from '../models/ModelConfig';
 import { createProvider, type ProviderOptions } from './ModelProvider';
 import { normalizeBaseUrl } from '@core/agent/modelMapping';
@@ -26,7 +27,8 @@ export function resolveDraftModel(input: ModelConnectionInput, registry: ModelLo
   if (input.id && !saved) throw new Error('模型配置已不存在，请重新选择');
   if (saved && saved.provider !== input.provider) throw new Error('供应商已更改，请显式填写新供应商的配置，不可复用其他供应商的凭据');
   const provider = input.provider as ModelProvider;
-  const baseURL = input.baseURL !== undefined ? input.baseURL.trim() || undefined : saved?.baseURL;
+  const baseURL = input.baseURL !== undefined ? restoreEndpoint(input.baseURL.trim() || undefined, saved?.baseURL) : saved?.baseURL;
+  if (saved?.endpointCredentialError && baseURL === saved.baseURL) throw new Error(saved.endpointCredentialError);
   // A saved key may only be reused for the same scheme+host+port. Editing a
   // compatible gateway's URL must not silently send the old key to a new host.
   const canReuseKey = Boolean(saved && saved.provider === provider && credentialOrigin(provider, saved.baseURL) === credentialOrigin(provider, baseURL));

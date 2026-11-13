@@ -49,6 +49,14 @@ afterEach(async () => {
 });
 
 describe('project command tools', () => {
+  it('reports command-created and edited files and leaves pre-existing work out', async () => {
+    fs.writeFileSync(path.join(projectRoot, 'prior.txt'), 'existing user edit');
+    fs.writeFileSync(path.join(projectRoot, 'edit.txt'), 'before');
+    const source = "const fs = require('node:fs'); fs.writeFileSync('edit.txt', 'after'); fs.writeFileSync('new.txt', 'new')";
+    const result = await call('run_command', { command: node(source) });
+    expect(result.details).toMatchObject({ changedFiles: ['edit.txt', 'new.txt'], changesIncomplete: false });
+  });
+
   it.skipIf(process.platform !== 'darwin')('adds common development tool locations to a Finder-style PATH', async () => {
     vi.stubEnv('PATH', '/usr/bin:/bin');
     const result = await manager.run({ projectRoot, command: node('console.log(process.env.PATH)') });

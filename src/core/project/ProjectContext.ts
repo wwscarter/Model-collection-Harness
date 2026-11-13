@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { ProjectIgnore } from './ProjectIgnore';
 import { isSensitiveRelativePath } from '../security/sensitiveFiles';
 
 export interface ProjectNode {
@@ -63,7 +64,6 @@ export class ProjectContext {
   readonly root: string;
   private readonly options: Required<Pick<ProjectContextOptions, 'maxFileBytes' | 'maxFiles' | 'maxDepth' | 'maxContextTokens'>> & Pick<ProjectContextOptions, 'ignoreNames' | 'ignorePatterns'>;
   private readonly ignoreNames: Set<string>;
-  private readonly ignorePatterns: string[];
 
   constructor(root: string, options: ProjectContextOptions = {}) {
     if (!root || typeof root !== 'string') throw new Error('Project root is required');
@@ -80,7 +80,6 @@ export class ProjectContext {
       ignorePatterns: options.ignorePatterns,
     };
     this.ignoreNames = new Set([...DEFAULT_IGNORED_NAMES, ...(options.ignoreNames ?? [])]);
-    this.ignorePatterns = [...(options.ignorePatterns ?? []), ...this.loadGitignore()];
   }
 
   getInfo(): { root: string; name: string } {
@@ -89,16 +88,18 @@ export class ProjectContext {
 
   listTree(relativePath = '', maxDepth = this.options.maxDepth): ProjectNode {
     const safePath = this.resolvePath(relativePath, true);
+    const ignore = new ProjectIgnore(this.root, this.options.ignorePatterns);
+    this.assertIncluded(relativePath, safePath, fs.statSync(safePath).isDirectory(), ignore);
     const rootName = normalizeRelative(relativePath) ? path.basename(safePath) : path.basename(this.root) || this.root;
-    return this.walkTree(safePath, normalizeRelative(relativePath), rootName, 0, Math.max(0, maxDepth));
+    return this.walkTree(safePath, normalizeRelative(relativePath), rootName, 0, Math.max(0, maxDepth), ignore);
   }
 
-  readTextFile(relativePath: string): { content: string; truncated: boolean; size: number } {
+  readTextFile(relativePath: string, ignore = new ProjectIgnore(this.root, this.options.ignorePatterns)): { content: string; truncated: boolean; size: number } {
     const safePath = this.resolvePath(relativePath, true);
     const stat = fs.statSync(safePath);
     if (!stat.isFile()) throw new Error('Only files can be read');
     const normalized = normalizeRelative(relativePath);
-    if (this.isIgnored(normalized) || isSensitiveRelativePath(normalized)) throw new Error('File is excluded from project context');
+    this.assertIncluded(normalized, safePath, false, ignore);
     // Read at most one page beyond the context limit. Reading a multi-GB file
     // just to truncate it would exhaust the main-process heap.
     const length = Math.min(stat.size, this.options.maxFileBytes);
@@ -112,9 +113,10 @@ export class ProjectContext {
   }
 
   buildContext(relativePaths?: string[], maxTokens = this.options.maxContextTokens): ProjectContextResult {
+    const ignore = new ProjectIgnore(this.root, this.options.ignorePatterns);
     const candidates = relativePaths?.length
       ? [...new Set(relativePaths.map(normalizeRelative).filter(Boolean))]
-      : this.collectTextFiles();
+      : this.collectTextFiles(ignore);
     const files: ProjectFile[] = [];
     let remainingChars = Math.max(0, Math.floor((Number.isFinite(maxTokens) ? maxTokens : this.options.maxContextTokens) * 4));
     let skippedFiles = 0;
@@ -122,7 +124,7 @@ export class ProjectContext {
     for (const relative of candidates) {
       if (files.length >= this.options.maxFiles || remainingChars <= 0) { skippedFiles += 1; wasTruncated = true; continue; }
       try {
-        const file = this.readTextFile(relative);
+        const file = this.readTextFile(relative, ignore);
         const separator = files.length ? 1 : 0;
         const marker = `${separator ? "\n" : ""}--- FILE: ${relative} ---\n`;
         if (remainingChars < marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
@@ -148,9 +150,10 @@ export class ProjectContext {
    * milliseconds, so session execution must use this path.
    */
   async buildContextAsync(relativePaths?: string[], maxTokens = this.options.maxContextTokens): Promise<ProjectContextResult> {
+    const ignore = new ProjectIgnore(this.root, this.options.ignorePatterns);
     const candidates = relativePaths?.length
       ? [...new Set(relativePaths.map(normalizeRelative).filter(Boolean))]
-      : await this.collectTextFilesAsync();
+      : await this.collectTextFilesAsync(ignore);
     const files: ProjectFile[] = [];
     let remainingChars = Math.max(0, Math.floor((Number.isFinite(maxTokens) ? maxTokens : this.options.maxContextTokens) * 4));
     let skippedFiles = 0;
@@ -158,7 +161,7 @@ export class ProjectContext {
     for (const relative of candidates) {
       if (files.length >= this.options.maxFiles || remainingChars <= 0) { skippedFiles += 1; wasTruncated = true; continue; }
       try {
-        const file = await this.readTextFileAsync(relative);
+        const file = await this.readTextFileAsync(relative, ignore);
         const separator = files.length ? 1 : 0;
         const marker = `${separator ? "\n" : ""}--- FILE: ${relative} ---\n`;
         if (remainingChars < marker.length) { skippedFiles += 1; wasTruncated = true; continue; }
@@ -178,12 +181,12 @@ export class ProjectContext {
     return { root: this.root, files, text, tokenCount: estimateTokens(text), truncated: wasTruncated, skippedFiles };
   }
 
-  private async readTextFileAsync(relativePath: string): Promise<{ content: string; truncated: boolean; size: number }> {
+  private async readTextFileAsync(relativePath: string, ignore: ProjectIgnore): Promise<{ content: string; truncated: boolean; size: number }> {
     const safePath = this.resolvePath(relativePath, true);
     const stat = await fs.promises.stat(safePath);
     if (!stat.isFile()) throw new Error('Only files can be read');
     const normalized = normalizeRelative(relativePath);
-    if (this.isIgnored(normalized) || isSensitiveRelativePath(normalized)) throw new Error('File is excluded from project context');
+    this.assertIncluded(normalized, safePath, false, ignore);
     const length = Math.min(stat.size, this.options.maxFileBytes);
     const buffer = Buffer.alloc(length);
     const descriptor = await fs.promises.open(safePath, 'r');
@@ -194,7 +197,7 @@ export class ProjectContext {
     return { content: bytes.toString('utf8'), truncated: stat.size > bytes.length, size: stat.size };
   }
 
-  private async collectTextFilesAsync(): Promise<string[]> {
+  private async collectTextFilesAsync(ignore: ProjectIgnore): Promise<string[]> {
     const output: string[] = [];
     const visit = async (directory: string, relativeDirectory: string, depth: number): Promise<void> => {
       if (output.length >= this.options.maxFiles || depth > this.options.maxDepth) return;
@@ -203,7 +206,7 @@ export class ProjectContext {
       for (const entry of entries) {
         if (output.length >= this.options.maxFiles) break;
         const relative = normalizeRelative(path.join(relativeDirectory, entry.name));
-        if (this.isIgnored(relative) || isSensitiveRelativePath(relative)) continue;
+        if (this.isIgnored(relative, entry.isDirectory(), ignore)) continue;
         const absolute = path.join(directory, entry.name);
         if (entry.isDirectory()) await visit(absolute, relative, depth + 1);
         else if (entry.isFile()) {
@@ -221,7 +224,7 @@ export class ProjectContext {
     return output;
   }
 
-  private collectTextFiles(): string[] {
+  private collectTextFiles(ignore: ProjectIgnore): string[] {
     const output: string[] = [];
     const visit = (directory: string, relativeDirectory: string, depth: number) => {
       if (output.length >= this.options.maxFiles || depth > this.options.maxDepth) return;
@@ -230,7 +233,7 @@ export class ProjectContext {
       for (const entry of entries) {
         if (output.length >= this.options.maxFiles) break;
         const relative = normalizeRelative(path.join(relativeDirectory, entry.name));
-        if (this.isIgnored(relative) || isSensitiveRelativePath(relative)) continue;
+        if (this.isIgnored(relative, entry.isDirectory(), ignore)) continue;
         const absolute = path.join(directory, entry.name);
         if (entry.isDirectory()) visit(absolute, relative, depth + 1);
         else if (entry.isFile()) {
@@ -248,7 +251,7 @@ export class ProjectContext {
     return output;
   }
 
-  private walkTree(absolute: string, relative: string, name: string, depth: number, maxDepth: number): ProjectNode {
+  private walkTree(absolute: string, relative: string, name: string, depth: number, maxDepth: number, ignore: ProjectIgnore): ProjectNode {
     const stat = fs.statSync(absolute);
     if (!stat.isDirectory()) return { name, path: relative, kind: 'file', size: stat.size };
     const node: ProjectNode = { name, path: relative, kind: 'directory', children: [] };
@@ -257,12 +260,12 @@ export class ProjectContext {
     try { entries = fs.readdirSync(absolute, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { return node; }
     for (const entry of entries) {
       const childRelative = normalizeRelative(path.join(relative, entry.name));
-      if (this.isIgnored(childRelative) || isSensitiveRelativePath(childRelative)) continue;
+      if (this.isIgnored(childRelative, entry.isDirectory(), ignore)) continue;
       const childAbsolute = path.join(absolute, entry.name);
       try {
         // Do not expose symlinks: resolving them can disclose files outside the project.
         if (entry.isSymbolicLink()) continue;
-        node.children?.push(this.walkTree(childAbsolute, childRelative, entry.name, depth + 1, maxDepth));
+        node.children?.push(this.walkTree(childAbsolute, childRelative, entry.name, depth + 1, maxDepth, ignore));
       } catch { /* race or permission errors are omitted */ }
     }
     return node;
@@ -279,18 +282,17 @@ export class ProjectContext {
     return resolved;
   }
 
-  private isIgnored(relativePath: string): boolean {
-    const segments = normalizeRelative(relativePath).split('/').filter(Boolean);
-    if (segments.some((segment) => this.ignoreNames.has(segment))) return true;
-    return this.ignorePatterns.some((pattern) => {
-      const clean = pattern.trim().replace(/^\//, '').replace(/\/$/, '');
-      if (!clean || clean.startsWith('#')) return false;
-      if (clean.includes('*')) {
-        const regex = new RegExp(`^${clean.split('*').map(escapeRegExp).join('.*')}(?:/|$)`);
-        return regex.test(normalizeRelative(relativePath));
-      }
-      return normalizeRelative(relativePath) === clean || normalizeRelative(relativePath).startsWith(`${clean}/`) || segments.includes(clean);
-    });
+  private isIgnored(relative: string, directory: boolean, ignore: ProjectIgnore): boolean {
+    return relative.split('/').some((name) => this.ignoreNames.has(name))
+      || isSensitiveRelativePath(relative) || ignore.excludes(relative, directory);
+  }
+
+  private assertIncluded(input: string, resolved: string, directory: boolean, ignore: ProjectIgnore): void {
+    const lexical = path.relative(this.root, path.resolve(this.root, input)).split(path.sep).join('/');
+    const canonical = path.relative(this.root, resolved).split(path.sep).join('/');
+    if (this.isIgnored(lexical, directory, ignore) || (lexical !== canonical && this.isIgnored(canonical, directory, ignore))) {
+      throw new Error('File is excluded from project context');
+    }
   }
 
   private isText(relativePath: string, bytes: Buffer): boolean {
@@ -302,10 +304,4 @@ export class ProjectContext {
     for (const byte of bytes.subarray(0, 8192)) if (byte < 7 || (byte > 14 && byte < 32)) control += 1;
     return control / Math.min(bytes.length, 8192) < 0.02;
   }
-
-  private loadGitignore(): string[] {
-    try { return fs.readFileSync(path.join(this.root, '.gitignore'), 'utf8').split(/\r?\n/).filter(Boolean); } catch { return []; }
-  }
 }
-
-function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

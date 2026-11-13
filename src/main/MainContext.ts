@@ -16,7 +16,6 @@ import type { ModelQuota } from '@core/routing/ModelQuota';
 import type { ObservabilityEngine } from '@core/observability/ObservabilityEngine';
 import type { AuditLog } from '@core/audit/AuditLog';
 import type { GrowthEngine } from '@core/growth/GrowthEngine';
-import type { TtyManager } from '@core/tty/TtyManager';
 import type { ProjectManager } from '@core/project/ProjectManager';
 import type { CommandExecutor } from '@core/tty/CommandExecutor';
 import type { ProjectProcessManager } from '@core/tty/ProjectProcessManager';
@@ -62,7 +61,6 @@ export interface MainContext {
   observability: ObservabilityEngine;
   auditLog: AuditLog;
   growth: GrowthEngine;
-  tty: TtyManager;
   projects: ProjectManager;
   commandExecutor: CommandExecutor;
   projectProcesses: ProjectProcessManager;
@@ -87,7 +85,6 @@ export interface MainContext {
   workspaceRoot: string;
   preferencesPath: string;
   preferences: { approvalMode: ApprovalMode };
-  ttyUnsubscribers: Map<string, () => void>;
   commandUnsubscribers: Map<string, () => void>;
   runningTasks: Map<string, AbortController>;
   pickedProjectRoots: Set<string>;

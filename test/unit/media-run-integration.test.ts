@@ -76,6 +76,29 @@ async function fixture(options: {
 }
 
 describe('media generation in the shared core run pipeline', () => {
+  it('allows a direct image job to finish after the configured run duration', async () => {
+    const { core } = await fixture();
+    const execute = core.media.execute.bind(core.media);
+    let release!: () => void, notifyStarted!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { notifyStarted = resolve; });
+    const spy = vi.spyOn(core.media, 'execute').mockImplementation(async (input, context) => {
+      notifyStarted();
+      await pending;
+      context.signal?.throwIfAborted();
+      return execute(input, context);
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const run = core.run({ runId: 'slow-image', prompt: '生成一张海报', operation: 'image.generate' });
+      await started;
+      vi.advanceTimersByTime(11 * 60_000);
+      vi.useRealTimers();
+      release();
+      await expect(run).resolves.toMatchObject({ stopReason: 'stop' });
+    } finally { vi.useRealTimers(); release(); spy.mockRestore(); }
+  });
+
   it('passes prompt-only image requirements unchanged to the endpoint and saves its actual output', async () => {
     const { core, requests, directory } = await fixture({ imageSize: [1672, 941] });
     const prompt = '生成一张至少1920×1080的16:9图片';

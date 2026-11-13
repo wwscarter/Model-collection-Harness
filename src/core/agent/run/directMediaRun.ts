@@ -25,10 +25,8 @@ export async function executeDirectMedia(request: RunRequest, operation: MediaOp
   const trace = deps.traces.startRun({ runId, sessionId, taskType: operation });
   const observeMedia = createMediaObserver(deps, trace, runId);
   const limits = deps.routingSettings?.budget ?? DEFAULT_ROUTING_SETTINGS.budget!;
-  const budget = new RunBudget({ maxCost: limits.maxCostUsd, maxDurationMs: limits.maxDurationMs });
-  const abort = new AbortController();
-  const signal = AbortSignal.any([deps.controller.signal, abort.signal]);
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new RunBudget({ maxCost: limits.maxCostUsd, maxDurationMs: Number.MAX_SAFE_INTEGER });
+  const signal = deps.controller.signal;
   let costStatus = 'estimated', totalCost = 0;
   const reservations = new Map<string, number>(), settled = new Set<string>();
   let status: 'success' | 'failed' | 'cancelled' = 'failed', errorMessage: string | undefined;
@@ -58,8 +56,6 @@ export async function executeDirectMedia(request: RunRequest, operation: MediaOp
     const denial = await deps.approveMedia?.({ operation, prompt: request.prompt }, signal);
     signal.throwIfAborted();
     if (denial) throw new Error(denial);
-    timer = setTimeout(() => abort.abort(new Error('媒体生成已超过本轮时间预算，未收到的结果状态未知')), limits.maxDurationMs);
-    timer.unref?.();
     const result = await deps.media.execute(input, {
       rootRunId: runId, sessionId, assistantMessageId, modelId: request.pinnedModelId, signal, quota: deps.quota,
       budget: {
@@ -95,7 +91,6 @@ export async function executeDirectMedia(request: RunRequest, operation: MediaOp
     if (planCreated) plans.status(runId, status === 'cancelled' ? 'cancelled' : 'failed', (current) => emit('session:plan', current));
     throw error;
   } finally {
-    clearTimeout(timer);
     deps.traces.finishRun(runId, { status, error: errorMessage, inputTokens: 0, outputTokens: 0, cost: totalCost });
   }
 }

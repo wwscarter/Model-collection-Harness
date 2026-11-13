@@ -8,7 +8,6 @@ import { SessionStorage } from '@core/storage/SessionStorage';
 import { FileHistoryStore } from '@core/storage/FileHistoryStore';
 import { ProjectStorage } from '@core/storage/ProjectStorage';
 import { ModelRegistry } from '@core/models/ModelRegistry';
-import { hasUsableCredentials } from '@core/models/ModelConfig';
 import { AgentRouter } from '@core/routing/AgentRouter';
 import { LocalRoutingModel } from '@core/routing/LocalRoutingModel';
 import { RoutingService } from '@core/routing/RoutingService';
@@ -80,10 +79,6 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
     const projectStorage = track(new ProjectStorage(path.join(dataDir, 'projects.db')), (value) => value.close());
     const registry = new ModelRegistry(storage, { initializePresets: options.initializePresets ?? true, persist: options.persistModels ?? true });
     for (const model of options.models ?? []) registry.registerModel(model, { persist: options.persistModels ?? true });
-    if (!registry.getEnabledModels().some(hasUsableCredentials)) {
-      const usable = registry.getAllModels().find(hasUsableCredentials);
-      if (usable) registry.updateModel(usable.id, { enabled: true });
-    }
     const growth = new GrowthEngine({ storagePath: path.join(dataDir, 'growth-profiles.json') });
     const routingLearning = new RoutingLearningStore(path.join(dataDir, 'routing-corrections.json'));
     const routingService = track(new RoutingService(path.join(dataDir, 'routing-settings.json'), { getExamples: (context) => routingLearning.getExamples(context) }), (value) => value.dispose());
@@ -122,8 +117,8 @@ export async function createCore(host: CoreHost, options: CreateCoreOptions = {}
       agentDir, defaultCwd: workspaceRoot, skillManager, mcpConfig, enableMcp: options.enableMcp !== false, fileHistory, operationAudit,
       mcpTransport: (entry, cwd, authProvider) => createConfiguredMcpTransport({ entry, cwd, authProvider, sandboxPolicy, onStderr: (text) => host.onMcpStderr?.(entry, text) }).transport,
       toolGate: (request) => approveCoreTool(ctx, request),
-      extraTools: ({ projectRoot, sessionId }) => [
-        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot), sessionId }) : []),
+      extraTools: ({ projectRoot, sessionId, trackCommandChanges }) => [
+        ...(projectRoot ? createProjectCommandTools(projectRoot, projectProcesses, { commandPolicy: (command) => evaluateCommandApproval(preferences.approvalMode, command, projectRoot), sessionId, trackChanges: trackCommandChanges }) : []),
         ...(projectRoot ? createCodebaseTools(projectRoot, codebase, semanticSearch, codeSearch.config.enabled, { config: structuredClone(codeSearch.config), baseURL: routingService.getConfiguration().settings.classifier.baseURL }) : []),
         ...createMemoryTools(memoryStore, { projectRoot }),
       ],

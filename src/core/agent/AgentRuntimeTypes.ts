@@ -86,7 +86,7 @@ export interface AgentRuntimeOptions {
   defaultCwd: string;
   search?: SearchProviderRegistry;
   /** Extra tools contributed by plugins. */
-  extraTools?: (context: { cwd: string; projectRoot?: string; runId?: string; sessionId?: string }) => ToolDefinition[];
+  extraTools?: (context: { cwd: string; projectRoot?: string; runId?: string; sessionId?: string; trackCommandChanges?: boolean }) => ToolDefinition[];
   /** Extra Pi extensions (inline factories). */
   extensions?: InlineExtension[];
   toolGate?: ToolGate;

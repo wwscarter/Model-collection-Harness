@@ -33,7 +33,7 @@ export async function runCli(argv: string[], io: CliIO = process, dependencies: 
     const environmentModel = readEnvironmentModel();
     core = await (dependencies.createCore ?? createCore)(createCliHost(args, io, controller.signal), { approvalMode: args.approval, ...(environmentModel ? { models: [environmentModel], persistModels: false } : {}) });
     if (args.command === 'models') {
-      const models = core.registry.getAllModels().map((model) => ({ id: model.id, name: model.name, provider: model.provider, modelId: model.modelId, enabled: model.enabled, credentialStatus: model.credentialError ? 'unavailable' : model.apiKey ? 'configured' : model.provider === 'custom' ? 'keyless' : 'missing' }));
+      const models = core.registry.getAllModels().map((model) => ({ id: model.id, name: model.name, provider: model.provider, modelId: model.modelId, enabled: model.enabled, credentialStatus: model.credentialError || model.endpointCredentialError ? 'unavailable' : model.apiKey ? 'configured' : model.provider === 'custom' ? 'keyless' : 'missing' }));
       if (args.json) io.stdout.write(JSON.stringify({ channel: 'models:list', payload: models }) + '\n');
       else for (const model of models) io.stdout.write([model.enabled ? '启用' : '停用', model.id, model.name, model.credentialStatus].join('\t') + '\n');
       return 0;

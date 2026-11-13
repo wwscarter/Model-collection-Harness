@@ -103,6 +103,8 @@ export interface RunDependencies {
     getContextAsync(paths?: string[], maxTokens?: number): Promise<ProjectContextResult | undefined>;
   };
   invokeStreamed: InvokeStreamed;
+  /** True for adapters that call beforeModelRequest immediately before every upstream send. */
+  gatesEveryStreamRequest?: boolean;
   controller: AbortController;
   plans?: PlanController;
   createProvider?: (model: ModelConfig) => ModelProvider;

@@ -1,5 +1,6 @@
 import {
   cloneModelConfig,
+  bindModelUpdate,
   ModelCapabilityType,
   ModelCapability,
   ModelConfig,
@@ -68,6 +69,7 @@ function toConfig(input: ModelConfigInput): ModelConfig {
     enabled: raw.enabled ?? false,
     priority: raw.priority ?? 0,
     credentialError: raw.credentialError,
+    ...(raw.endpointCredentialError ? { endpointCredentialError: raw.endpointCredentialError } : {}),
     createdAt: raw.createdAt ? new Date(raw.createdAt) : now,
     updatedAt: raw.updatedAt ? new Date(raw.updatedAt) : now,
   };
@@ -143,6 +145,7 @@ export class ModelRegistry {
   updateModel(id: string, updates: Partial<ModelConfig>): ModelConfig | undefined {
     const existing = this.models.get(id);
     if (!existing) return undefined;
+    updates = bindModelUpdate(existing, updates);
     const updated = toConfig({
       ...existing,
       ...updates,

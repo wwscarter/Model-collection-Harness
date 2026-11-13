@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
   appEvents: new Map<string, (...args: any[]) => any>(),
   userData: '',
+  contents: { mainFrame: { url: '' }, send: vi.fn() },
   showOpenDialog: vi.fn(),
   openPath: vi.fn(async () => ''),
   executeRun: vi.fn(async (_request: unknown, _deps: unknown, _emit: unknown) => ({ output: 'done' })),
@@ -25,8 +27,8 @@ vi.mock('electron', () => ({
     quit: vi.fn(),
   },
   BrowserWindow: class {
-    webContents = { send: vi.fn() };
-    loadFile = vi.fn();
+    webContents = state.contents;
+    loadFile = (file: string) => { this.webContents.mainFrame.url = pathToFileURL(file).href; };
     loadURL = vi.fn();
     on = vi.fn();
   },
@@ -48,7 +50,7 @@ vi.mock('../../src/core/agent/RunCoordinator', () => ({ executeRun: state.execut
 let directory: string;
 let projectA: ProjectRecord;
 let projectB: ProjectRecord;
-const event = { senderFrame: { url: 'file:///newai/dist/renderer/index.html' } };
+const event = { sender: state.contents, senderFrame: state.contents.mainFrame };
 const invoke = (channel: string, ...args: unknown[]) => state.handlers.get(channel)!(event, ...args);
 
 async function addProject(name: string): Promise<ProjectRecord> {
@@ -81,6 +83,21 @@ function saveSession(id: string, projectId?: string) {
 }
 
 describe('main process session projects', () => {
+  it('invalidates a saved gateway key on an explicit return to the default provider URL', () => {
+    const model = invoke('model:register', { id: 'origin-edit', name: 'Origin edit fixture', provider: 'openai', modelId: 'sample', baseURL: 'https://gateway.invalid/v1', apiKey: 'example-only' });
+    expect(invoke('model:update', model.id, { name: 'renamed' }).hasApiKey).toBe(true);
+    expect(invoke('model:update', model.id, { baseURL: undefined })).toMatchObject({ hasApiKey: false, baseURL: undefined });
+  });
+
+  it('round-trips protected query fields through public settings without returning their values', () => {
+    const model = invoke('model:register', { id: 'query-edit', name: 'Endpoint edit fixture', provider: 'custom', modelId: 'sample', baseURL: 'https://gateway.invalid/v1?api_key=fixture-value&v=1' });
+    expect(decodeURIComponent(model.baseURL)).toContain('[已保存]');
+    expect(model.baseURL).not.toContain('fixture-value');
+    const updated = invoke('model:update', model.id, { baseURL: model.baseURL.replace('v=1', 'v=2') });
+    expect(updated.baseURL).toContain('v=2');
+    expect(() => invoke('model:update', model.id, { baseURL: model.baseURL.replace('gateway.invalid', 'other.invalid') })).toThrow('重新输入');
+  });
+
   it('routes selected skill previews, confirmation, enabled state and tool trust through startup IPC', async () => {
     const source = path.join(directory, 'ordinary-guide');
     fs.mkdirSync(source);

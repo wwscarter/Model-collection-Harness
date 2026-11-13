@@ -310,7 +310,6 @@ describe('retained supporting panels', () => {
 
   it('does not launch another manual command when Enter is pressed while one is pending', async () => {
     const pending = deferred<Awaited<ReturnType<AmdApi['execution']['run']>>>();
-    window.amd!.tty = { create: vi.fn(async () => ({ id: 'terminal-1' })), close: vi.fn(async () => ({ success: true })) } as unknown as AmdApi['tty'];
     window.amd!.on = vi.fn(() => () => undefined);
     window.amd!.project.current = vi.fn(async () => project);
     window.amd!.execution = { run: vi.fn(() => pending.promise) } as unknown as AmdApi['execution'];

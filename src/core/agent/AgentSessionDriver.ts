@@ -9,6 +9,7 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
   let content = '';
   // Text carried across automatic continuations when the model hits its per-response output cap.
   let carried = '';
+  let previousFragment = '';
   // The Pi session does not always put a length-truncated answer into `messages`.
   let lastStopReason: string | undefined;
   let toolCalls = 0;
@@ -63,11 +64,11 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
       if ((!usageState.budgetError && !usageState.callbackError) || usage.input || usage.output || usage.cacheRead || usage.cacheWrite) usageState.report(usage);
     } else if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
       content += event.assistantMessageEvent.delta;
-      request.onTextDelta?.(event.assistantMessageEvent.delta);
+      if (!carried) request.onTextDelta?.(event.assistantMessageEvent.delta);
     } else if (event.type === 'message_start' && (event.message as { role?: string }).role === 'assistant' && content && !content.endsWith('\n')) {
       // A new assistant message after tool calls: keep paragraphs apart in the streamed text.
       content += '\n\n';
-      request.onTextDelta?.('\n\n');
+      if (!carried) request.onTextDelta?.('\n\n');
     } else if (event.type === 'tool_execution_start') {
       if (toolLimitReached) return;
       toolCalls += 1;
@@ -108,20 +109,23 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
       const finalText = session.getLastAssistantText() ?? '';
       let answer = finalText.trim() ? finalText : content.trim() ? content : previousAnswer;
       const effectiveStopReason = last?.stopReason ?? lastStopReason;
-      if (effectiveStopReason === 'length' && !usageState.budgetError && !toolLimitReached) {
-        const addition = answer.trim();
-        // Continue automatically instead of stopping the task at a per-response
-        // token cap. Repeating the same text means no progress; stop in that case.
-        if (addition && addition !== carried.trim()) {
-          carried = carried ? carried + '\n\n' + addition : addition;
-          previousAnswer = carried;
-          content = '';
-          prompt = '上一次回答达到模型单次输出上限。请紧接着中断处继续输出剩余内容，不要重复已经输出的部分，也不要用总结代替剩余内容。';
-          request.onTextDelta?.('\n\n');
-          continue;
-        }
+      const next = answer;
+      let addition = next;
+      if (carried) {
+        if (next.startsWith(carried)) addition = next.slice(carried.length);
+        else if (!next.trim() || next.trim() === previousFragment.trim()) addition = '';
+        else addition = /\s$/.test(carried) || /^\s/.test(next) ? next : '\n\n' + next;
+        answer = carried + addition;
+        if (addition) request.onTextDelta?.(addition);
       }
-      if (carried) answer = answer.trim() && !answer.startsWith(carried) ? carried + '\n\n' + answer : carried;
+      if (effectiveStopReason === 'length' && addition.trim() && !usageState.budgetError && !toolLimitReached) {
+        previousFragment = next;
+        carried = answer;
+        previousAnswer = carried;
+        content = '';
+        prompt = '上一次回答达到模型单次输出上限。请紧接着中断处继续输出剩余内容，不要重复已经输出的部分，也不要用总结代替剩余内容。';
+        continue;
+      }
       if (usageState.budgetError) {
         const notice = '本轮已因预算限制停止，任务尚未完成；已保留现有输出。' + usageState.budgetError.message;
         answer = (answer.trim() ? answer.trimEnd() + '\n\n' : '') + notice;
@@ -155,6 +159,8 @@ export async function driveAgentSession(session: AgentSession, request: AgentRun
       if (continuation.stopReason) result = { ...result, stopReason: continuation.stopReason, ...(continuation.stopReason === 'budget_limit' ? { budgetLimitReason: result.budgetLimitReason ?? continuation.summary ?? '项目验证达到运行预算' } : {}) };
       if (continuation.feedback?.trim() && !['tool_limit', 'budget_limit', 'length'].includes(result.stopReason)) {
         previousAnswer = result.content;
+        carried = '';
+        previousFragment = '';
         content = '';
         prompt = continuation.feedback;
         continue;

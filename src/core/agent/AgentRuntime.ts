@@ -1,5 +1,6 @@
 import type { ModelConfig } from '@core/models/ModelConfig';
 import { supportsOperation } from '@core/models/ModelOperations';
+import { FileWriteGuard } from '@core/tools/fileWriteGuard';
 import { createFileTools, createWebFetchTool, createWebSearchTool } from '@core/tools/builtinTools';
 import { SearchProviderRegistry } from '@core/tools/search';
 import { ToolRuntime } from '@core/tools/ToolRuntime';
@@ -42,6 +43,7 @@ export type { AgentRunRequest, AgentRunResult, AgentRuntimeOptions, AgentTurnCon
  */
 export class AgentRuntime {
   readonly search: SearchProviderRegistry;
+  private readonly fileWriteGuard = new FileWriteGuard();
   private modelRuntime?: Promise<ModelRuntime>;
   private readonly registeredProviders = new Map<string, string>();
 
@@ -145,12 +147,15 @@ export class AgentRuntime {
     return loader;
   }
 
-  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean, projectAccess: 'read' | 'write' = 'write', fileChanges?: FileChangeRecorder, identity?: { runId?: string; sessionId?: string }): ToolDefinition[] {
+  private tools(cwd: string, projectRoot: string | undefined, enableTools: boolean, projectAccess: 'read' | 'write' = 'write', fileChanges?: FileChangeRecorder, identity?: { runId?: string; sessionId?: string; trackCommandChanges?: boolean }): ToolDefinition[] {
     if (!enableTools) return [];
     const tools = [
       createWebSearchTool(this.search) as unknown as ToolDefinition,
       createWebFetchTool() as unknown as ToolDefinition,
-      ...createFileTools({ cwd, projectRoot, extraReadRoots: [this.skillsDir], fileChanges }),
+      ...createFileTools({
+        cwd, projectRoot, extraReadRoots: [this.skillsDir], fileChanges,
+        ...(projectAccess === 'write' && identity?.sessionId ? { writeGuard: this.fileWriteGuard, sessionId: identity.sessionId } : {}),
+      }),
       ...(this.options.extraTools?.({ cwd, projectRoot, ...identity }) ?? []),
     ];
     return projectAccess === 'read' ? tools.filter((tool) => ['web_search', 'web_fetch', 'read', 'ls', 'grep', 'find', 'code_symbols', 'code_search', 'process_status', 'process_list'].includes(tool.name)) : tools;
@@ -218,7 +223,7 @@ export class AgentRuntime {
     if (this.options.fileHistory && request.runId) recorders.push(this.options.fileHistory.recorder({ runId: request.runId, ...(request.sessionId ? { sessionId: request.sessionId } : {}), projectRoot: request.projectRoot ?? cwd }));
     if (this.options.operationAudit && request.runId) recorders.push(this.options.operationAudit.fileRecorder({ runId: request.runId, ...(request.sessionId ? { sessionId: request.sessionId } : {}), actor: 'agent' }));
     const fileChanges = recorders.length ? combineFileChangeRecorders(recorders) : undefined;
-    const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess, fileChanges, { runId: request.runId, sessionId: request.sessionId });
+    const rawTools = this.tools(cwd, request.projectRoot, enableTools, request.projectAccess, fileChanges, { runId: request.runId, sessionId: request.sessionId, trackCommandChanges: Boolean(request.afterTurn) });
     // Media permissions are independent of project write access. Tools are host-bound.
     if (enableTools && request.mediaTools) rawTools.push(...(deadline ? AgentRuntime.holdDeadline(request.mediaTools, deadline) : request.mediaTools));
     if (enableTools && request.projectAccess !== 'read' && request.planTool) rawTools.push(request.planTool);

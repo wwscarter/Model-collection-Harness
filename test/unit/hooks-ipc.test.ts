@@ -1,3 +1,4 @@
+import { trustedIpcEvent } from '../helpers/trustedIpc';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,7 +21,7 @@ function fixture(selected = true) {
   const hookStore = new HookStore(path.join(root, 'agent'), trustStore);
   const ctx = { hookStore, trustStore, projects: { getRoot: () => selected ? root : undefined } } as unknown as HooksIpcContext;
   register(ctx);
-  const invoke = async (name: string, ...args: unknown[]) => state.handlers.get('agent:hooks:' + name)!({ senderFrame: { url: 'file:///newai/dist/renderer/index.html' } }, ...args);
+  const invoke = async (name: string, ...args: unknown[]) => state.handlers.get('agent:hooks:' + name)!(trustedIpcEvent(), ...args);
   return { root, invoke, hookStore, trustPath };
 }
 

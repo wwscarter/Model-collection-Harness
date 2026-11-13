@@ -1,8 +1,8 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
-import { isAppUrl } from '../security/windowHardening';
+import { isAppSender } from '../security/windowHardening';
 
 export function assertTrustedSender(event: IpcMainInvokeEvent): void {
-  if (!isAppUrl(event.senderFrame?.url ?? '')) throw new Error('不受信任的调用来源，已拒绝本次 IPC 请求');
+  if (!isAppSender(event)) throw new Error('不受信任的调用来源，已拒绝本次 IPC 请求');
 }
 
 /** Register every handler behind the same sender check. */

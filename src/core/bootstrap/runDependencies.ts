@@ -22,6 +22,7 @@ export function createCoreRunDependencies(ctx: CoreServices, controller: AbortCo
     codeAuditor: ctx.codeAuditor, auditLog: ctx.auditLog, checkpoints: ctx.checkpoints, memory: ctx.memoryStore, summaries: ctx.sessionStorage,
     projectContext, controller, plans: ctx.plans,
     ...(ctx.options.createProvider ? { createProvider: ctx.options.createProvider } : {}),
+    gatesEveryStreamRequest: !ctx.options.invokeStreamed,
     invokeStreamed: ctx.options.invokeStreamed ?? (async (model, prompt, maxTokens, onDelta, options = {}) => {
       options.signal?.throwIfAborted();
       if (!hasUsableCredentials(model)) throw new Error(`模型「${model.name}」尚未配置 API Key，无法执行任务`);

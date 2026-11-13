@@ -1,3 +1,4 @@
+import { trustedIpcEvent } from '../helpers/trustedIpc';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MainContext } from '../../src/main/MainContext';
 import type { ProjectProcessSnapshot } from '../../src/core/tty/ProjectProcessManager';
@@ -9,7 +10,7 @@ vi.mock('electron', () => ({
   session: { defaultSession: { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() } },
 }));
 
-const event = { senderFrame: { url: 'file:///newai/dist/renderer/index.html' } };
+const event = trustedIpcEvent();
 const invoke = (channel: string, ...args: unknown[]) => state.handlers.get(channel)!(event as never, ...(args as never[]));
 
 function snapshot(overrides: Partial<ProjectProcessSnapshot> = {}): ProjectProcessSnapshot {

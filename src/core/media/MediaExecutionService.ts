@@ -111,7 +111,7 @@ export class MediaExecutionService {
     let current = root;
     for (const part of relative.split(path.sep)) {
       current = path.join(current, part);
-      if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) throw new MediaError('MEDIA_INVALID_PATH', '素材导出路径不能经过符号链接');
+      if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) throw new MediaError('MEDIA_INVALID_PATH', '素材导出路径不能经过符号链接');
     }
     const { artifact, bytes } = this.readAsset(id);
     fs.mkdirSync(path.dirname(target), { recursive: true });

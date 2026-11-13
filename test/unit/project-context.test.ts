@@ -18,6 +18,25 @@ function fixture() {
 }
 
 describe('ProjectContext', () => {
+  it('refreshes nested rules and preserves per-directory negation in previews and prompts', async () => {
+    const root = fixture();
+    try {
+      const context = new ProjectContext(root);
+      const rules = path.join(root, 'src', '.gitignore');
+      fs.writeFileSync(rules, '*.txt\n!include.txt\n');
+      fs.writeFileSync(path.join(root, 'src', 'include.txt'), 'include');
+      fs.writeFileSync(path.join(root, 'src', 'omit.txt'), 'omit');
+      for (const listings of [context.buildContext(), await context.buildContextAsync(), await context.buildContextAsync(['src/omit.txt', 'src/include.txt'])]) {
+        expect(listings.files.map((item) => item.path)).toContain('src/include.txt');
+        expect(listings.files.map((item) => item.path)).not.toContain('src/omit.txt');
+      }
+      expect(flatten(context.listTree('src')).map((node) => node.path)).not.toContain('src/omit.txt');
+      expect(() => context.readTextFile('src/omit.txt')).toThrow('excluded');
+      fs.writeFileSync(rules, '');
+      expect(context.readTextFile('src/omit.txt').content).toBe('omit');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('lists a safe tree and ignores generated, secret and ignored files', () => {
     const root = fixture();
     const context = new ProjectContext(root);

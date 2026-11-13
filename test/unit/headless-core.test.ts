@@ -25,6 +25,16 @@ const plainReplay: RunDependencies['invokeStreamed'] = async (current, _prompt, 
 };
 
 describe('headless core host', () => {
+  it('preserves an explicitly empty set of enabled models across startup', async () => {
+    const host = { dataDir: directory(), confirm: () => true, emit: () => undefined };
+    const options = { initializePresets: false, enableMcp: false };
+    const first = track(await createCore(host, { ...options, models: [model()] }));
+    first.registry.updateModel(model().id, { enabled: false });
+    await first.dispose();
+    const next = track(await createCore(host, options));
+    expect(next.registry.getEnabledModels()).toEqual([]);
+  });
+
   it('runs real SDK file and command tools with explicit host approval and trace events', async () => {
     const root = directory();
     const project = path.join(root, 'project');

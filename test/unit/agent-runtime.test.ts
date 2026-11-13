@@ -158,6 +158,20 @@ describe('AgentRuntime (Pi SDK)', () => {
     expect(result.outputTokens).toBe(21);
   });
 
+  it.each([
+    { replies: [['First.', 'length'], ['First. Second.', 'stop']], expected: 'First. Second.', reason: 'stop' },
+    { replies: [['A', 'length'], ['B', 'length'], ['B', 'length']], expected: 'A\n\nB', reason: 'length' },
+  ])('keeps the same continuation in streamed and saved text ($reason)', async (example) => {
+    requests.length = 0;
+    replies = example.replies.map(([content, finish_reason]) => () => sse([{ choices: [{ index: 0, delta: { content }, finish_reason }] }]));
+    const { runtime: agent } = runtime();
+    const deltas: string[] = [];
+    const result = await agent.run({ model: model(), prompt: 'Continue the paragraph', onTextDelta: (delta) => deltas.push(delta) });
+    expect(result).toMatchObject({ content: example.expected, stopReason: example.reason });
+    expect(deltas.join('')).toBe(example.expected);
+    expect(requests).toHaveLength(example.replies.length);
+  });
+
   it('continues automatically when the model stops at its single-response output cap', async () => {
     requests.length = 0;
     replies = [

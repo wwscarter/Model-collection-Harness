@@ -1,4 +1,5 @@
 import type { ContextToolDigest, ContextTurn } from '@core/context/ContextAssembler';
+import { publicEndpoint } from '@core/models/EndpointSecrets';
 import type { ModelConfig } from '@core/models/ModelConfig';
 import type { ModelUsage } from '@core/routing/ModelUsage';
 
@@ -24,8 +25,8 @@ export function errorUsage(error: unknown): ModelUsage {
 }
 
 export function publicModel(model: ModelConfig) {
-  const { apiKey, ...safe } = model;
-  return { ...safe, hasApiKey: Boolean(apiKey) };
+  const { apiKey, endpointCredentialError, ...safe } = model;
+  return { ...safe, credentialError: safe.credentialError ?? endpointCredentialError, baseURL: publicEndpoint(safe.baseURL), hasApiKey: Boolean(apiKey) };
 }
 
 export function sanitizeHistory(value: unknown): ContextTurn[] {

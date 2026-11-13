@@ -41,7 +41,6 @@ export async function verifyStage(ctx: RunContext): Promise<void> {
               const revisionSpan = verificationSpan.child('model', 'revision', { modelId: revisionModel.id, modelSnapshot: snapshotModel(revisionModel), role: ctx.decision.strategy === 'escalate' ? 'escalated-reviser' : 'reviser' });
               try {
                 ctx.runBudget.assertAvailable();
-                ctx.deps.quota.reserve(revisionModel);
                 const revisionInvocationId = ctx.deps.observability.recordInvocationStart(ctx.runId, revisionModel.id);
                 try {
                   const revisionBudget = modelContextBudget([revisionModel]);

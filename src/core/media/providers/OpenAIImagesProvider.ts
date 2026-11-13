@@ -1,3 +1,4 @@
+import { isSecretParameter } from '../../models/EndpointSecrets';
 import type { ModelConfig } from '../../models/ModelConfig';
 import { MediaError, type GeneratedImage, type MediaRequest } from '../MediaTypes';
 
@@ -97,7 +98,7 @@ function providerErrorReason(value: unknown, model: ModelConfig): string | undef
   const secrets = [model.apiKey];
   try {
     for (const [key, secret] of new URL(model.baseURL ?? '').searchParams) {
-      if (/^(?:api[_-]?key|key|access[_-]?token|token|auth(?:orization)?|password|client[_-]?secret|signature)$/i.test(key)) secrets.push(secret);
+      if (isSecretParameter(key)) secrets.push(secret);
     }
   } catch { /* Endpoint validation reports malformed addresses separately. */ }
   let reason = [code, message].filter(Boolean).join(' — ');

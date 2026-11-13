@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { publicEndpoint } from "../models/EndpointSecrets";
 import fs from "node:fs";
 import path from "node:path";
 import { decryptAPIKey, encryptAPIKey, type CredentialCodec } from "../../utils/crypto";
@@ -26,6 +27,7 @@ interface ModelRow {
   enable_thinking: number;
   is_primary: number;
   base_url: string | null;
+  encrypted_endpoint: string | null;
   context_window: number;
   intelligence_score: number;
   capabilities: string;
@@ -58,6 +60,7 @@ export class ModelStorage implements ModelStore {
     this.db.pragma("busy_timeout = 5000");
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    this.db.pragma("secure_delete = ON");
     this.initSchema();
   }
 
@@ -101,6 +104,7 @@ export class ModelStorage implements ModelStore {
     for (const [name, definition] of [
       ["provider_category", "TEXT"],
       ["operations", "TEXT"],
+      ["encrypted_endpoint", "TEXT"],
       ["available_models", "TEXT NOT NULL DEFAULT '[]'"],
       ["temperature", "REAL NOT NULL DEFAULT 0.6"],
       ["enable_thinking", "INTEGER NOT NULL DEFAULT 1"],
@@ -153,17 +157,37 @@ export class ModelStorage implements ModelStore {
       WHERE base_url IS NULL
         AND EXISTS (SELECT 1 FROM model_credentials WHERE model_credentials.model_id = models.id)
     `);
+    const migratedEndpoints = this.db.transaction(() => {
+      let migrated = 0;
+      const rows = this.db.prepare("SELECT id, base_url FROM models WHERE encrypted_endpoint IS NULL AND instr(base_url, '?') > 0").all() as { id: string; base_url: string }[];
+      const migrate = this.db.prepare("UPDATE models SET base_url = ?, encrypted_endpoint = ? WHERE id = ?");
+      for (const row of rows) {
+        const visible = publicEndpoint(row.base_url);
+        if (!visible || visible === row.base_url) continue;
+        // Keep an unavailable keyring from silently losing the existing endpoint.
+        // Its secret stays hidden in IPC and migration retries when the keyring is unlocked.
+        let encrypted: string;
+        try { encrypted = this.codec.encrypt(row.base_url); } catch { continue; }
+        migrate.run(visible, encrypted, row.id);
+        migrated++;
+      }
+      this.db.exec("UPDATE model_credentials SET base_url = NULL WHERE base_url IS NOT NULL");
+      return migrated;
+    }).immediate();
+    if (migratedEndpoints) this.db.pragma("wal_checkpoint(TRUNCATE)");
   }
 
   saveModel(config: ModelConfig): void {
     validateModelOperations(config.operations);
     const save = this.db.transaction((model: ModelConfig) => {
+      const visible = publicEndpoint(model.baseURL);
+      const protectEndpoint = visible !== model.baseURL;
       this.db
         .prepare(`
           INSERT INTO models (
-            id, provider, name, model_id, provider_category, available_models, temperature, enable_thinking, is_primary, base_url, context_window, intelligence_score, capabilities, operations, cost_per_1k_tokens,
+            id, provider, name, model_id, provider_category, available_models, temperature, enable_thinking, is_primary, base_url, encrypted_endpoint, context_window, intelligence_score, capabilities, operations, cost_per_1k_tokens,
             max_tokens, rate_limit, enabled, priority, created_at, updated_at
-          ) VALUES (@id, @provider, @name, @model_id, @provider_category, @available_models, @temperature, @enable_thinking, @is_primary, @base_url, @context_window, @intelligence_score, @capabilities, @operations, @cost_per_1k_tokens,
+          ) VALUES (@id, @provider, @name, @model_id, @provider_category, @available_models, @temperature, @enable_thinking, @is_primary, @base_url, @encrypted_endpoint, @context_window, @intelligence_score, @capabilities, @operations, @cost_per_1k_tokens,
             @max_tokens, @rate_limit, @enabled, @priority, @created_at, @updated_at)
           ON CONFLICT(id) DO UPDATE SET
             provider = excluded.provider,
@@ -175,6 +199,7 @@ export class ModelStorage implements ModelStore {
             enable_thinking = excluded.enable_thinking,
             is_primary = excluded.is_primary,
             base_url = excluded.base_url,
+            encrypted_endpoint = CASE WHEN @preserve_endpoint AND models.base_url IS excluded.base_url THEN models.encrypted_endpoint ELSE excluded.encrypted_endpoint END,
             context_window = excluded.context_window,
             intelligence_score = excluded.intelligence_score,
             capabilities = excluded.capabilities,
@@ -197,7 +222,9 @@ export class ModelStorage implements ModelStore {
           temperature: model.temperature ?? 0.6,
           enable_thinking: model.enableThinking === false ? 0 : 1,
           is_primary: model.isPrimary ? 1 : 0,
-          base_url: model.baseURL ?? null,
+          base_url: visible ?? null,
+          encrypted_endpoint: protectEndpoint ? this.codec.encrypt(model.baseURL!) : null,
+          preserve_endpoint: model.endpointCredentialError ? 1 : 0,
           context_window: model.contextWindow ?? model.maxTokens,
           intelligence_score: model.intelligenceScore ?? model.capabilities.find((capability) => capability.type === "reasoning")?.score ?? 70,
           capabilities: JSON.stringify(model.capabilities),
@@ -223,7 +250,7 @@ export class ModelStorage implements ModelStore {
           .run({
             model_id: model.id,
             api_key: this.codec.encrypt(model.apiKey),
-            base_url: model.baseURL ?? null,
+            base_url: null,
           });
       } else if (!model.credentialError) {
         // A failed decrypt leaves apiKey empty without clearing the saved secret.
@@ -261,6 +288,15 @@ export class ModelStorage implements ModelStore {
       }
     }
 
+    let endpointCredentialError: string | undefined;
+    let baseURL = row.base_url ?? credentials?.base_url ?? undefined;
+    if (baseURL && !row.encrypted_endpoint && publicEndpoint(baseURL) !== baseURL) {
+      endpointCredentialError = "系统密钥库不可用，解锁后重启以迁移端点凭据";
+    }
+    if (row.encrypted_endpoint) {
+      try { baseURL = this.codec.decrypt(row.encrypted_endpoint); }
+      catch { endpointCredentialError = "端点凭据解密失败，请在模型设置中重新输入"; }
+    }
     return {
       id: row.id,
       provider: row.provider,
@@ -271,7 +307,7 @@ export class ModelStorage implements ModelStore {
       temperature: row.temperature,
       enableThinking: row.enable_thinking === 1,
       isPrimary: row.is_primary === 1,
-      baseURL: row.base_url ?? credentials?.base_url ?? undefined,
+      baseURL,
       contextWindow: row.context_window || row.max_tokens,
       intelligenceScore: row.intelligence_score,
       capabilities: parseJson(row.capabilities, []),
@@ -283,6 +319,7 @@ export class ModelStorage implements ModelStore {
       priority: row.priority,
       apiKey,
       credentialError,
+      ...(endpointCredentialError ? { endpointCredentialError } : {}),
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };

@@ -1,5 +1,6 @@
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { collectProjectFiles } from '../codebase/ProjectFiles';
 import { ProjectProcessManager, type ProjectProcessSnapshot } from '../tty/ProjectProcessManager';
 import type { ApprovalDecision } from '../security/ApprovalPolicy';
 
@@ -17,8 +18,13 @@ function result(snapshot: ProjectProcessSnapshot, policy?: ApprovalDecision) {
   return { content: [{ type: 'text' as const, text: lines.join('\n') }], details: { ...snapshot, ...(policy ? { policy } : {}) }, isError: snapshot.status === 'failed' || snapshot.cancelled };
 }
 
+async function commandFiles(root: string, signal?: AbortSignal) {
+  const scan = await collectProjectFiles(root, { signal, maxFiles: 20_000, maxFileBytes: 64 * 1024 * 1024 });
+  return { files: new Map(scan.files.map((file) => [file.path, file.mtimeMs + '/' + file.ctimeMs + '/' + file.size])), truncated: scan.truncated };
+}
+
 /** Callers must obtain native user approval before invoking mutating tools. */
-export function createProjectCommandTools(projectRoot: string, manager: ProjectProcessManager, options: { commandPolicy?: (command: string) => ApprovalDecision; sessionId?: string } = {}): ToolDefinition[] {
+export function createProjectCommandTools(projectRoot: string, manager: ProjectProcessManager, options: { commandPolicy?: (command: string) => ApprovalDecision; sessionId?: string; trackChanges?: boolean } = {}): ToolDefinition[] {
   return [
     defineTool({
       name: 'run_command', label: '执行项目命令',
@@ -31,7 +37,19 @@ export function createProjectCommandTools(projectRoot: string, manager: ProjectP
       }),
       async execute(_id, params, signal) {
         const policy = options.commandPolicy?.(params.command);
-        return result(await manager.run({ ...params, projectRoot, signal, ...(options.sessionId ? { sessionId: options.sessionId } : {}) }), policy);
+        const run = () => manager.run({ ...params, projectRoot, signal, ...(options.sessionId ? { sessionId: options.sessionId } : {}) });
+        if (options.trackChanges === false) return result(await run(), policy);
+        const before = await commandFiles(projectRoot, signal).catch(() => undefined);
+        signal?.throwIfAborted();
+        const snapshot = await run();
+        const after = await commandFiles(projectRoot, signal).catch(() => undefined);
+        const changedFiles: string[] = [];
+        if (before && after) {
+          for (const [file, version] of after.files) if (before.files.get(file) !== version) changedFiles.push(file);
+          for (const file of before.files.keys()) if (!after.files.has(file)) changedFiles.push(file);
+        }
+        const info = result(snapshot, policy);
+        return { ...info, details: { ...info.details, changedFiles, changesIncomplete: !before || !after || before.truncated || after.truncated || snapshot.running } };
       },
     }),
     defineTool({

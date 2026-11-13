@@ -41,7 +41,6 @@ export async function executeStage(ctx: RunContext): Promise<void> {
         continue;
       throw new Error(`模型「${candidate.name}」已达到速率或每日配额，请稍后再试`);
     }
-    ctx.deps.quota.reserve(candidate);
     ctx.executionSpan.setAttributes({ modelId: candidate.id, modelSnapshot: snapshotModel(candidate), attemptIndex: index });
     const attemptInvocationId = ctx.deps.observability.recordInvocationStart(ctx.runId, candidate.id);
     const startedMs = Date.now();
@@ -71,7 +70,7 @@ export async function executeStage(ctx: RunContext): Promise<void> {
         history: ctx.finalContext.history, summary: ctx.finalContext.summary, skipHistoryTrim: true, enableTools: ctx.enableTools, projectRoot: ctx.projectRoot, signal: ctx.controller.signal, onToolEvent: (event) => {
           if (event.status === 'running')
             emittedTool = true; ctx.emitToolEvent(undefined, event);
-        }, afterTurn: projectVerification.afterTurn,
+        }, afterTurn: ctx.projectRoot && ctx.deps.createProjectVerification && ctx.request.verificationMode !== 'off' ? projectVerification.afterTurn : undefined,
       });
       projectVerification.finish();
       ctx.metrics = ctx.deps.observability.recordInvocationEnd(attemptInvocationId, attemptResult.inputTokens, attemptResult.outputTokens, candidate.costPer1kTokens, attemptResult.stopReason === 'budget_limit' ? 'failure' : 'success', attemptResult.budgetLimitReason);

@@ -337,7 +337,6 @@ export interface AmdApi {
   operationAudit: (limit?: number) => Promise<OperationAuditEntry[]>;
   getGrowthProfiles: () => Promise<unknown[]>;
   recordGrowthFeedback: (feedback: unknown) => Promise<unknown>;
-  tty: { list: () => Promise<unknown[]>; create: (options?: unknown) => Promise<unknown>; write: (id: string, data: string) => Promise<void>; resize: (id: string, cols: number, rows: number) => Promise<void>; close: (id: string) => Promise<boolean>; };
   execution: {
     run: (request: { command: string; cwd?: string; timeoutMs?: number; maxOutputBytes?: number }) => Promise<CommandExecutionResult>;
     cancel: (id: string) => Promise<boolean>;
@@ -388,7 +387,7 @@ export interface AmdApi {
     searchProviders: () => Promise<Array<{ id: string; label: string; active: boolean }>>;
     setSearchProvider: (id: string) => Promise<Array<{ id: string; label: string; active: boolean }>>;
   };
-  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:media-job' | 'session:media-artifact' | 'session:verification' | 'session:plan' | 'session:trace' | 'tty:data' | 'execution:data', listener: (payload: unknown) => void) => () => void;
+  on: (channel: 'session:model-switched' | 'session:chunk' | 'session:agent-update' | 'session:tool-call' | 'session:completed' | 'session:media-job' | 'session:media-artifact' | 'session:verification' | 'session:plan' | 'session:trace' | 'execution:data', listener: (payload: unknown) => void) => () => void;
 }
 
 declare global {

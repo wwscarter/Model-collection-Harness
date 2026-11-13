@@ -1,10 +1,10 @@
 import { app, BrowserWindow, nativeTheme, protocol } from 'electron';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { MainContext } from './MainContext';
 import { createMainContext, disposeMainContext, reportStartupFailure, showCredentialWarning } from './bootstrap';
 import { registerHandlers } from './ipc';
-import { hardenWebContents, installSessionHardening } from './security/windowHardening';
+import { hardenWebContents, installSessionHardening, trustAppWindow } from './security/windowHardening';
 import { registerMediaProtocol } from './mediaProtocol';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'newai-media', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -33,8 +33,12 @@ function startApplication(): void {
     });
     const updateTheme = () => { state.window?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0A0A0A' : '#FFFFFF'); };
     nativeTheme.on('updated', updateTheme);
-    if (process.env.ELECTRON_RENDERER_URL) state.window.loadURL(process.env.ELECTRON_RENDERER_URL);
-    else state.window.loadFile(path.join(__dirname, '../renderer/index.html'));
+    const indexPath = path.join(__dirname, '../renderer/index.html');
+    const devUrl = process.env.NODE_ENV === 'development' && !app.isPackaged && process.env.ELECTRON_RENDERER_URL;
+    const entry = devUrl ? new URL(devUrl) : pathToFileURL(indexPath);
+    trustAppWindow(state.window.webContents, entry);
+    if (devUrl) void state.window.loadURL(entry.href);
+    else void state.window.loadFile(indexPath);
     state.window.on('closed', () => { nativeTheme.removeListener('updated', updateTheme); state.window = null; });
   }
 

@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createCredentialCodec, createElectronSafeStorageKeyProvider } from '@utils/crypto';
 import { createCore, type CoreApprovalRequest } from '@core/bootstrap/createCore';
-import { TtyManager } from '@core/tty/TtyManager';
 import { approveToolCall, confirmCommand } from './approvalPrompt';
 import { appendMcpLog } from './mcpRuntime';
 import type { MainContext } from './MainContext';
@@ -22,9 +21,8 @@ export async function createMainContext(dataDir: string, getWindow: MainContext[
     onMcpStderr: (entry, text) => { if (ctx) appendMcpLog(ctx, entry, text); },
   });
   try {
-    const tty = new TtyManager({ defaultCwd: core.workspaceRoot });
     // Keep host state on the shared core so IPC replacements are visible to the next run.
-    ctx = Object.assign(core, { core, getWindow, tty, ttyUnsubscribers: new Map<string, () => void>(), commandUnsubscribers: new Map<string, () => void>(), pickedProjectRoots: new Set<string>(), runningOperations: new Set<Promise<unknown>>() });
+    ctx = Object.assign(core, { core, getWindow, commandUnsubscribers: new Map<string, () => void>(), pickedProjectRoots: new Set<string>(), runningOperations: new Set<Promise<unknown>>() });
     return ctx;
   } catch (error) { await core.dispose(); throw error; }
 }
@@ -50,8 +48,7 @@ export function disposeMainContext(ctx: MainContext): Promise<void> {
   if (existing) return existing;
   ctx.shuttingDown = true;
   for (const controller of ctx.runningTasks.values()) controller.abort();
-  ctx.tty.dispose();
-  for (const unsubscribe of [...ctx.ttyUnsubscribers.values(), ...ctx.commandUnsubscribers.values()]) unsubscribe();
+  for (const unsubscribe of ctx.commandUnsubscribers.values()) unsubscribe();
   const disposal = (async () => {
     await Promise.allSettled([...(ctx.runningOperations ?? [])]);
     if (ctx.core) { await ctx.core.dispose(); return; }

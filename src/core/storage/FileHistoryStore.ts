@@ -187,8 +187,11 @@ export class FileHistoryStore {
   private async restoreOne(row: ChangeRow): Promise<{ ok: true } | { ok: false; reason: string }> {
     const relativePath = normalizeRelativePath(row.relative_path);
     if (isSensitiveRelativePath(relativePath)) return { ok: false, reason: '凭据或版本库文件不参与自动撤销' };
-    const projectRoot = realOrSelf(row.project_root);
-    const target = realOrSelf(row.path);
+    let projectRoot: string, target: string;
+    try {
+      projectRoot = realOrSelf(row.project_root);
+      target = realOrSelf(row.path);
+    } catch { return { ok: false, reason: '文件路径无法安全解析' }; }
     if (!isWithin(projectRoot, target)) return { ok: false, reason: '文件不在项目目录内' };
     if (row.existed === 1 && row.before === null) return { ok: false, reason: '原文件超过 1 MiB，未保存快照' };
 
@@ -204,7 +207,8 @@ export class FileHistoryStore {
       return { ok: true };
     }
     if (!current) return { ok: false, reason: '文件已被删除，未自动恢复' };
-    await fs.promises.writeFile(target, row.before!);
+    const handle = await fs.promises.open(target, fs.constants.O_WRONLY | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0));
+    try { await handle.writeFile(row.before!); } finally { await handle.close(); }
     return { ok: true };
   }
 }

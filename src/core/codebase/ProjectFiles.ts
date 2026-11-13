@@ -1,27 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ignore from 'ignore';
+import { gitIgnored, type IgnoreScope } from '../project/ProjectIgnore';
 import { isSensitiveRelativePath } from '@core/security/sensitiveFiles';
 
-export interface ProjectFile { path: string; absolutePath: string; mtimeMs: number; size: number }
+export interface ProjectFile { path: string; absolutePath: string; mtimeMs: number; ctimeMs?: number; size: number }
 export interface ProjectFileOptions { signal?: AbortSignal; maxFiles?: number; maxFileBytes?: number; scope?: string }
 export interface ProjectFileCollection { files: ProjectFile[]; truncated: boolean }
 export const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const BUILD_DIRECTORIES = new Set(['node_modules', 'dist', 'out', 'build', 'release', 'coverage', '.next', '.nuxt', '.output', '.cache', '.venv', 'venv', '__pycache__', 'target', '.turbo']);
-interface IgnoreScope { directory: string; rules: ReturnType<typeof ignore> }
 const boundedLimit = (value: number | undefined, fallback: number, max: number): number => Number.isFinite(value) ? Math.max(1, Math.min(max, Math.floor(value!))) : fallback;
 
 function excluded(relative: string, directory: boolean, scopes: IgnoreScope[]): boolean {
   if (isSensitiveRelativePath(relative)) return true;
   if (directory && BUILD_DIRECTORIES.has(path.posix.basename(relative))) return true;
-  let ignored = false;
-  for (const scope of scopes) {
-    const local = scope.directory ? relative.slice(scope.directory.length + 1) : relative;
-    const result = scope.rules.test(local + (directory ? '/' : ''));
-    if (result.ignored) ignored = true;
-    else if (result.unignored) ignored = false;
-  }
-  return ignored;
+  return gitIgnored(relative, directory, scopes);
 }
 
 /** Shared bounded scan for search and indexing. Only ordinary files are returned. */
@@ -83,7 +76,7 @@ export async function collectProjectFiles(root: string, options: ProjectFileOpti
           const stat = await fs.promises.lstat(absolutePath);
           if (!stat.isFile()) continue;
           if (stat.size > maxFileBytes) { truncated = true; continue; }
-          files.push({ path: relative, absolutePath, mtimeMs: stat.mtimeMs, size: stat.size });
+          files.push({ path: relative, absolutePath, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size });
         } catch (error) {
           if (!['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
           truncated = true;

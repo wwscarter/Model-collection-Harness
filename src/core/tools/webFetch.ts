@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Agent } from 'undici';
 import { BROWSER_USER_AGENT, decodeEntities, type FetchLike } from './search/SearchProvider';
 import { awaitWithSignal } from './awaitWithSignal';
 
@@ -122,7 +123,7 @@ async function defaultResolve(host: string): Promise<string[]> {
 }
 
 /** Reject anything that is not a public http(s) URL. Checked again on every redirect hop. */
-export async function assertPublicUrl(raw: string, resolveHost: (host: string) => Promise<string[]> = defaultResolve): Promise<URL> {
+async function resolvePublicTarget(raw: string, resolveHost: (host: string) => Promise<string[]>) {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error('网址无效'); }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('只允许访问 http 或 https 网址');
@@ -134,8 +135,26 @@ export async function assertPublicUrl(raw: string, resolveHost: (host: string) =
   // Proxies in fake-IP mode (Clash, Surge, sing-box TUN) answer every hostname with 198.18.0.0/15
   // and resolve the real name remotely. Accept that range for resolved names only, never literals.
   const blocked = (address: string) => isPrivateAddress(address) && (literal || !isFakeIpAddress(address));
-  if (!addresses.length || addresses.some(blocked)) throw new Error('不允许访问本机或内网地址');
-  return url;
+  if (!addresses.length || addresses.some((address) => !isIP(address) || blocked(address))) throw new Error('不允许访问本机或内网地址');
+  return { url, host, addresses };
+}
+
+export async function assertPublicUrl(raw: string, resolveHost = defaultResolve): Promise<URL> {
+  return (await resolvePublicTarget(raw, resolveHost)).url;
+}
+
+/** DNS is resolved once per hop. TLS and the Host header continue to use the original hostname. */
+function pinnedAgent(target: Awaited<ReturnType<typeof resolvePublicTarget>>): Agent {
+  return new Agent({ connect: {
+    lookup(name, options, callback) {
+      const allowed = target.addresses.map((address) => ({ address, family: isIP(address) }))
+        .filter((item) => !options.family || item.family === options.family);
+      if (name.toLowerCase().replace(/\.$/, '') !== target.host || !allowed.length) {
+        callback(new Error('目标地址与已验证的解析结果不匹配'), []);
+      } else if (options.all) callback(null, allowed);
+      else callback(null, allowed[0].address, allowed[0].family);
+    },
+  } });
 }
 
 /** Lightweight HTML → readable text. Keeps headings, list items, paragraphs and links. */
@@ -194,25 +213,33 @@ export async function fetchWebPage(rawUrl: string, options: WebFetchOptions = {}
   const maxChars = options.maxChars ?? 20_000;
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  let url = await awaitWithSignal(assertPublicUrl(rawUrl, resolveHost), signal);
-  let response: Response | undefined;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    response = await awaitWithSignal(fetchImpl(url.toString(), { redirect: 'manual', signal, headers: { 'user-agent': BROWSER_USER_AGENT, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8' } }), signal);
-    if (response.status < 300 || response.status >= 400) break;
-    const location = response.headers.get('location');
-    await awaitWithSignal(response.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
-    if (!location) throw new Error(`重定向缺少目标地址（HTTP ${response.status}）`);
-    if (hop === MAX_REDIRECTS) throw new Error('重定向次数过多');
-    url = await awaitWithSignal(assertPublicUrl(new URL(location, url).toString(), resolveHost), signal);
+  let target = await awaitWithSignal(resolvePublicTarget(rawUrl, resolveHost), signal);
+  const agents: Agent[] = [];
+  try {
+    let response: Response | undefined;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      const dispatcher = pinnedAgent(target);
+      agents.push(dispatcher);
+      const init = { dispatcher, redirect: 'manual' as const, signal, headers: { 'user-agent': BROWSER_USER_AGENT, accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5', 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8' } };
+      response = await awaitWithSignal(fetchImpl(target.url.href, init), signal);
+      if (response.status < 300 || response.status >= 400) break;
+      const location = response.headers.get('location');
+      await awaitWithSignal(response.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
+      if (!location) throw new Error(`重定向缺少目标地址（HTTP ${response.status}）`);
+      if (hop === MAX_REDIRECTS) throw new Error('重定向次数过多');
+      target = await awaitWithSignal(resolvePublicTarget(new URL(location, target.url).href, resolveHost), signal);
+    }
+    if (!response) throw new Error('请求失败');
+    if (!response.ok) throw new Error(`网页返回 HTTP ${response.status}`);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType && !/text\/|json|xml|javascript/i.test(contentType)) throw new Error(`不支持的内容类型：${contentType.split(';')[0]}`);
+    const { bytes, truncated: byteTruncated } = await awaitWithSignal(readLimited(response, maxBytes, signal), signal);
+    const raw = new TextDecoder(charsetOf(contentType)).decode(bytes);
+    const isHtml = /html|xml/i.test(contentType) || /^\s*<(!doctype|html)/i.test(raw);
+    const { title, text } = isHtml ? htmlToText(raw) : { title: '', text: raw.trim() };
+    const truncated = byteTruncated || text.length > maxChars;
+    return { url: target.url.href, title, content: text.slice(0, maxChars), truncated, contentType };
+  } finally {
+    await Promise.all(agents.map((agent) => agent.destroy()));
   }
-  if (!response) throw new Error('请求失败');
-  if (!response.ok) throw new Error(`网页返回 HTTP ${response.status}`);
-  const contentType = response.headers.get('content-type') ?? '';
-  if (contentType && !/text\/|json|xml|javascript/i.test(contentType)) throw new Error(`不支持的内容类型：${contentType.split(';')[0]}`);
-  const { bytes, truncated: byteTruncated } = await awaitWithSignal(readLimited(response, maxBytes, signal), signal);
-  const raw = new TextDecoder(charsetOf(contentType)).decode(bytes);
-  const isHtml = /html|xml/i.test(contentType) || /^\s*<(!doctype|html)/i.test(raw);
-  const { title, text } = isHtml ? htmlToText(raw) : { title: '', text: raw.trim() };
-  const truncated = byteTruncated || text.length > maxChars;
-  return { url: url.toString(), title, content: text.slice(0, maxChars), truncated, contentType };
 }

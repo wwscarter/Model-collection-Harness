@@ -413,6 +413,23 @@ describe('RunCoordinator', () => {
     } finally { cleanup(); }
   });
 
+  it('reserves each streamed request, including a continuation within one invocation', async () => {
+    let sent = 0;
+    const limited = model('limited', { rateLimit: { requestsPerMinute: 1, tokensPerDay: 0 } });
+    const { deps, cleanup } = makeDeps([limited], async (_current, _prompt, _max, _delta, options) => {
+      for (let index = 0; index < 2; index++) {
+        options!.beforeModelRequest!({ estimatedInputTokens: 10, maxOutputTokens: 10 });
+        sent++;
+      }
+      throw new Error('both sends were allowed');
+    });
+    deps.gatesEveryStreamRequest = true;
+    try {
+      await expect(executeRun({ prompt: 'Hello', pinnedModelId: limited.id, includeProjectContext: false }, deps, () => undefined)).rejects.toThrow('配额');
+      expect(sent).toBe(1);
+    } finally { cleanup(); }
+  });
+
   it('rechecks a planned execution model after summary generation consumes its quota', async () => {
     const invoke = vi.fn();
     const summarize = vi.fn(async () => ({ content: '', inputTokens: 10, outputTokens: 0, modelId: 'm1' }));

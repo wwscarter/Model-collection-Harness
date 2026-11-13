@@ -48,6 +48,7 @@ export interface RunContext {
   enableTools: boolean;
   toolCalls: ToolEvent[];
   successfulFileWrites: string[];
+  commandChangesIncomplete?: boolean;
   traceFinished: boolean;
   traceStatus: RunStatus;
   traceError?: string;
@@ -176,6 +177,8 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
     let streamedContent = '';
     try {
       const initial = reserveRequest(lease, model, { estimatedInputTokens: estimateTokens(prompt) + estimateTokens(JSON.stringify(options?.history ?? [])) + (options?.summary ? estimateTokens(options.summary) : 0), maxOutputTokens: maxTokens });
+      let prepaidRequest = !ctx.deps.gatesEveryStreamRequest;
+      if (prepaidRequest) ctx.deps.quota.reserve(model);
       const result = await awaitWithSignal(ctx.deps.invokeStreamed(model, prompt, initial.maxOutputTokens, (delta) => {
         if (!options?.signal?.aborted) {
           streamedContent += delta;
@@ -202,7 +205,12 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
           ctx.trace.child('context', 'rules.inject', { modelId: model.id, rules, truncated: metadata.truncated }).end();
           options?.onRulesLoaded?.(metadata);
         },
-        beforeModelRequest: (estimate) => reserveRequest(lease, model, estimate),
+        beforeModelRequest: (estimate) => {
+          const limit = reserveRequest(lease, model, estimate);
+          if (!prepaidRequest) ctx.deps.quota.reserve(model);
+          prepaidRequest = false;
+          return limit;
+        },
         onUsage: (usage) => {
           reservations.delete(lease);
           observed.inputTokens += usage.inputTokens;
@@ -310,6 +318,13 @@ export function createRunContext(request: RunRequest, deps: RunDependencies, emi
       const file = (merged.args as { path?: unknown } | undefined)?.path;
       if (merged.status === 'completed' && ['write', 'edit'].includes(merged.toolName) && typeof file === 'string' && file)
         ctx.successfulFileWrites.push(file);
+      if (merged.toolName === 'run_command' && (merged.status === 'completed' || merged.status === 'failed')) {
+        const changes = event.details as { changedFiles?: unknown; changesIncomplete?: boolean } | undefined;
+        if (Array.isArray(changes?.changedFiles)) {
+          for (const file of changes.changedFiles) if (typeof file === 'string') ctx.successfulFileWrites.push(file);
+        }
+        if (changes?.changesIncomplete) ctx.commandChangesIncomplete = true;
+      }
       if (merged.status === 'completed' || merged.status === 'failed') {
         try {
           ctx.deps.checkpoints?.tool({ runId: ctx.runId, toolName: merged.toolName, ...(typeof file === 'string' && file ? { path: file } : {}), failed: merged.status === 'failed' });

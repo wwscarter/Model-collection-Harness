@@ -27,7 +27,7 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
       - run: npm run lint
       - run: npm run check:dependencies
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npm audit --include=dev --audit-level=moderate
       - run: npm run test:coverage
       - run: npm run build
       - run: node dist/cli/newai.mjs eval --smoke

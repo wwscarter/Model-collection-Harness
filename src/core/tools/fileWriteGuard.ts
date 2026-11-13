@@ -30,10 +30,11 @@ export class FileWriteGuard {
   private readonly fingerprints = new Map<string, FileFingerprint>();
 
   /** Record the state of a file as the agent now sees it. */
-  record(filePath: string, content: string | Buffer): void {
+  record(filePath: string, content: string | Buffer, sessionId = ''): void {
+    const key = JSON.stringify([sessionId, filePath]);
     // Delete first so the newest entry moves to the end of the insertion order.
-    this.fingerprints.delete(filePath);
-    this.fingerprints.set(filePath, digest(content));
+    this.fingerprints.delete(key);
+    this.fingerprints.set(key, digest(content));
     while (this.fingerprints.size > MAX_TRACKED_FILES) {
       const oldest = this.fingerprints.keys().next().value;
       if (!oldest) break;
@@ -41,24 +42,25 @@ export class FileWriteGuard {
     }
   }
 
-  forget(filePath: string): void { this.fingerprints.delete(filePath); }
+  forget(filePath: string, sessionId = ''): void { this.fingerprints.delete(JSON.stringify([sessionId, filePath])); }
 
   /** Whether the agent has seen this file in the current process. */
-  tracks(filePath: string): boolean { return this.fingerprints.has(filePath); }
+  tracks(filePath: string, sessionId = ''): boolean { return this.fingerprints.has(JSON.stringify([sessionId, filePath])); }
 
   /**
    * Throw when a file tracked by the agent changed on disk since it was read or
    * written. Untracked files, untouched files and files deleted after the read
    * are writable: the write either creates the file or restores it deliberately.
    */
-  async assertUnchangedSinceRead(filePath: string, displayPath = filePath): Promise<void> {
-    const known = this.fingerprints.get(filePath);
+  async assertUnchangedSinceRead(filePath: string, displayPath = filePath, sessionId = ''): Promise<void> {
+    const key = JSON.stringify([sessionId, filePath]);
+    const known = this.fingerprints.get(key);
     if (!known) return;
     let stat: fs.Stats;
     try {
       stat = await fs.promises.stat(filePath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { this.fingerprints.delete(filePath); return; }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') { this.fingerprints.delete(key); return; }
       throw error;
     }
     if (stat.size === known.size && stat.isFile()) {
@@ -66,7 +68,7 @@ export class FileWriteGuard {
       try { current = await fs.promises.readFile(filePath); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        this.fingerprints.delete(filePath);
+        this.fingerprints.delete(key);
         return;
       }
       if (digest(current).sha256 === known.sha256) return;
@@ -77,11 +79,3 @@ export class FileWriteGuard {
     );
   }
 }
-
-/**
- * Process-wide instance: tools are rebuilt for every agent turn, and a guard
- * scoped to one turn would miss cross-turn edits. Every file mutation made
- * through the built-in tools refreshes the record, so only genuinely external
- * changes are blocked.
- */
-export const defaultFileWriteGuard = new FileWriteGuard();

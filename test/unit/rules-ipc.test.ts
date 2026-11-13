@@ -1,3 +1,4 @@
+import { trustedIpcEvent } from '../helpers/trustedIpc';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,7 +24,7 @@ function fixture(selected = true) {
   const rulesLoader = new RulesLoader({ agentDir: path.join(directory, 'agent'), trustStore });
   const ctx = { rulesLoader, trustStore, projects: { getRoot: () => selected ? projectRoot : undefined } } as unknown as MainContext;
   register(ctx);
-  const invoke = async (name: string, ...args: unknown[]) => state.handlers.get('agent:rules:' + name)!({ senderFrame: { url: 'file:///newai/dist/renderer/index.html' } }, ...args);
+  const invoke = async (name: string, ...args: unknown[]) => state.handlers.get('agent:rules:' + name)!(trustedIpcEvent(), ...args);
   return { projectRoot, rulesLoader, trustPath, invoke };
 }
 

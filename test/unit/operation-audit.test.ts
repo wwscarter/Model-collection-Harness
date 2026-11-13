@@ -17,6 +17,17 @@ afterEach(() => {
 });
 
 describe('OperationAuditLog', () => {
+  it('removes arbitrary arguments before persistence and on legacy export', () => {
+    const file = path.join(directory, 'operations.jsonl');
+    const entry = store.append({ type: 'command.execute', result: 'success', actor: 'user', command: 'npm test -- token-for-test' });
+    expect(entry.command).toBe('npm test [参数已隐藏]');
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('token-for-test');
+    fs.appendFileSync(file, JSON.stringify({ ...entry, sequence: 2, command: 'node demo.js token-for-test' }) + '\n');
+    expect(store.all()[1].command).toBe('node [参数已隐藏]');
+    store.prune();
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('token-for-test');
+  });
+
   it('appends entries with increasing sequence numbers and reads newest last', () => {
     store.append({ type: 'file.write', actor: 'agent', result: 'success', path: 'src/a.ts', runId: 'run-1', sessionId: 'session-1' });
     store.append({ type: 'process.stop', actor: 'user', result: 'stopped', detail: 'process-1' });
