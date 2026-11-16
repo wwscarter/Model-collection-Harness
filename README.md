@@ -147,7 +147,7 @@ npm run release:check
 
 `smoke:renderer` 以隐藏窗口加载构建产物，验证 sandbox preload、CSP、window.amd/trace/memory 与根节点渲染；没有图形环境时需要 Xvfb 或本地桌面会话。
 
-CI 见 `.github/workflows/ci.yml`：Node 22/24 上执行类型检查、带阈值的全项目覆盖率测试和构建。覆盖率从 `src/**` 全量统计。直接依赖固定为锁文件中的精确版本，`node scripts/check-dependencies.mjs` 检查清单与锁文件一致；`--suggest` 只读输出当前解析版本，供明确更新依赖时参考。生产依赖检查使用 `npm audit --omit=dev --audit-level=high`。
+CI 见 `.github/workflows/ci.yml`：Node 22/24 上执行类型检查、带阈值的全项目覆盖率测试和构建。覆盖率从 `src/**` 全量统计。直接依赖固定为锁文件中的精确版本，`node scripts/check-dependencies.mjs` 检查清单与锁文件一致；`--suggest` 只读输出当前解析版本，供明确更新依赖时参考。依赖审计使用 `npm audit --include=dev --audit-level=moderate`。
 
 ### 本地配置与开源提交
 
