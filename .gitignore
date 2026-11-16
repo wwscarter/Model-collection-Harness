@@ -2,18 +2,61 @@ node_modules/
 dist/
 release/
 out/
-data/*.db
-data/*.db-*
-.env
 .DS_Store
 coverage/
 eval/results/
 
 src/renderer/dist/
 
-# Local-only files: dev session log, source backups, local env overrides
-audit.jsonl
-outputs/dev-logs/*.jsonl
-outputs/*.zip
+# Local credentials, model configuration and application state
+.env
 .env.*
 !.env.example
+/data/
+/.newai/
+/uploads/
+/uploads-tmp/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+credentials.key
+*.pem
+*.p12
+*.pfx
+/.npmrc
+/.netrc
+/models.json
+/model-config.json
+/routing-settings.json
+/routing-rules.json
+/routing-rules.history/
+/routing-corrections.json
+/growth-profiles.json
+/preferences.json
+/sandbox-settings.json
+/code-search.json
+/trust.json
+
+# Local development tools, caches and test artifacts
+.cache/
+.vite/
+.workbuddy/
+.playwright/
+playwright-report/
+test-results/
+*.log
+audit.jsonl
+operations.jsonl
+/outputs/
+/experiments/ollama-routing/results/
+
+# Internal review notes retained locally
+/AUDIT_REPORT.md
+/CHANGES.md
+/security_best_practices_report.md
+/项目审查报告-*.md
+/逻辑与功能缺失分析-*.md
+/项目优化实施报告-*.md

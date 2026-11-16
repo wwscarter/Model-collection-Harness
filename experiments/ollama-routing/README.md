@@ -4,18 +4,19 @@
 
 ## 运行
 
-先在本机启动 Ollama 并安装准备评估的模型，再使用项目已有 Node 与 TypeScript 依赖运行：
+先安装项目依赖，在本机启动 Ollama，并准备支持结构化聊天输出的本地模型。以下命令从仓库根目录执行；将 `your-installed-model` 替换为 `ollama list` 中实际可用的模型名称：
 
 ```sh
+ollama list
 node experiments/ollama-routing/benchmark.mjs --help
-node experiments/ollama-routing/benchmark.mjs --models qwen3:1.7b --prompts v1,v2 --limit 24
-node experiments/ollama-routing/benchmark.mjs --models qwen3:1.7b,qwen3.5:2b --prompts v2 --limit 6 --timeout-ms 120000 --output experiments/ollama-routing/results/smoke.json
-node experiments/ollama-routing/benchmark.mjs --models qwen3:1.7b --prompts v3 --limit 24 --output experiments/ollama-routing/results/v3-exploration.json
+node experiments/ollama-routing/benchmark.mjs --models your-installed-model --prompts v1,v2 --limit 24
+node experiments/ollama-routing/benchmark.mjs --models your-installed-model --prompts v2 --limit 6 --timeout-ms 120000 --output experiments/ollama-routing/results/smoke.json
+node experiments/ollama-routing/benchmark.mjs --models your-installed-model --prompts v3 --limit 24 --output experiments/ollama-routing/results/v3-exploration.json
 ```
 
-`--output` 是 JSON 文件路径，相对路径以当前工作目录解析；省略时写入此目录下 `results/<UTC时间>.json`。已有文件不会被覆盖。模型必须出现在本机 `/api/tags`，脚本不下载模型；云端模型标签会被拒绝。服务地址固定为 `http://127.0.0.1:11434`，不读取代理端点配置，不跟随 HTTP 重定向。
+`--output` 是 JSON 文件路径，相对路径以当前工作目录解析；省略时写入此目录下 `results/<UTC时间>.json`。已有文件不会被覆盖。`results/` 为本机输出目录，已被 Git 忽略；仓库不包含历史运行结果、安装记录或模型权重。多个模型可用逗号分隔传给 `--models`。模型必须出现在本机 `/api/tags`，脚本不下载模型；云端模型标签会被拒绝。服务地址固定为 `http://127.0.0.1:11434`，不读取代理端点配置，不跟随 HTTP 重定向。
 
-默认一条一条请求，本地 CPU 推理：`num_gpu:0`、`num_thread:4`、`num_ctx:2048`、`num_predict:80`、`temperature:0`、`think:false`、`stream:false`、`keep_alive:5m`。CPU 与并发参数是本次实验的固定配置，不是硬件性能建议。后端不支持这些参数时，保留其错误，不静默改参数。
+默认一条一条请求，本地 CPU 推理：`num_gpu:0`、`num_thread:4`、`num_ctx:2048`、`num_predict:80`、`temperature:0`、`think:false`、`stream:false`、`keep_alive:5m`。这些是脚本固定使用的实验参数；对照运行应保持参数一致，并自行记录运行环境。后端不支持这些参数时，保留其错误，不静默改参数。
 
 ## 对照设计
 

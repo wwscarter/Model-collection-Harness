@@ -1,7 +1,8 @@
 {
   "name": "amd-agent",
   "version": "0.4.2",
-  "description": "AMD Agent - a transparent multi-model agent desktop app",
+  "description": "Model collection Harness - a transparent multi-model agent desktop app",
+  "license": "Apache-2.0",
   "main": "dist/main/main.js",
   "type": "module",
   "scripts": {
@@ -149,7 +150,7 @@
   "engines": {
     "node": ">=22 <25"
   },
-  "author": "AMD Agent Contributors",
+  "author": "Model collection Harness Contributors",
   "bin": {
     "newai": "dist/cli/newai.mjs"
   }
